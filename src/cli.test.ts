@@ -242,6 +242,43 @@ describe("CLI output", () => {
 		expect(stdout.text).toBe("Alice Example (@alice) · user-id\n");
 		expect(stdout.text).not.toContain("token-from-file");
 	});
+
+	test("supports forcing and disabling color for human output", async () => {
+		const colored = Bun.spawn(
+			[
+				process.execPath,
+				join(import.meta.dir, "bin.ts"),
+				"--color",
+				"unknown-command",
+			],
+			{
+				cwd: join(import.meta.dir, ".."),
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const coloredError = await new Response(colored.stderr).text();
+		expect(await colored.exited).toBe(1);
+		expect(coloredError).toContain("\u001b[31mError");
+
+		const plain = Bun.spawn(
+			[
+				process.execPath,
+				join(import.meta.dir, "bin.ts"),
+				"--no-color",
+				"unknown-command",
+			],
+			{
+				cwd: join(import.meta.dir, ".."),
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const plainError = await new Response(plain.stderr).text();
+		expect(await plain.exited).toBe(1);
+		expect(plainError).not.toContain("\u001b[");
+		expect(plainError).toContain("Error [cli/commander.unknownCommand]");
+	});
 });
 
 async function projectWithConfig(): Promise<string> {

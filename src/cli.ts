@@ -1,4 +1,4 @@
-import { Command, CommanderError } from "commander";
+import { Command, CommanderError, Option } from "commander";
 import packageJson from "../package.json" with { type: "json" };
 import {
 	type CommandDependencies,
@@ -19,12 +19,15 @@ import {
 	commandFailure,
 	resultExitCode,
 } from "./results.ts";
+import { styles } from "./styles.ts";
 
 const VERSION = packageJson.version;
 const GLOBAL_HELP = `
 Global options:
   --config <path>      path to local Mattermost config
-  --json               emit one versioned JSON document`;
+  --json               emit one versioned JSON document
+  --color              force colored output
+  --no-color           disable colored output`;
 
 export interface OutputWriter {
 	write(text: string): unknown;
@@ -126,6 +129,11 @@ function createProgram(
 		.showSuggestionAfterError()
 		.exitOverride()
 		.configureOutput({ outputError: () => {} });
+
+	program.addOption(
+		new Option("--color", "force colored output").conflicts("noColor"),
+	);
+	program.addOption(new Option("--no-color", "disable colored output"));
 
 	program
 		.command("whoami")
@@ -288,8 +296,8 @@ async function executeCommand(
 			onProgress: options.json
 				? undefined
 				: (message) =>
-						context.stderr?.write(`${message}\n`) ??
-						process.stderr.write(`${message}\n`),
+						context.stderr?.write(`${styles.hint(message)}\n`) ??
+						process.stderr.write(`${styles.hint(message)}\n`),
 		};
 
 		switch (command) {

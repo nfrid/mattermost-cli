@@ -27,6 +27,7 @@
 		"check:fix": "biome check --write ."
 	},
 	"dependencies": {
+		"chalk": "5.6.2",
 		"commander": "15.0.0",
 		"zod": "4.4.3"
 	},
