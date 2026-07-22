@@ -59,7 +59,56 @@ describe("CLI output", () => {
 			},
 		]);
 		expect(stderr.text).toBe("");
+		expect(stdout.text).toBe(`${JSON.stringify(document)}\n`);
 		expect(JSON.stringify(document)).not.toContain("token-from-file");
+	});
+
+	test("pretty-prints JSON output with --pretty", async () => {
+		const projectRoot = await projectWithConfig();
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await runCli(["channels", "--pretty"], {
+			projectRoot,
+			env: {},
+			stdout,
+			stderr,
+		});
+
+		expect(exitCode).toBe(0);
+		const document = JSON.parse(stdout.text);
+		expect(document).toMatchObject({
+			command: "channels",
+			schemaVersion: 1,
+			success: true,
+		});
+		expect(stdout.text).toBe(`${JSON.stringify(document, null, 2)}\n`);
+		expect(stderr.text).toBe("");
+	});
+
+	test("emits a flattened agent projection with --agent", async () => {
+		const projectRoot = await projectWithConfig();
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await runCli(["channels", "--agent"], {
+			projectRoot,
+			env: {},
+			stdout,
+			stderr,
+		});
+
+		expect(exitCode).toBe(0);
+		const document = JSON.parse(stdout.text);
+		expect(stdout.text).toBe(`${JSON.stringify(document)}\n`);
+		expect(document).toMatchObject({
+			command: "channels",
+			schemaVersion: 1,
+			success: true,
+			channels: expect.any(Array),
+			directMessages: expect.any(Array),
+			warnings: [],
+		});
+		expect(document.data).toBeUndefined();
+		expect(stderr.text).toBe("");
 	});
 
 	test("emits exactly one JSON error document for configuration failure", async () => {

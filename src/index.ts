@@ -1,4 +1,15 @@
 export {
+	type AgentCandidate,
+	type AgentCommandResult,
+	type AgentEvidenceIssue,
+	type AgentFile,
+	type AgentOmission,
+	type AgentPost,
+	type AgentStatus,
+	type AgentThread,
+	projectAgentResult,
+} from "./agent.ts";
+export {
 	type ConfiguredChannel,
 	type ConfiguredDirectMessage,
 	type LoadConfigOptions,

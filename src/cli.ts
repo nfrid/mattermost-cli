@@ -1,5 +1,6 @@
 import { Command, CommanderError, Option } from "commander";
 import packageJson from "../package.json" with { type: "json" };
+import { projectAgentResult } from "./agent.ts";
 import {
 	type CommandDependencies,
 	channelsCommand,
@@ -25,7 +26,9 @@ const VERSION = packageJson.version;
 const GLOBAL_HELP = `
 Global options:
   --config <path>      path to local Mattermost config
-  --json               emit one versioned JSON document
+  --json               emit one minified versioned JSON document
+  --pretty             emit one pretty-printed versioned JSON document
+  --agent              emit a compact agent-oriented JSON projection
   --color              force colored output
   --no-color           disable colored output`;
 
@@ -43,6 +46,8 @@ export interface CliContext extends CommandDependencies {
 interface GlobalOptions {
 	config?: string;
 	json?: boolean;
+	pretty?: boolean;
+	agent?: boolean;
 }
 
 interface CommandOptions {
@@ -68,20 +73,24 @@ export async function runCli(
 	const stdout = context.stdout ?? process.stdout;
 	const stderr = context.stderr ?? process.stderr;
 	let activeCommand = inferCommand(args);
-	let json = args.includes("--json");
+	let pretty = args.includes("--pretty");
+	let agent = args.includes("--agent");
+	let json = args.includes("--json") || pretty;
 	let emitted = false;
 	let exitCode = 0;
 	const program = createProgram(
 		async (command, options, commandOptions = {}) => {
 			activeCommand = command;
-			json = options.json ?? false;
+			pretty = options.pretty ?? false;
+			agent = options.agent ?? false;
+			json = (options.json ?? false) || pretty;
 			const result = await executeCommand(
 				command,
-				options,
+				{ ...options, json: json || agent },
 				commandOptions,
 				context,
 			);
-			emitResult(result, json, stdout, stderr);
+			emitResult(result, json, pretty, agent, stdout, stderr);
 			emitted = true;
 			exitCode = resultExitCode(result);
 			return result;
@@ -104,7 +113,7 @@ export async function runCli(
 			const result = commandFailure(activeCommand, error, [
 				context.env?.MATTERMOST_TOKEN,
 			]);
-			emitResult(result, json, stdout, stderr);
+			emitResult(result, json, pretty, agent, stdout, stderr);
 			return resultExitCode(result);
 		}
 
@@ -125,7 +134,14 @@ function createProgram(
 		.description("Read-only Mattermost context retrieval and indexing.")
 		.version(VERSION)
 		.option("--config <path>", "path to local Mattermost config")
-		.option("--json", "emit one versioned JSON document")
+		.option("--json", "emit one minified versioned JSON document")
+		.option("--pretty", "emit one pretty-printed versioned JSON document")
+		.addOption(
+			new Option(
+				"--agent",
+				"emit a compact agent-oriented JSON projection",
+			).conflicts(["json", "pretty"]),
+		)
 		.showSuggestionAfterError()
 		.exitOverride()
 		.configureOutput({ outputError: () => {} });
@@ -370,13 +386,18 @@ async function executeCommand(
 function emitResult(
 	result: CommandResult<unknown>,
 	json: boolean,
+	pretty: boolean,
+	agent: boolean,
 	stdout: OutputWriter,
 	stderr: OutputWriter,
 ): void {
-	const text = json
-		? `${JSON.stringify(parseCommandResultV1(result), null, 2)}\n`
-		: `${formatHumanResult(result)}\n`;
-	if (json || result.success) {
+	const validated = json || agent ? parseCommandResultV1(result) : undefined;
+	const text = agent
+		? `${JSON.stringify(projectAgentResult(validated as CommandResult<unknown>))}\n`
+		: json
+			? `${JSON.stringify(validated, null, pretty ? 2 : undefined)}\n`
+			: `${formatHumanResult(result)}\n`;
+	if (json || agent || result.success) {
 		stdout.write(text);
 	} else {
 		stderr.write(text);

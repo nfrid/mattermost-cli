@@ -11,14 +11,14 @@ Use `mm` for read-only historical evidence from explicitly configured conversati
 
 ## Workflow
 
-1. Run `mm doctor --json` only when credentials, configuration, or the local index may be unhealthy.
-2. Prefer one `mm context <subject> --json` call. Include ticket, repository, scope, query, and channel hints in that same call when known.
-3. Inspect `searchCoverageComplete`, `selectedThreadsComplete`, `freshness`, `searchedConversations`, `widening`, warnings, budgets, and omission counts before using the evidence. Treat `--query` values as ranking signals rather than required filters, and account for unmatched-probe or unmapped-hint warnings.
+1. Use `--agent` for routine agent consumption. Run `mm doctor --agent` only when credentials, configuration, or the local index may be unhealthy.
+2. Prefer one `mm context <subject> --agent` call. Include ticket, repository, scope, query, and channel hints in that same call when known.
+3. Before using the evidence, inspect top-level `warnings`, `status.freshness`, `status.searchComplete`, `status.threadsComplete`, any `evidenceIssues`, each thread's `why`, and its `omitted` counts. Treat `--query` values as ranking signals rather than required filters, and account for unmatched-probe or unmapped-hint warnings.
 4. Use `--fresh` when current server evidence matters. Use `--local` only when zero network calls are required, and report stale or incomplete evidence.
-5. Default human context is compact; JSON retains the complete bounded packet. Use context `--more` for expanded human rendering, or expand only a selected result with `mm thread <post-id-or-link> --more --json`; use `--full` deliberately when the full thread is necessary.
-6. Reconcile conclusions with the issue tracker, code, documentation, and newer authoritative evidence. Cite the returned Mattermost link when reporting chat-derived claims.
+5. Expand only selected evidence when necessary with `mm thread <post-id-or-link> --more --agent`; use `--full` deliberately when the complete selected thread is necessary. Use `mm search <subject> --agent` only for compact local discovery, then hydrate a chosen candidate with `context` or `thread` before relying on it.
+6. Reconcile conclusions with the issue tracker, code, documentation, and newer authoritative evidence. Cite the returned Mattermost URL when reporting chat-derived claims.
 
-Use `mm search` only for compact local discovery; follow a selected candidate with `context` or `thread` before relying on it.
+Reserve `--json` for retrieval or contract diagnostics that specifically need the full internal packet, such as probes, routing internals, healthy per-conversation freshness, ranking vectors, or packing budgets. Use `--pretty` only to inspect that full diagnostic JSON visually. Do not choose either merely because the caller is an agent.
 
 ## Completion
 

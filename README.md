@@ -128,7 +128,7 @@ Historical chat is evidence, not automatically current product truth. Reconcile 
 
 ## JSON contract
 
-Add `--json` to emit exactly one JSON document on stdout. Progress and human diagnostics never share JSON stdout. Every result has:
+Add `--json` to emit exactly one minified JSON document on stdout. Use `--pretty` instead for indented JSON when debugging. Progress and human diagnostics never share JSON stdout. Every result has:
 
 ```json
 {
@@ -141,6 +141,8 @@ Add `--json` to emit exactly one JSON document on stdout. Progress and human dia
 ```
 
 Failures replace `data` with a stable error containing `source`, `kind`, and `message`. Retrieval contracts include freshness mode/timestamps, `searchCoverageComplete`, `selectedThreadsComplete` for context packets, searched conversations and routing evidence (including unmatched hints), explicit-channel/widening state, deterministic ranking reasons/order, candidate permalinks, budgets, and omission counts. The legacy `complete` field remains an alias for search coverage in V1.
+
+Use `--agent` for a minified agent-oriented projection of the same validated result. It flattens successful command data into the top-level envelope and, for `context`, `search`, and `thread`, replaces retrieval internals with a normalized subject, completeness status, semantic selection reasons, ISO timestamps, compact posts/files, permalinks, omission counts, and freshness anomalies. Warnings appear only once at the top level. `--agent` conflicts with `--json` and `--pretty`.
 
 Zod schemas and inferred TypeScript types for every command are exported from the package, including `commandResultV1Schema`, command-specific `*ResultV1Schema` values, and `parseCommandResultV1`. Complete synthetic V1 golden documents live in `src/contracts.v1.fixture.json`.
 
