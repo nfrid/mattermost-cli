@@ -1,0 +1,132 @@
+import type { MattermostConfig } from "./config.ts";
+import {
+	type ContextInput,
+	getMattermostContext,
+	getMattermostThread,
+	type SearchInput,
+	searchMattermost,
+	type ThreadInput,
+} from "./context.ts";
+import {
+	MattermostClient,
+	type MattermostClientOptions,
+} from "./mattermost/client.ts";
+import { type CommandResult, commandSuccess } from "./results.ts";
+import {
+	listConfiguredConversations,
+	runDoctor,
+	validateConfiguredConversations,
+} from "./setup.ts";
+import { MattermostStore } from "./storage.ts";
+import { type SyncOptions, syncConfiguredConversations } from "./sync.ts";
+
+export interface CommandDependencies extends MattermostClientOptions {
+	onProgress?: (message: string) => void;
+}
+
+export async function whoamiCommand(
+	config: MattermostConfig,
+	dependencies: CommandDependencies = {},
+): Promise<CommandResult<unknown>> {
+	const user = await createClient(config, dependencies).getCurrentUser();
+	const displayName =
+		[user.first_name, user.last_name].filter(Boolean).join(" ") ||
+		user.nickname ||
+		user.username;
+	return commandSuccess("whoami", {
+		id: user.id,
+		username: user.username,
+		displayName,
+	});
+}
+
+export function channelsCommand(
+	config: MattermostConfig,
+): CommandResult<unknown> {
+	return commandSuccess("channels", listConfiguredConversations(config));
+}
+
+export async function validateChannelsCommand(
+	config: MattermostConfig,
+	dependencies: CommandDependencies = {},
+): Promise<CommandResult<unknown>> {
+	const validation = await validateConfiguredConversations(
+		config,
+		createClient(config, dependencies),
+	);
+	return commandSuccess(
+		"channels.validate",
+		validation.data,
+		validation.warnings,
+	);
+}
+
+export async function doctorCommand(
+	config: MattermostConfig,
+	dependencies: CommandDependencies = {},
+): Promise<CommandResult<unknown>> {
+	return commandSuccess(
+		"doctor",
+		await runDoctor(config, () => createClient(config, dependencies)),
+	);
+}
+
+export async function contextCommand(
+	config: MattermostConfig,
+	input: ContextInput,
+	dependencies: CommandDependencies = {},
+): Promise<CommandResult<unknown>> {
+	const data = await getMattermostContext(input, {
+		config,
+		client: input.local ? undefined : createClient(config, dependencies),
+	});
+	return commandSuccess("context", data, data.warnings);
+}
+
+export async function searchCommand(
+	config: MattermostConfig,
+	input: SearchInput,
+): Promise<CommandResult<unknown>> {
+	const data = await searchMattermost(input, { config });
+	return commandSuccess("search", data, data.warnings);
+}
+
+export async function threadCommand(
+	config: MattermostConfig,
+	input: ThreadInput,
+	dependencies: CommandDependencies = {},
+): Promise<CommandResult<unknown>> {
+	const data = await getMattermostThread(input, {
+		config,
+		client: input.local ? undefined : createClient(config, dependencies),
+	});
+	return commandSuccess("thread", data, data.warnings);
+}
+
+export async function syncCommand(
+	config: MattermostConfig,
+	options: Pick<SyncOptions, "aliases" | "full"> = {},
+	dependencies: CommandDependencies = {},
+): Promise<CommandResult<unknown>> {
+	const store = await MattermostStore.open(config.databasePath);
+	try {
+		return commandSuccess(
+			"sync",
+			await syncConfiguredConversations(
+				config,
+				createClient(config, dependencies),
+				store,
+				{ ...options, onProgress: dependencies.onProgress },
+			),
+		);
+	} finally {
+		store.close();
+	}
+}
+
+function createClient(
+	config: MattermostConfig,
+	dependencies: CommandDependencies,
+): MattermostClient {
+	return new MattermostClient(config, dependencies);
+}

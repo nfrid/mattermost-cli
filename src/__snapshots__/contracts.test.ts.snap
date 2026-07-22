@@ -1,0 +1,275 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`schema version 1 command contracts locks populated deterministic search and context output: populated search v1 1`] = `
+{
+  "command": "search",
+  "data": {
+    "candidates": [
+      {
+        "conversationAlias": "payments",
+        "conversationId": "channel-payments",
+        "conversationKind": "channel",
+        "latestActivityAt": 20,
+        "link": "https://chat.example.test/_redirect/pl/aaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "matches": [
+          {
+            "excerpt": "synthetic payment evidence",
+            "postId": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "probe": "payment evidence",
+          },
+          {
+            "excerpt": "payment evidence confirmed",
+            "postId": "bbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "probe": "payment evidence",
+          },
+        ],
+        "matchingPostIds": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ],
+        "priority": 100,
+        "reasons": [
+          "exact_phrase",
+          "all_terms_in_thread",
+          "routing_explicit_channel",
+          "conversation_priority",
+          "latest_activity",
+        ],
+        "rootPostId": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "scoreVector": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          1,
+          6,
+          100,
+          20,
+        ],
+        "threadId": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+    ],
+    "complete": true,
+    "freshness": [
+      {
+        "ageSeconds": 0,
+        "alias": "payments",
+        "conversationId": "channel-payments",
+        "coverageComplete": true,
+        "kind": "channel",
+        "lastSuccessAt": 1000,
+        "observedAt": 1000,
+        "stale": false,
+      },
+    ],
+    "freshnessMode": "local",
+    "probes": [
+      {
+        "phrases": [],
+        "terms": [
+          "payment",
+          "evidence",
+        ],
+        "value": "payment evidence",
+      },
+    ],
+    "routing": {
+      "canWiden": false,
+      "conversations": [
+        {
+          "alias": "payments",
+          "description": "Payments",
+          "evidence": [
+            {
+              "type": "explicit_channel",
+              "value": "payments",
+            },
+          ],
+          "id": "channel-payments",
+          "kind": "channel",
+          "name": "payments",
+          "priority": 100,
+        },
+      ],
+      "explicitChannelPolicy": "restrict",
+      "reason": "explicit_channels",
+      "unmatchedHints": {
+        "repositories": [],
+        "scopes": [],
+      },
+    },
+    "searchCoverageComplete": true,
+    "searchedConversations": [
+      {
+        "alias": "payments",
+        "evidence": [
+          {
+            "type": "explicit_channel",
+            "value": "payments",
+          },
+        ],
+        "id": "channel-payments",
+        "kind": "channel",
+      },
+    ],
+    "subject": {
+      "kind": "text",
+      "raw": "payment evidence",
+      "text": "payment evidence",
+    },
+    "warnings": [],
+    "widened": false,
+  },
+  "schemaVersion": 1,
+  "success": true,
+  "warnings": [],
+}
+`;
+
+exports[`schema version 1 command contracts locks populated deterministic search and context output: populated context v1 1`] = `
+{
+  "command": "context",
+  "data": {
+    "budget": {
+      "limit": 1000,
+      "maxThreads": 3,
+      "measurement": "unicode_code_points_in_rendered_post",
+      "used": 197,
+    },
+    "complete": true,
+    "detailLevel": "compact",
+    "explicitChannelPolicy": "restrict",
+    "freshness": [
+      {
+        "ageSeconds": 0,
+        "alias": "payments",
+        "conversationId": "channel-payments",
+        "coverageComplete": true,
+        "kind": "channel",
+        "lastSuccessAt": 1000,
+        "observedAt": 1000,
+        "stale": false,
+      },
+    ],
+    "freshnessMode": "local",
+    "probes": [
+      {
+        "phrases": [],
+        "terms": [
+          "payment",
+          "evidence",
+        ],
+        "value": "payment evidence",
+      },
+    ],
+    "searchCoverageComplete": true,
+    "searchedConversations": [
+      {
+        "alias": "payments",
+        "evidence": [
+          {
+            "type": "explicit_channel",
+            "value": "payments",
+          },
+        ],
+        "id": "channel-payments",
+        "kind": "channel",
+      },
+    ],
+    "selectedThreadsComplete": true,
+    "subject": {
+      "kind": "text",
+      "raw": "payment evidence",
+      "text": "payment evidence",
+    },
+    "threads": [
+      {
+        "budget": {
+          "limit": 500,
+          "measurement": "unicode_code_points_in_rendered_post",
+          "used": 197,
+        },
+        "conversationAlias": "payments",
+        "conversationId": "channel-payments",
+        "conversationKind": "channel",
+        "latestActivityAt": 20,
+        "link": "https://chat.example.test/_redirect/pl/aaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "matchingPostIds": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ],
+        "omittedAttachments": [],
+        "omittedPosts": 0,
+        "posts": [
+          {
+            "attachments": [],
+            "authorDisplayName": "Alice Example",
+            "authorUsername": "alice",
+            "createAt": 10,
+            "deleteAt": 0,
+            "id": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "message": "synthetic payment evidence",
+            "renderedUnits": 68,
+            "rootId": "",
+            "updateAt": 1,
+            "userId": "user-1",
+          },
+          {
+            "attachments": [
+              {
+                "deleteAt": 0,
+                "extension": "txt",
+                "id": "file-1",
+                "mimeType": "text/plain",
+                "name": "synthetic.txt",
+                "postId": "bbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "size": 42,
+              },
+            ],
+            "authorDisplayName": "Alice Example",
+            "authorUsername": "alice",
+            "createAt": 20,
+            "deleteAt": 0,
+            "id": "bbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "message": "payment evidence confirmed",
+            "renderedUnits": 129,
+            "rootId": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "updateAt": 1,
+            "userId": "user-1",
+          },
+        ],
+        "reasons": [
+          "exact_phrase",
+          "all_terms_in_thread",
+          "routing_explicit_channel",
+          "conversation_priority",
+          "latest_activity",
+        ],
+        "returnedAttachments": 1,
+        "returnedPosts": 2,
+        "selectionStrategy": [
+          "root",
+          "matching_posts",
+        ],
+        "threadId": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "totalOmittedAttachments": 0,
+        "totalPosts": 2,
+        "unreportedOmittedAttachments": 0,
+      },
+    ],
+    "unmatchedHints": {
+      "repositories": [],
+      "scopes": [],
+    },
+    "warnings": [],
+    "widening": {
+      "allowed": false,
+      "performed": false,
+    },
+  },
+  "schemaVersion": 1,
+  "success": true,
+  "warnings": [],
+}
+`;

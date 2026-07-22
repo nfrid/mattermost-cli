@@ -1,0 +1,29 @@
+# dependencies
+node_modules
+
+# runtime configuration and data
+.env
+.env.*.local
+.mattermost/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+
+# output and temporary downloads
+out
+dist
+coverage
+downloads/
+*.tgz
+*.lcov
+
+# logs and caches
+logs/
+*.log
+.cache
+*.tsbuildinfo
+
+# editors and OS
+.idea
+.DS_Store

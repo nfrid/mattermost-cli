@@ -1,0 +1,30 @@
+{
+	"schemaVersion": 1,
+	"url": "https://mattermost.example.test",
+	"teamId": "team-id",
+	"freshnessSeconds": 300,
+	"reconciliationOverlapMs": 30000,
+	"historyDays": 365,
+	"pageSize": 100,
+	"channels": {
+		"engineering": {
+			"name": "engineering",
+			"description": "Engineering discussions, incidents, and decisions.",
+			"tags": ["engineering", "operations"],
+			"repositories": ["example-service", "example-api"],
+			"scopes": ["backend", "operations"],
+			"priority": 100
+		}
+	},
+	"directMessages": {
+		"project-leads": {
+			"channelId": "explicit-dm-or-group-channel-id",
+			"description": "Explicitly allowlisted project leads conversation.",
+			"participants": ["alice", "bob"],
+			"tags": ["project"],
+			"repositories": ["example-service"],
+			"scopes": ["planning"],
+			"priority": 80
+		}
+	}
+}

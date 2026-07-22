@@ -1,0 +1,175 @@
+[
+	{
+		"command": "whoami",
+		"schemaVersion": 1,
+		"success": true,
+		"data": {
+			"id": "user-1",
+			"username": "synthetic-user",
+			"displayName": "Synthetic User"
+		},
+		"warnings": []
+	},
+	{
+		"command": "channels",
+		"schemaVersion": 1,
+		"success": true,
+		"data": { "channels": [], "directMessages": [] },
+		"warnings": []
+	},
+	{
+		"command": "channels.validate",
+		"schemaVersion": 1,
+		"success": true,
+		"data": { "valid": true, "items": [], "configUpdated": false },
+		"warnings": []
+	},
+	{
+		"command": "doctor",
+		"schemaVersion": 1,
+		"success": true,
+		"data": { "healthy": true, "checks": [] },
+		"warnings": []
+	},
+	{
+		"command": "sync",
+		"schemaVersion": 1,
+		"success": true,
+		"data": { "conversations": [] },
+		"warnings": []
+	},
+	{
+		"command": "search",
+		"schemaVersion": 1,
+		"success": true,
+		"data": {
+			"subject": {
+				"kind": "text",
+				"text": "synthetic query",
+				"raw": "synthetic query"
+			},
+			"probes": [
+				{
+					"value": "synthetic query",
+					"phrases": [],
+					"terms": ["synthetic", "query"]
+				}
+			],
+			"routing": {
+				"conversations": [],
+				"explicitChannelPolicy": "restrict",
+				"unmatchedHints": { "scopes": [], "repositories": [] },
+				"reason": "all_configured",
+				"canWiden": false
+			},
+			"candidates": [],
+			"freshnessMode": "local",
+			"complete": true,
+			"searchCoverageComplete": true,
+			"freshness": [],
+			"searchedConversations": [],
+			"widened": false,
+			"warnings": []
+		},
+		"warnings": []
+	},
+	{
+		"command": "context",
+		"schemaVersion": 1,
+		"success": true,
+		"data": {
+			"subject": {
+				"kind": "text",
+				"text": "synthetic query",
+				"raw": "synthetic query"
+			},
+			"probes": [
+				{
+					"value": "synthetic query",
+					"phrases": [],
+					"terms": ["synthetic", "query"]
+				}
+			],
+			"freshnessMode": "local",
+			"complete": true,
+			"searchCoverageComplete": true,
+			"selectedThreadsComplete": false,
+			"detailLevel": "compact",
+			"freshness": [],
+			"unmatchedHints": { "scopes": [], "repositories": [] },
+			"searchedConversations": [],
+			"explicitChannelPolicy": "restrict",
+			"widening": { "allowed": false, "performed": false },
+			"threads": [],
+			"budget": {
+				"measurement": "unicode_code_points_in_rendered_post",
+				"limit": 16000,
+				"used": 0,
+				"maxThreads": 3
+			},
+			"warnings": []
+		},
+		"warnings": []
+	},
+	{
+		"command": "thread",
+		"schemaVersion": 1,
+		"success": true,
+		"data": {
+			"subject": {
+				"kind": "post",
+				"postId": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"raw": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"source": "id"
+			},
+			"freshnessMode": "network",
+			"complete": true,
+			"freshness": {
+				"alias": "synthetic",
+				"conversationId": "channel-1",
+				"kind": "channel",
+				"observedAt": 1,
+				"lastSuccessAt": null,
+				"ageSeconds": 0,
+				"stale": false,
+				"coverageComplete": true
+			},
+			"conversation": {
+				"id": "channel-1",
+				"alias": "synthetic",
+				"kind": "channel"
+			},
+			"link": "https://chat.example.test/pl/aaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"thread": {
+				"threadId": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"selectionStrategy": [],
+				"totalPosts": 0,
+				"returnedPosts": 0,
+				"omittedPosts": 0,
+				"returnedAttachments": 0,
+				"totalOmittedAttachments": 0,
+				"omittedAttachments": [],
+				"unreportedOmittedAttachments": 0,
+				"budget": {
+					"measurement": "unicode_code_points_in_rendered_post",
+					"limit": 6000,
+					"used": 0
+				},
+				"posts": []
+			},
+			"warnings": []
+		},
+		"warnings": []
+	},
+	{
+		"command": "context",
+		"schemaVersion": 1,
+		"success": false,
+		"error": {
+			"source": "config",
+			"kind": "missing_token",
+			"message": "Synthetic configuration error."
+		},
+		"warnings": []
+	}
+]
