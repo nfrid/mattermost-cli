@@ -9,7 +9,6 @@ import { MattermostApiError, MattermostClient } from "./mattermost/client.ts";
 import type {
 	MattermostPost,
 	MattermostPostList,
-	MattermostUser,
 } from "./mattermost/schemas.ts";
 import { type EvidencePost, type PackedThread, packThread } from "./packing.ts";
 import { matchesQueryExpansion } from "./query-expansion.ts";
@@ -604,10 +603,7 @@ export async function getMattermostContext(
 					gapFill: !input.short,
 					limit: Math.min(
 						input.short && ticketMetrics?.rootAnchoredFocused
-							? Math.max(
-									perThreadCharacters,
-									SHORT_ROOT_ANCHORED_PER_THREAD,
-								)
+							? Math.max(perThreadCharacters, SHORT_ROOT_ANCHORED_PER_THREAD)
 							: perThreadCharacters,
 						remaining,
 					),
@@ -1984,8 +1980,7 @@ function resolveRelatedTicketPointers(input: {
 					createAt: post.createAt,
 					excerpt: post.message.slice(0, 160),
 					inWindow:
-						windowIds.has(post.id) ||
-						thread.matchingPostIds.includes(post.id),
+						windowIds.has(post.id) || thread.matchingPostIds.includes(post.id),
 					multiTicketBulletin,
 				});
 			}
@@ -2009,7 +2004,8 @@ function resolveRelatedTicketPointers(input: {
 			const latestAt = Math.max(...list.map((item) => item.createAt));
 			const ordered = [...list].sort(
 				(left, right) =>
-					Number(left.multiTicketBulletin) - Number(right.multiTicketBulletin) ||
+					Number(left.multiTicketBulletin) -
+						Number(right.multiTicketBulletin) ||
 					left.threadRank - right.threadRank ||
 					Number(right.inWindow) - Number(left.inWindow) ||
 					left.createAt - right.createAt,
@@ -2113,7 +2109,6 @@ function resolveRelatedTicketPointers(input: {
 	}
 	return pointers;
 }
-
 
 function probeWarnings(
 	probes: readonly RetrievalProbe[],

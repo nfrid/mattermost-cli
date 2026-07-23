@@ -546,7 +546,9 @@ function shortMessagesFromThreads(
 	const messages: AgentMessage[] = [];
 	const order = [
 		primaryIndex,
-		...threads.map((_, index) => index).filter((index) => index !== primaryIndex),
+		...threads
+			.map((_, index) => index)
+			.filter((index) => index !== primaryIndex),
 	];
 	for (const index of order) {
 		const thread = threads[index];

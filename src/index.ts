@@ -200,15 +200,15 @@ export {
 	syncConfiguredConversations,
 } from "./sync.ts";
 export {
-	segmentThreadByTicketProximity,
-	type SegmentThreadOptions,
-	ticketWindowPostIds,
-	type TicketProximityMetrics,
-	type TicketSegment,
-	type TicketSegmentReason,
-} from "./ticket-segments.ts";
-export {
 	containsNormalizedText,
 	normalizeSearchText,
 	STOP_WORDS,
 } from "./text.ts";
+export {
+	type SegmentThreadOptions,
+	segmentThreadByTicketProximity,
+	type TicketProximityMetrics,
+	type TicketSegment,
+	type TicketSegmentReason,
+	ticketWindowPostIds,
+} from "./ticket-segments.ts";

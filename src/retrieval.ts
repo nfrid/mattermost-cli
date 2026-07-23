@@ -1428,9 +1428,7 @@ function candidateFromGroup(
 					Math.max(1, substantiveDepth + 1),
 				) +
 				(rootAnchoredFocused ? 2 : 0) +
-				(rootHasTicket || rankingEvidence.nearestTicketDistance === 0
-					? 1
-					: 0) -
+				(rootHasTicket || rankingEvidence.nearestTicketDistance === 0 ? 1 : 0) -
 				((rankingEvidence.nearestTicketDistance ?? 0) > 20 ? 1 : 0)
 			: 0;
 	return {

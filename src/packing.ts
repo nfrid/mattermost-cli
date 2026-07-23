@@ -237,8 +237,7 @@ export function packThread(
 					inTicketWindow
 						? structural.filter(
 								(id) =>
-									inTicketWindow.has(id) ||
-									isFileOrFencePost(byId.get(id)),
+									inTicketWindow.has(id) || isFileOrFencePost(byId.get(id)),
 							)
 						: structural,
 					"structural_anchors",
