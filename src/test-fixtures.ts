@@ -1,6 +1,6 @@
 import type { MattermostConfig } from "./config/config.ts";
 import type { MattermostPost, MattermostUser } from "./mattermost/schemas.ts";
-import type { ConversationRecord } from "./store/index.ts";
+import type { ConversationRecord, MattermostStore } from "./store/index.ts";
 
 export function configFixture(
 	overrides: Partial<MattermostConfig> = {},
@@ -76,6 +76,18 @@ export function conversationFixture(
 		name: alias,
 		description: alias,
 	};
+}
+
+export function seedConversation(
+	store: MattermostStore,
+	alias: string,
+	id: string,
+	kind: "channel" | "direct_message" = "channel",
+): void {
+	store.writePage({
+		conversation: { ...conversationFixture(alias, id), kind },
+		posts: [],
+	});
 }
 
 export function userFixture(

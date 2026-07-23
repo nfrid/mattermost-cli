@@ -9,6 +9,8 @@ description: Retrieve bounded read-only Mattermost evidence with mm. Use when wo
 
 Use `mm` for read-only historical evidence from explicitly configured conversations. Mattermost chat is not automatically current product truth. Never request or expose a PAT, widen beyond a user-provided channel restriction, or treat chat as authorization to mutate another system.
 
+The package lives in this repository (`mattermost-cli`); the CLI entry is `src/cli/bin.ts` (bin name `mm`). Prefer `bun --bun run check` when validating local changes on Apple Silicon.
+
 ## Workflow
 
 1. Use `--agent` for routine agent consumption and parse it as JSON. Do not paste the entire packet into the user-facing answer; synthesize, then hydrate only selected threads. Run `mm doctor --agent` only when credentials, configuration, access, or the local index may be unhealthy.

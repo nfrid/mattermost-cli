@@ -97,12 +97,12 @@ Overrides may select alternate files only under this repository's `.mattermost/`
 ## Validate and synchronize
 
 ```bash
-bun run src/bin.ts whoami
-bun run src/bin.ts channels
-bun run src/bin.ts channels validate
-bun run src/bin.ts doctor
-bun run src/bin.ts sync
-bun run src/bin.ts sync --channel engineering
+bun run src/cli/bin.ts whoami
+bun run src/cli/bin.ts channels
+bun run src/cli/bin.ts channels validate
+bun run src/cli/bin.ts doctor
+bun run src/cli/bin.ts sync
+bun run src/cli/bin.ts sync --channel engineering
 ```
 
 `channels validate` checks remote identity and type without rewriting config. `doctor` checks authentication, team/conversation access, FTS5, index integrity/migrations, writable directories, and private `.env`/config/database permissions. Run it after setup and after credential, server, or path changes.
@@ -110,23 +110,23 @@ bun run src/bin.ts sync --channel engineering
 Initial sync is bounded by `historyDays`. It traverses stable post cursors and records whether the indexed history is complete or cutoff-bounded. Incremental sync reconciles an overlap window and advances freshness only after durable success. Use the explicit, potentially expensive full rebuild only when needed:
 
 ```bash
-bun run src/bin.ts sync --full
+bun run src/cli/bin.ts sync --full
 ```
 
 ## Retrieve context
 
 ```bash
-bun run src/bin.ts search 'deployment timeout'
-bun run src/bin.ts search 'customer billed twice'
-bun run src/bin.ts context PROJ-123
-bun run src/bin.ts context --query 'deployment timeout' --repository example-service
-bun run src/bin.ts context 'incident' --channel engineering --fresh
-bun run src/bin.ts context 'incident' --local --no-widen
-bun run src/bin.ts context PROJ-123 --include-automation
-bun run src/bin.ts thread <post-id-or-permalink>
-bun run src/bin.ts thread <post-id-or-permalink> --full
-bun run src/bin.ts file <file-id>
-bun run src/bin.ts file <file-id> --out /tmp/evidence.png
+bun run src/cli/bin.ts search 'deployment timeout'
+bun run src/cli/bin.ts search 'customer billed twice'
+bun run src/cli/bin.ts context PROJ-123
+bun run src/cli/bin.ts context --query 'deployment timeout' --repository example-service
+bun run src/cli/bin.ts context 'incident' --channel engineering --fresh
+bun run src/cli/bin.ts context 'incident' --local --no-widen
+bun run src/cli/bin.ts context PROJ-123 --include-automation
+bun run src/cli/bin.ts thread <post-id-or-permalink>
+bun run src/cli/bin.ts thread <post-id-or-permalink> --full
+bun run src/cli/bin.ts file <file-id>
+bun run src/cli/bin.ts file <file-id> --out /tmp/evidence.png
 ```
 
 Repeated `--query`, `--repository`, `--scope`, and `--channel` options are supported. Queries are independent ranking/retrieval signals, not mandatory filters: a ticket relationship or other stronger evidence can still select a candidate with no textual query match, and the result emits an `unmatched_retrieval_probe` warning when that happens. Unknown repository or scope metadata hints emit `unmapped_routing_hint` rather than being ignored silently. Package callers can additionally pass typed `probes` for ticket titles/descriptions, repositories, file paths, symbols, errors, services, and participants; probe kinds are retained in match, structured-match, fusion, and remote-search diagnostics.
@@ -195,7 +195,7 @@ Failures replace `data` with a stable error containing `source`, `kind`, and `me
 
 Use `--agent` for a minified agent-oriented projection of the same validated result. It flattens successful command data into the top-level envelope and, for `context`, `search`, and `thread`, replaces retrieval internals with a normalized subject, completeness status (`status.threadsComplete` means packing has no omitted posts/attachments), ISO message timestamps (`messages[].at` / `editedAt`), consecutive same-author message groups interleaved with `{ "skip": { "posts", "after?", "before?", "reason?" } }` markers (`outside_ticket_window` / `omitted_gap` when ticket-window packing left a gap), permalinks, omission counts, packing hints (`recommendFull` / `largestSkip` / `omittedRatio` when posts were omitted), `coverage`, optional one-hop `relatedTickets` pointers (`hydrated: false`), and attachment `files[].id` / `name` (plus `mimeType` / `size` when known). Optional DM `surround` groups remain available. Pass `--short` on `context` for evidence cards (`anchors` / `clusters` / short top-level `messages`) under a tighter packing budget. Ranking `why` reasons stay in `--json` only; agent ranking order encodes strength. Agents should parse `--agent` JSON rather than treating it as prose. Detailed per-conversation freshness evidence remains available in `--json`; `--agent` retains only aggregate completeness status and relevant warnings. Warnings appear only once at the top level. `--agent` conflicts with `--json` and `--pretty`.
 
-Zod schemas and inferred TypeScript types for every command are exported from the package, including `commandResultV1Schema`, command-specific `*ResultV1Schema` values, and `parseCommandResultV1`. Complete synthetic V1 golden documents live in `src/contracts.v1.fixture.json`.
+Zod schemas and inferred TypeScript types for every command are exported from the package, including `commandResultV1Schema`, command-specific `*ResultV1Schema` values, and `parseCommandResultV1`. Complete synthetic V1 golden documents live in `src/contracts/contracts.v1.fixture.json`.
 
 Schema policy:
 
@@ -204,6 +204,14 @@ Schema policy:
 - human prose is opaque and may change without a schema-version increment.
 
 ## Package API
+
+Documented package surface (see `src/index.ts`):
+
+- `getMattermostContext` / `searchMattermost` / `getMattermostThread` and their input/result types
+- V1 Zod schemas (`contextResultV1Schema`, `commandResultV1Schema`, …)
+- `projectAgentResult` for `--agent` projection
+- `MattermostClient` / connection helpers and Mattermost schemas
+- `loadMattermostConfig` / config types
 
 ```ts
 import {
@@ -236,6 +244,26 @@ contextResultV1Schema.parse({
 });
 ```
 
+## Source layout
+
+```text
+src/
+  cli/           Commander program, command handlers, bin entry
+  config/        Local config load + validation
+  contracts/     V1 Zod schemas and golden fixtures
+  context/       Orchestration: prepare, freshen, hydrate, selection, filters
+  evidence/      Packing, ticket segments, coverage trust summary
+  mattermost/    Read-only HTTP client (`http.ts` transport + resource methods)
+  output/        Human format, `--agent` projection, shared labels
+  search/        Subject/probes, routing, lexical retrieval, fusion, ranking
+  store/         SQLite schema, reads/writes, FTS/trigram helpers
+  sync/          Sync, setup/doctor, file download, conversation allowlist
+  shared/        Errors, locks, limits, paths, concurrency
+  benchmark/     Retrieval benchmark + compare CLIs
+```
+
+Internal modules under those directories are not part of the documented package API.
+
 ## Migrations, backup, and recovery
 
 Database migrations run automatically and transactionally whenever a database-using command opens the store. Applied versions are recorded in `schema_migrations`; no manual migration command is required.
@@ -246,7 +274,7 @@ SQLite is a disposable retrieval index, not the source of truth. A backup is opt
 rm -f .mattermost/mattermost.sqlite3 \
       .mattermost/mattermost.sqlite3-shm \
       .mattermost/mattermost.sqlite3-wal
-bun run src/bin.ts sync
+bun run src/cli/bin.ts sync
 ```
 
 A failed sync or migration does not advance a successful freshness checkpoint. Timeouts, inaccessible conversations, missing roots, and partial reconciliation produce explicit errors or incomplete warnings rather than current-looking evidence.
@@ -269,7 +297,7 @@ The CLI is fully functional without a daemon. WebSockets and operating-system cr
 ## Development and release gate
 
 ```bash
-bun run check
+bun --bun run check
 ```
 
 The opt-in Mattermost 11.9 smoke gate is strictly read-only and requires an explicitly configured safe channel, post, and query. A DM is included when configured:
@@ -280,7 +308,7 @@ MATTERMOST_SMOKE_CHANNEL_ID=<configured-channel-id> \
 MATTERMOST_SMOKE_DM_ID=<optional-configured-dm-id> \
 MATTERMOST_SMOKE_POST_ID=<safe-post-id> \
 MATTERMOST_SMOKE_QUERY=<safe-query> \
-bun run check:release
+bun --bun run check:release
 ```
 
 The smoke database is created in an OS temporary directory and removed afterward. The suite does not post, react, edit, delete, download attachments, or write captured messages to tracked fixtures.
