@@ -2,6 +2,7 @@ import { mapWithConcurrency } from "./concurrency.ts";
 import type { MattermostConfig } from "./config.ts";
 import { loadMattermostConfig } from "./config.ts";
 import { ConfigError } from "./errors.ts";
+import { freshenLockPath, withFileLock } from "./lock.ts";
 import { MattermostClient } from "./mattermost/client.ts";
 import type {
 	MattermostFileInfo,
@@ -39,6 +40,12 @@ import {
 	widenedRouting,
 } from "./retrieval.ts";
 import {
+	deadlineReached,
+	FRESHEN_LOCK_STALE_MS,
+	FRESHEN_LOCK_TIMEOUT_MS,
+	searchDeadlineAt,
+} from "./runtime-limits.ts";
+import {
 	type ConversationRecord,
 	type IndexedFile,
 	type IndexedPost,
@@ -48,7 +55,6 @@ import {
 } from "./storage.ts";
 import {
 	inspectFreshness,
-	resolveConversations,
 	type SyncClient,
 	syncConfiguredConversations,
 } from "./sync.ts";
@@ -57,6 +63,8 @@ import { containsNormalizedExactText, containsNormalizedText } from "./text.ts";
 const MAX_REMOTE_SEARCH_PROBES = 4;
 const MAX_REMOTE_POSTS_PER_PROBE = 20;
 const MAX_REMOTE_CANDIDATE_THREADS = 12;
+/** Soft cap on conversations refreshed in one context call (unless --fresh). */
+const MAX_CONTEXT_FRESHEN_CONVERSATIONS = 8;
 
 export interface SearchFilterInput {
 	from?: string;
@@ -87,6 +95,7 @@ export interface ContextInput extends SearchFilterInput {
 	more?: boolean;
 	noWiden?: boolean;
 	remoteSearch?: boolean;
+	includeAutomation?: boolean;
 }
 
 export interface SearchInput
@@ -100,6 +109,7 @@ export interface SearchInput
 		| "scopes"
 		| "channels"
 		| "noWiden"
+		| "includeAutomation"
 		| "from"
 		| "after"
 		| "before"
@@ -147,6 +157,8 @@ export interface ContextThread extends PackedThread {
 	matchingPostIds: string[];
 	latestActivityAt: number;
 	link: string;
+	/** Prior root posts from the same DM conversation for short threads. */
+	surround?: EvidencePost[];
 }
 
 export interface RemoteSearchEvidence {
@@ -248,9 +260,7 @@ export async function getMattermostContext(
 				"invalid_remote_search_subject",
 			);
 		}
-		const all = client
-			? await resolveNetworkConversations(config, client, input.channels)
-			: configuredConversations(config, store);
+		const all = resolveContextConversations(config, store, input.channels);
 		let routing = routeConversations(config, store, all, {
 			channels: input.channels,
 			scopes: input.scopes,
@@ -271,6 +281,16 @@ export async function getMattermostContext(
 			failures: 0,
 		};
 		const remoteSearchWarnings: Warning[] = [];
+		const freshenWarnings: Warning[] = [];
+		const searchIncomplete = { value: false };
+		const threadCache = new Map<string, IndexedPost[]>();
+		const deadlineAt = searchDeadlineAt();
+		const observedAt = dependencies.now?.() ?? Date.now();
+		const initiallyFreshIds = new Set(
+			inspectFreshness(config, store, all, observedAt)
+				.filter(({ stale }) => !stale)
+				.map(({ conversationId }) => conversationId),
+		);
 		const searchRoutedThreads = (currentRouting: RoutingResult) =>
 			searchThreads(
 				store,
@@ -279,6 +299,13 @@ export async function getMattermostContext(
 				currentRouting,
 				100,
 				resolvedFilters.storage,
+				{
+					deadlineAt,
+					incomplete: searchIncomplete,
+					includeAutomation: Boolean(input.includeAutomation),
+					suppressAuthors: config.suppressAuthors ?? [],
+					threadCache,
+				},
 			);
 
 		if (subject.kind === "post") {
@@ -324,6 +351,7 @@ export async function getMattermostContext(
 				client,
 				routing.conversations,
 				Boolean(input.fresh),
+				freshenWarnings,
 			);
 			const directConversation = routing.conversations[0];
 			if (!directConversation) {
@@ -337,30 +365,37 @@ export async function getMattermostContext(
 				: [];
 		} else {
 			fallbackRouting = routing.canWiden ? routing : undefined;
-			await freshen(
-				config,
-				store,
-				client,
-				routing.conversations,
-				Boolean(input.fresh),
-			);
 			candidates = searchRoutedThreads(routing);
 			if (!candidates.length && routing.canWiden) {
 				const widened = widenedRouting(all, routing);
 				if (widened.conversations.length) {
 					performedWidening = true;
-					await freshen(
-						config,
-						store,
-						client,
-						widened.conversations,
-						Boolean(input.fresh),
-					);
-					candidates = searchRoutedThreads(widened);
 					for (const conversation of routing.conversations)
 						searched.set(conversation.id, conversation);
 					routing = widened;
+					candidates = searchRoutedThreads(widened);
 				}
+			}
+			const freshenTargets = selectFreshenConversations(
+				config,
+				store,
+				routing,
+				subject,
+				candidates,
+				Boolean(input.fresh),
+				observedAt,
+			);
+			await freshen(
+				config,
+				store,
+				client,
+				freshenTargets,
+				Boolean(input.fresh),
+				freshenWarnings,
+			);
+			if (freshenTargets.length) {
+				threadCache.clear();
+				candidates = searchRoutedThreads(routing);
 			}
 		}
 		for (const conversation of routing.conversations)
@@ -376,6 +411,7 @@ export async function getMattermostContext(
 				client.searchTeamPosts.bind(client),
 				probes,
 				[...searched.values()],
+				{ deadlineAt, incomplete: searchIncomplete },
 			);
 			remoteSearch = {
 				requested: true,
@@ -429,6 +465,13 @@ export async function getMattermostContext(
 					store,
 					client,
 					subject.kind === "post" ? subject.postId : undefined,
+					{
+						forceRemote:
+							Boolean(input.fresh) ||
+							!initiallyFreshIds.has(candidate.conversationId),
+						freshnessSeconds: config.freshnessSeconds,
+						now: observedAt,
+					},
 				);
 				for (const value of matchingProbeValues(evidence, probes)) {
 					matchedProbeValues.add(value);
@@ -461,9 +504,17 @@ export async function getMattermostContext(
 				);
 				const packed = packThread(candidate.threadId, evidence, {
 					matchingPostIds: currentMatchingPostIds,
+					neighborhoodRadius: config.budgets.matchNeighborhoodRadius,
 					limit: Math.min(budgets.perThreadCharacters, remaining),
 				});
 				remaining -= packed.budget.used;
+				const surround = resolveConversationSurround(
+					store,
+					conversation,
+					evidence,
+					config.budgets.shortThreadMaxReplies,
+					config.budgets.conversationSurroundRoots,
+				);
 				threads.push({
 					...packed,
 					conversationId: candidate.conversationId,
@@ -473,6 +524,7 @@ export async function getMattermostContext(
 					matchingPostIds: currentMatchingPostIds,
 					latestActivityAt: currentRanking.latestActivityAt,
 					link: postLink(config, candidate.rootPostId),
+					...(surround.length ? { surround } : {}),
 				});
 			}
 		};
@@ -481,22 +533,33 @@ export async function getMattermostContext(
 			const widened = widenedRouting(all, fallbackRouting);
 			if (widened.conversations.length) {
 				performedWidening = true;
+				routing = widened;
+				const freshenTargets = selectFreshenConversations(
+					config,
+					store,
+					widened,
+					subject,
+					[],
+					Boolean(input.fresh),
+					observedAt,
+				);
 				await freshen(
 					config,
 					store,
 					client,
-					widened.conversations,
+					freshenTargets,
 					Boolean(input.fresh),
+					freshenWarnings,
 				);
 				for (const conversation of widened.conversations) {
 					searched.set(conversation.id, conversation);
 				}
+				threadCache.clear();
 				await hydrateCandidates(searchRoutedThreads(widened));
 			}
 		}
 
 		const searchedConversations = [...searched.values()];
-		const observedAt = dependencies.now?.() ?? Date.now();
 		const localFreshness = inspectFreshness(
 			config,
 			store,
@@ -523,6 +586,7 @@ export async function getMattermostContext(
 				client.searchTeamPosts.bind(client),
 				probes,
 				searchedConversations,
+				{ deadlineAt, incomplete: searchIncomplete },
 			);
 			remoteSearch = {
 				requested: false,
@@ -554,7 +618,14 @@ export async function getMattermostContext(
 			searchedConversations,
 			observedAt,
 		);
-		const warnings: Warning[] = [...remoteSearchWarnings];
+		const warnings: Warning[] = [...freshenWarnings, ...remoteSearchWarnings];
+		if (searchIncomplete.value) {
+			warnings.push({
+				kind: "search_deadline",
+				message:
+					"Local search stopped early after the soft deadline; returned evidence may be incomplete.",
+			});
+		}
 		if (input.local && freshness.some(({ stale }) => stale)) {
 			warnings.push({
 				kind: "stale_local_index",
@@ -579,9 +650,11 @@ export async function getMattermostContext(
 		if (input.queries?.length || input.probes?.length) {
 			warnings.push(...probeWarnings(probes, matchedProbeValues));
 		}
-		const searchCoverageComplete = freshness.every(
-			(item) => item.coverageComplete && (!input.local || !item.stale),
-		);
+		const searchCoverageComplete =
+			!searchIncomplete.value &&
+			freshness.every(
+				(item) => item.coverageComplete && (!input.local || !item.stale),
+			);
 		const selectedThreadsComplete =
 			threads.length > 0 &&
 			threads.every(
@@ -655,6 +728,9 @@ export async function searchMattermost(
 			]),
 		);
 		let candidates: ThreadCandidate[];
+		const searchIncomplete = { value: false };
+		const threadCache = new Map<string, IndexedPost[]>();
+		const deadlineAt = searchDeadlineAt();
 		const searchRoutedThreads = (currentRouting: RoutingResult) =>
 			searchThreads(
 				store,
@@ -663,6 +739,13 @@ export async function searchMattermost(
 				currentRouting,
 				100,
 				resolvedFilters.storage,
+				{
+					deadlineAt,
+					incomplete: searchIncomplete,
+					includeAutomation: Boolean(input.includeAutomation),
+					suppressAuthors: config.suppressAuthors ?? [],
+					threadCache,
+				},
 			);
 		if (subject.kind === "post") {
 			const post = store.getPost(subject.postId);
@@ -705,6 +788,13 @@ export async function searchMattermost(
 			observedAt,
 		);
 		const warnings: Warning[] = [];
+		if (searchIncomplete.value) {
+			warnings.push({
+				kind: "search_deadline",
+				message:
+					"Local search stopped early after the soft deadline; returned evidence may be incomplete.",
+			});
+		}
 		if (freshness.some(({ stale }) => stale)) {
 			warnings.push({
 				kind: "stale_local_index",
@@ -732,9 +822,9 @@ export async function searchMattermost(
 				),
 			);
 		}
-		const searchCoverageComplete = freshness.every(
-			(item) => item.coverageComplete && !item.stale,
-		);
+		const searchCoverageComplete =
+			!searchIncomplete.value &&
+			freshness.every((item) => item.coverageComplete && !item.stale);
 		return {
 			subject,
 			probes,
@@ -775,9 +865,7 @@ export async function getMattermostThread(
 		const client = input.local
 			? undefined
 			: (providedClient ?? new MattermostClient(config));
-		const all = client
-			? await resolveNetworkConversations(config, client)
-			: configuredConversations(config, store);
+		const all = resolveContextConversations(config, store);
 		const target = await resolveDirectTarget(
 			subject.postId,
 			store,
@@ -797,6 +885,11 @@ export async function getMattermostThread(
 			store,
 			client,
 			target.id,
+			{
+				forceRemote: Boolean(!input.local),
+				freshnessSeconds: config.freshnessSeconds,
+				now: dependencies.now?.() ?? Date.now(),
+			},
 		);
 		const limit = input.more
 			? config.budgets.morePerThreadCharacters
@@ -804,6 +897,7 @@ export async function getMattermostThread(
 		const packed = packThread(target.rootId || target.id, evidence, {
 			matchingPostIds: [target.id],
 			aroundPostId: input.around,
+			neighborhoodRadius: config.budgets.matchNeighborhoodRadius,
 			limit,
 			full: input.full,
 		});
@@ -865,6 +959,10 @@ async function searchRemoteCandidates(
 	searchTeamPosts: NonNullable<ContextClient["searchTeamPosts"]>,
 	probes: readonly RetrievalProbe[],
 	conversations: readonly RoutedConversation[],
+	options: {
+		deadlineAt?: number;
+		incomplete?: { value: boolean };
+	} = {},
 ): Promise<{
 	candidates: ThreadCandidate[];
 	queries: RemoteSearchEvidence["queries"];
@@ -877,6 +975,10 @@ async function searchRemoteCandidates(
 	const queries: RemoteSearchEvidence["queries"] = [];
 	let failures = 0;
 	for (const probe of probes.slice(0, MAX_REMOTE_SEARCH_PROBES)) {
+		if (deadlineReached(options.deadlineAt)) {
+			if (options.incomplete) options.incomplete.value = true;
+			break;
+		}
 		let response: MattermostPostList;
 		try {
 			response = await searchTeamPosts(teamId, {
@@ -960,6 +1062,7 @@ async function freshen(
 	client: ContextClient | undefined,
 	conversations: readonly RoutedConversation[],
 	force: boolean,
+	warnings: Warning[] = [],
 ): Promise<void> {
 	if (!client || !conversations.length) return;
 	const aliases = force
@@ -967,29 +1070,109 @@ async function freshen(
 		: inspectFreshness(config, store, conversations)
 				.filter(({ stale }) => stale)
 				.map(({ alias }) => alias);
-	if (aliases.length) {
+	if (!aliases.length) return;
+
+	const run = async () => {
 		await syncConfiguredConversations(config, client, store, { aliases });
+	};
+	const lockPath = freshenLockPath(config.databasePath);
+	if (!lockPath) {
+		await run();
+		return;
+	}
+	const locked = await withFileLock(lockPath, run, {
+		timeoutMs: FRESHEN_LOCK_TIMEOUT_MS,
+		staleMs: FRESHEN_LOCK_STALE_MS,
+	});
+	if (!locked.acquired) {
+		warnings.push({
+			kind: "freshen_lock_busy",
+			message:
+				"Skipped network reconciliation because another mm process holds the freshen lock; using local evidence.",
+		});
 	}
 }
 
-async function resolveNetworkConversations(
+function resolveContextConversations(
 	config: MattermostConfig,
-	client: ContextClient,
+	store: MattermostStore,
 	aliases?: readonly string[],
-): Promise<RoutedConversation[]> {
-	return (await resolveConversations(config, client, aliases)).map(
-		(conversation) => {
-			const metadata =
-				conversation.kind === "channel"
-					? config.channels[conversation.alias]
-					: config.directMessages[conversation.alias];
-			return {
-				...conversation,
-				priority: metadata?.priority ?? 0,
-				evidence: [],
-			};
-		},
+): RoutedConversation[] {
+	const all = configuredConversations(config, store);
+	if (!aliases?.length) return all;
+	const allowed = new Set(aliases);
+	const selected = all.filter(({ alias }) => allowed.has(alias));
+	const missing = aliases.filter(
+		(alias) => !selected.some((conversation) => conversation.alias === alias),
 	);
+	if (missing.length) {
+		throw new ConfigError(
+			`Unknown or unresolved configured conversation alias: ${missing.join(", ")}.`,
+			"unknown_conversation",
+		);
+	}
+	return selected;
+}
+
+/**
+ * Freshen only what retrieval needs. When local search already found
+ * candidates, skip channel sync — selected threads are refreshed via hydrate.
+ * Otherwise refresh a capped stale set (or ticket-related conversations) so a
+ * cold index can discover new hits, unless --fresh forces the scoped set.
+ */
+function selectFreshenConversations(
+	config: MattermostConfig,
+	store: MattermostStore,
+	routing: RoutingResult,
+	subject: MattermostSubject,
+	candidates: readonly ThreadCandidate[],
+	force: boolean,
+	now: number,
+): RoutedConversation[] {
+	const limit = (conversations: readonly RoutedConversation[]) =>
+		force
+			? [...conversations]
+			: conversations.slice(0, MAX_CONTEXT_FRESHEN_CONVERSATIONS);
+
+	if (force) {
+		return limit(narrowTicketConversations(store, routing, subject));
+	}
+	if (candidates.length) {
+		return [];
+	}
+	const staleIds = new Set(
+		inspectFreshness(config, store, routing.conversations, now)
+			.filter(({ stale }) => stale)
+			.map(({ conversationId }) => conversationId),
+	);
+	if (!staleIds.size) return [];
+
+	const staleRouted = routing.conversations.filter(({ id }) =>
+		staleIds.has(id),
+	);
+	if (subject.kind === "ticket") {
+		const related = narrowTicketConversations(
+			store,
+			{ ...routing, conversations: staleRouted },
+			subject,
+		);
+		if (related.length) return limit(related);
+	}
+	return limit(staleRouted);
+}
+
+function narrowTicketConversations(
+	store: MattermostStore,
+	routing: RoutingResult,
+	subject: MattermostSubject,
+): RoutedConversation[] {
+	if (subject.kind !== "ticket") return [...routing.conversations];
+	const relatedIds = new Set(
+		store.getConversationIdsForTicket(subject.ticketKey),
+	);
+	if (!relatedIds.size) return [...routing.conversations];
+	const narrowed = routing.conversations.filter(({ id }) => relatedIds.has(id));
+	return narrowed.length ? narrowed : [...routing.conversations];
 }
 
 async function resolveDirectTarget(
@@ -1023,21 +1206,59 @@ async function hydrateThread(
 	store: MattermostStore,
 	client?: ContextClient,
 	requiredPostId?: string,
+	options: {
+		forceRemote?: boolean;
+		freshnessSeconds?: number;
+		now?: number;
+	} = {},
 ): Promise<EvidencePost[]> {
+	const localPosts = store.getThread(rootPostId);
+	const localUsable = (() => {
+		if (!localPosts.length) return false;
+		if (
+			requiredPostId &&
+			!localPosts.some((post) => post.id === requiredPostId)
+		) {
+			return false;
+		}
+		try {
+			assertThreadBoundary(
+				localPosts.map((post) => ({
+					id: post.id,
+					rootId: post.rootId,
+					conversationId: post.conversationId,
+				})),
+				conversation.id,
+				rootPostId,
+				requiredPostId,
+			);
+			return true;
+		} catch {
+			return false;
+		}
+	})();
+
 	if (!client) {
-		const posts = store.getThread(rootPostId);
-		assertThreadBoundary(
-			posts.map((post) => ({
-				id: post.id,
-				rootId: post.rootId,
-				conversationId: post.conversationId,
-			})),
-			conversation.id,
-			rootPostId,
-			requiredPostId,
-		);
-		return localEvidence(store, posts);
+		if (!localUsable) {
+			throw new ConfigError(
+				"Mattermost thread root is missing or inaccessible.",
+				"thread_not_found",
+			);
+		}
+		return localEvidence(store, localPosts);
 	}
+
+	const now = options.now ?? Date.now();
+	const freshnessSeconds = options.freshnessSeconds ?? 300;
+	const checkpoint = store.getCheckpoint(conversation.id);
+	const ageSeconds = checkpoint?.lastSuccessAt
+		? Math.max(0, (now - checkpoint.lastSuccessAt) / 1000)
+		: null;
+	const stale = ageSeconds === null || ageSeconds > freshnessSeconds;
+	if (!options.forceRemote && localUsable && !stale) {
+		return localEvidence(store, localPosts);
+	}
+
 	const response = await client.getThread(rootPostId);
 	const posts = response.order
 		.map((id) => response.posts[id])
@@ -1054,12 +1275,38 @@ async function hydrateThread(
 	);
 	const userIds = [...new Set(posts.map(({ user_id }) => user_id))];
 	const fileIds = [...new Set(posts.flatMap(({ file_ids }) => file_ids))];
+	const knownFiles = new Set(
+		store.getFilesForPosts(posts.map(({ id }) => id)).map(({ id }) => id),
+	);
+	const missingFileIds = fileIds.filter((fileId) => !knownFiles.has(fileId));
 	const [users, files] = await Promise.all([
 		client.getUsersByIds(userIds),
-		mapWithConcurrency(fileIds, (fileId) => client.getFileInfo(fileId)),
+		mapWithConcurrency(missingFileIds, (fileId) => client.getFileInfo(fileId)),
 	]);
 	store.writePage({ conversation, posts, users, files });
 	return remoteEvidence(posts, users, files);
+}
+
+function resolveConversationSurround(
+	store: MattermostStore,
+	conversation: ConversationRecord | RoutedConversation,
+	threadEvidence: readonly EvidencePost[],
+	shortThreadMaxReplies: number,
+	surroundRoots: number,
+): EvidencePost[] {
+	if (conversation.kind !== "direct_message" || surroundRoots <= 0) return [];
+	const root = threadEvidence[0];
+	if (!root) return [];
+	const replyCount = Math.max(0, threadEvidence.length - 1);
+	if (replyCount > shortThreadMaxReplies) return [];
+	const preceding = store.getPrecedingRootPosts(
+		conversation.id,
+		root.createAt,
+		root.id,
+		surroundRoots,
+	);
+	if (!preceding.length) return [];
+	return localEvidence(store, preceding);
 }
 
 function assertThreadBoundary(

@@ -49,6 +49,12 @@ Edit `.mattermost/config.json`. Channels and direct messages are separate allowl
       "duplicate charge"
     ]
   },
+  "suppressAuthors": ["legacy-integration"],
+  "budgets": {
+    "matchNeighborhoodRadius": 8,
+    "conversationSurroundRoots": 5,
+    "shortThreadMaxReplies": 2
+  },
   "channels": {
     "engineering": {
       "id": "channel-id",
@@ -115,11 +121,18 @@ bun run src/bin.ts context --query 'deployment timeout' --repository example-ser
 bun run src/bin.ts context 'incident' --channel engineering --fresh
 bun run src/bin.ts context 'incident' --local --no-widen
 bun run src/bin.ts context 'incident' --more
+bun run src/bin.ts context PROJ-123 --include-automation
 bun run src/bin.ts thread <post-id-or-permalink> --more
 bun run src/bin.ts thread <post-id-or-permalink> --full
 ```
 
 Repeated `--query`, `--repository`, `--scope`, and `--channel` options are supported. Queries are independent ranking/retrieval signals, not mandatory filters: a ticket relationship or other stronger evidence can still select a candidate with no textual query match, and the result emits an `unmatched_retrieval_probe` warning when that happens. Unknown repository or scope metadata hints emit `unmapped_routing_hint` rather than being ignored silently. Package callers can additionally pass typed `probes` for ticket titles/descriptions, repositories, file paths, symbols, errors, services, and participants; probe kinds are retained in match, structured-match, fusion, and remote-search diagnostics.
+
+Unreplied bot or automation roots (Mattermost `is_bot`, post `from_bot`/`from_webhook` props, or usernames listed in `suppressAuthors`) are omitted from `context`/`search` unless `--include-automation` is set. Bot roots that already have human replies remain eligible.
+
+For short direct-message threads, `context` may attach prior root posts from the same DM as `surround` so a late ticket link still carries the preceding problem discussion. Intra-thread packing expands a match neighborhood (default radius 8) while still preferring latest posts after the immediate ±1 ring.
+
+Local search uses a soft wall-clock deadline and may emit `search_deadline` with partial evidence. Concurrent freshen/sync processes take a database-adjacent lockfile; a waiter that cannot acquire it emits `freshen_lock_busy` and continues with local evidence. SQLite opens with `busy_timeout` and WAL `synchronous=NORMAL`. Context freshen is targeted (ticket-related / matched / capped stale set) rather than refreshing the entire allowlist on every call.
 
 English and Russian significant terms and stop words are recognized. Russian search is case-insensitive and treats `ё`/`е` equivalently while preserving original messages in output.
 
@@ -144,6 +157,7 @@ Both `context` and `search` support hard thread filters: `--from <username>`, `-
 Explicit `--channel` aliases are a hard V1 allowlist: sync, local search, widening, direct resolution, and final hydration cannot leave them. Without explicit channels, routing may widen once unless `--no-widen` is set.
 
 - Normal `context` reconciles stale routed conversations and re-fetches selected threads.
+- Conversation identity for retrieval comes from configured channel/DM IDs (and the local index); Mattermost is not asked to resolve every allowlisted conversation on each `context` call. Sync/freshen still validates identities for the conversations it actually refreshes.
 - When routed local coverage remains stale or cutoff-bounded, `context` may use Mattermost’s bounded native post search after local retrieval; `--remote-search` requests it explicitly.
 - Remote search uses only the named read-only team post-search operation—no generic HTTP helper is exposed. It runs at most four independent probes, accepts at most 20 posts per probe and 12 thread roots, rejects posts outside the currently routed configured conversations before hydration, and reports failures without discarding usable local evidence.
 - `--fresh` forces routed reconciliation.
@@ -173,7 +187,7 @@ Add `--json` to emit exactly one minified JSON document on stdout. Use `--pretty
 
 Failures replace `data` with a stable error containing `source`, `kind`, and `message`. Retrieval contracts include freshness mode/timestamps, `searchCoverageComplete`, `selectedThreadsComplete` for context packets, searched conversations and routing evidence (including unmatched hints), explicit-channel/widening state, deterministic ranking reasons/order, candidate permalinks, budgets, and omission counts. Context packets also expose whether bounded remote search was requested or performed, its trigger, per-probe accepted counts, failures, and `remote_search` selection reasons. The legacy `complete` field remains an alias for search coverage in V1.
 
-Use `--agent` for a minified agent-oriented projection of the same validated result. It flattens successful command data into the top-level envelope and, for `context`, `search`, and `thread`, replaces retrieval internals with a normalized subject, completeness status, semantic selection reasons, ISO timestamps, compact posts/files, permalinks, and omission counts. Detailed per-conversation freshness evidence remains available in `--json`; `--agent` retains only aggregate completeness status and relevant warnings. Warnings appear only once at the top level. `--agent` conflicts with `--json` and `--pretty`.
+Use `--agent` for a minified agent-oriented projection of the same validated result. It flattens successful command data into the top-level envelope and, for `context`, `search`, and `thread`, replaces retrieval internals with a normalized subject, completeness status, semantic selection reasons, ISO timestamps, consecutive same-author message groups (`posts[].messages[]` with stable post ids), optional DM `surround` groups, permalinks, and omission counts. Agents should parse `--agent` JSON rather than treating it as prose. Detailed per-conversation freshness evidence remains available in `--json`; `--agent` retains only aggregate completeness status and relevant warnings. Warnings appear only once at the top level. `--agent` conflicts with `--json` and `--pretty`.
 
 Zod schemas and inferred TypeScript types for every command are exported from the package, including `commandResultV1Schema`, command-specific `*ResultV1Schema` values, and `parseCommandResultV1`. Complete synthetic V1 golden documents live in `src/contracts.v1.fixture.json`.
 

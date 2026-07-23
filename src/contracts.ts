@@ -428,6 +428,22 @@ const contextThreadSchema = packedThreadSchema.extend({
 	matchingPostIds: z.array(z.string()),
 	latestActivityAt: z.number().int().nonnegative(),
 	link: z.string(),
+	surround: z
+		.array(
+			z.object({
+				id: z.string(),
+				rootId: z.string(),
+				userId: z.string(),
+				authorUsername: z.string(),
+				authorDisplayName: z.string(),
+				createAt: z.number().int().nonnegative(),
+				updateAt: z.number().int().nonnegative(),
+				deleteAt: z.number().int().nonnegative(),
+				message: z.string(),
+				attachments: z.array(attachmentSchema),
+			}),
+		)
+		.optional(),
 });
 const remoteSearchEvidenceSchema = z.object({
 	requested: z.boolean(),

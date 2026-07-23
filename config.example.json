@@ -16,6 +16,7 @@
 			"duplicate charge"
 		]
 	},
+	"suppressAuthors": [],
 	"channels": {
 		"engineering": {
 			"name": "engineering",

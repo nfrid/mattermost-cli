@@ -7,11 +7,16 @@ import {
 	searchMattermost,
 	type ThreadInput,
 } from "./context.ts";
+import { freshenLockPath, withFileLock } from "./lock.ts";
 import {
 	MattermostClient,
 	type MattermostClientOptions,
 } from "./mattermost/client.ts";
 import { type CommandResult, commandSuccess } from "./results.ts";
+import {
+	FRESHEN_LOCK_STALE_MS,
+	FRESHEN_LOCK_TIMEOUT_MS,
+} from "./runtime-limits.ts";
 import {
 	listConfiguredConversations,
 	runDoctor,
@@ -112,15 +117,31 @@ export async function syncCommand(
 		concepts: config.concepts,
 	});
 	try {
-		return commandSuccess(
-			"sync",
-			await syncConfiguredConversations(
+		const run = () =>
+			syncConfiguredConversations(
 				config,
 				createClient(config, dependencies),
 				store,
 				{ ...options, onProgress: dependencies.onProgress },
-			),
-		);
+			);
+		const lockPath = freshenLockPath(config.databasePath);
+		if (!lockPath) {
+			return commandSuccess("sync", await run());
+		}
+		const locked = await withFileLock(lockPath, run, {
+			timeoutMs: FRESHEN_LOCK_TIMEOUT_MS,
+			staleMs: FRESHEN_LOCK_STALE_MS,
+		});
+		if (!locked.acquired) {
+			return commandSuccess("sync", { synced: [], skipped: true }, [
+				{
+					kind: "freshen_lock_busy",
+					message:
+						"Skipped sync because another mm process holds the freshen lock.",
+				},
+			]);
+		}
+		return commandSuccess("sync", locked.value);
 	} finally {
 		store.close();
 	}

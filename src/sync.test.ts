@@ -34,6 +34,9 @@ const config = {
 		moreMaxCharacters: 32_000,
 		morePerThreadCharacters: 10_000,
 		moreMaxThreads: 6,
+		matchNeighborhoodRadius: 8,
+		conversationSurroundRoots: 5,
+		shortThreadMaxReplies: 2,
 	},
 	channels: {
 		payments: {
@@ -558,6 +561,7 @@ class FakeClient implements SyncClient {
 			last_name: "",
 			nickname: "",
 			delete_at: 0,
+			is_bot: false,
 		}));
 	}
 

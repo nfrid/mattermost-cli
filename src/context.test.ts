@@ -359,6 +359,9 @@ describe("context pipeline", () => {
 				moreMaxCharacters: 20_000,
 				morePerThreadCharacters: 1_000,
 				moreMaxThreads: 20,
+				matchNeighborhoodRadius: 8,
+				conversationSurroundRoots: 5,
+				shortThreadMaxReplies: 2,
 			},
 		});
 		const result = await getMattermostContext(
@@ -615,7 +618,7 @@ describe("context pipeline", () => {
 	});
 
 	test("fails when a directly targeted reply disappears before hydration", async () => {
-		const store = await seededStore({ fresh: true });
+		const store = await seededStore();
 		const client = new FakeContextClient();
 		client.posts.set(
 			REPLY,
@@ -636,14 +639,14 @@ describe("context pipeline", () => {
 		await expect(
 			getMattermostContext(
 				{ subject: REPLY },
-				{ config: configFixture(), store, client, now: () => 100 },
+				{ config: configFixture(), store, client, now: () => 8_200_000 },
 			),
 		).rejects.toMatchObject({ kind: "post_not_found" });
 		store.close();
 	});
 
 	test("network hydration replaces stale local message content with current server evidence", async () => {
-		const store = await seededStore({ fresh: true });
+		const store = await seededStore();
 		const client = new FakeContextClient();
 		client.posts.set(
 			ROOT,
@@ -665,7 +668,7 @@ describe("context pipeline", () => {
 		);
 		const result = await getMattermostContext(
 			{ subject: "payment timeout", channels: ["payments"] },
-			{ config: configFixture(), store, client, now: () => 100 },
+			{ config: configFixture(), store, client, now: () => 8_200_000 },
 		);
 		expect(result.threads[0]?.posts[0]?.message).toBe(
 			"payment current server text",
@@ -677,7 +680,7 @@ describe("context pipeline", () => {
 	});
 
 	test("rejects hydrated posts that cross the routed conversation boundary", async () => {
-		const store = await seededStore({ fresh: true });
+		const store = await seededStore();
 		const client = new FakeContextClient();
 		client.thread = list(
 			postFixture({
@@ -689,14 +692,14 @@ describe("context pipeline", () => {
 		await expect(
 			getMattermostContext(
 				{ subject: "payment timeout", channels: ["payments"] },
-				{ config: configFixture(), store, client, now: () => 100 },
+				{ config: configFixture(), store, client, now: () => 8_200_000 },
 			),
 		).rejects.toMatchObject({ kind: "conversation_not_allowed" });
 		store.close();
 	});
 
 	test("rejects a same-channel response for a different requested thread", async () => {
-		const store = await seededStore({ fresh: true });
+		const store = await seededStore();
 		const client = new FakeContextClient();
 		client.thread = list(
 			postFixture({
@@ -708,14 +711,14 @@ describe("context pipeline", () => {
 		await expect(
 			getMattermostContext(
 				{ subject: "payment timeout", channels: ["payments"] },
-				{ config: configFixture(), store, client, now: () => 100 },
+				{ config: configFixture(), store, client, now: () => 8_200_000 },
 			),
 		).rejects.toMatchObject({ kind: "thread_not_found" });
 		store.close();
 	});
 
 	test("continues past stale hydrated candidates and widens when none remain useful", async () => {
-		const store = await seededStore({ fresh: true });
+		const store = await seededStore();
 		const client = new FakeContextClient();
 		client.threads.set(
 			ROOT,
@@ -739,7 +742,7 @@ describe("context pipeline", () => {
 		);
 		const result = await getMattermostContext(
 			{ subject: "shared evidence", scopes: ["payments"] },
-			{ config: configFixture(), store, client, now: () => 100 },
+			{ config: configFixture(), store, client, now: () => 8_200_000 },
 		);
 		expect(result.widening.performed).toBe(true);
 		expect(
@@ -771,6 +774,27 @@ describe("context pipeline", () => {
 		store.close();
 	});
 
+	test("network context uses config IDs without resolving every conversation", async () => {
+		const store = await seededStore({ fresh: true });
+		const client = new FakeContextClient();
+		client.thread = list(
+			postFixture({ id: ROOT, message: "payment timeout", create_at: 10 }),
+			postFixture({
+				id: REPLY,
+				root_id: ROOT,
+				message: "timeout confirmed",
+				create_at: 20,
+			}),
+		);
+		await getMattermostContext(
+			{ subject: "payment timeout", channels: ["payments"] },
+			{ config: configFixture(), store, client, now: () => 100 },
+		);
+		expect(client.channelRequests).toEqual([]);
+		expect(client.postRequests).toEqual([]);
+		store.close();
+	});
+
 	test("enforces global and per-thread budgets without splitting messages", async () => {
 		const store = await seededStore();
 		const config = configFixture({
@@ -781,6 +805,9 @@ describe("context pipeline", () => {
 				moreMaxCharacters: 280,
 				morePerThreadCharacters: 200,
 				moreMaxThreads: 6,
+				matchNeighborhoodRadius: 8,
+				conversationSurroundRoots: 5,
+				shortThreadMaxReplies: 2,
 			},
 		});
 		const result = await getMattermostContext(

@@ -25,7 +25,11 @@ export function configFixture(
 			moreMaxCharacters: 2_000,
 			morePerThreadCharacters: 1_000,
 			moreMaxThreads: 6,
+			matchNeighborhoodRadius: 8,
+			conversationSurroundRoots: 5,
+			shortThreadMaxReplies: 2,
 		},
+		suppressAuthors: [],
 		channels: {
 			payments: {
 				id: "channel-payments",
@@ -84,6 +88,7 @@ export function userFixture(
 		last_name: "Example",
 		nickname: "",
 		delete_at: 0,
+		is_bot: false,
 		...overrides,
 	};
 }

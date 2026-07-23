@@ -426,6 +426,9 @@ function fixtureConfig(fixture: RetrievalBenchmarkFixture): MattermostConfig {
 			moreMaxCharacters: 4_000,
 			morePerThreadCharacters: 1_200,
 			moreMaxThreads: 10,
+			matchNeighborhoodRadius: 8,
+			conversationSurroundRoots: 5,
+			shortThreadMaxReplies: 2,
 		},
 		channels: Object.fromEntries(
 			fixture.conversations

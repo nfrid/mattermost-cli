@@ -46,6 +46,9 @@ const outputBudgetsSchema = z
 		moreMaxCharacters: z.number().int().positive().default(32_000),
 		morePerThreadCharacters: z.number().int().positive().default(10_000),
 		moreMaxThreads: z.number().int().positive().default(6),
+		matchNeighborhoodRadius: z.number().int().positive().default(8),
+		conversationSurroundRoots: z.number().int().nonnegative().default(5),
+		shortThreadMaxReplies: z.number().int().nonnegative().default(2),
 	})
 	.default({
 		defaultMaxCharacters: 16_000,
@@ -54,6 +57,9 @@ const outputBudgetsSchema = z
 		moreMaxCharacters: 32_000,
 		morePerThreadCharacters: 10_000,
 		moreMaxThreads: 6,
+		matchNeighborhoodRadius: 8,
+		conversationSurroundRoots: 5,
+		shortThreadMaxReplies: 2,
 	});
 
 const localConfigSchema = z
@@ -69,6 +75,7 @@ const localConfigSchema = z
 		pageSize: z.number().int().min(1).max(200).default(100),
 		synonyms: searchSynonymsSchema,
 		concepts: searchConceptsSchema,
+		suppressAuthors: stringListSchema,
 		budgets: outputBudgetsSchema,
 		channels: z
 			.record(z.string().trim().min(1), configuredChannelSchema)
@@ -136,9 +143,13 @@ export type SearchConcepts = z.output<typeof searchConceptsSchema>;
 export type LocalMattermostConfig = z.output<typeof localConfigSchema>;
 
 export interface MattermostConfig
-	extends Omit<LocalMattermostConfig, "synonyms" | "concepts"> {
+	extends Omit<
+		LocalMattermostConfig,
+		"synonyms" | "concepts" | "suppressAuthors"
+	> {
 	synonyms?: LocalMattermostConfig["synonyms"];
 	concepts?: SearchConcepts;
+	suppressAuthors?: LocalMattermostConfig["suppressAuthors"];
 	url: string;
 	configPath: string;
 	databasePath: string;

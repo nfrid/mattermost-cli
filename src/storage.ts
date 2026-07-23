@@ -14,6 +14,7 @@ import type {
 	MattermostPost,
 	MattermostUser,
 } from "./mattermost/schemas.ts";
+import { SQLITE_BUSY_TIMEOUT_MS } from "./runtime-limits.ts";
 import {
 	conceptIndexFingerprint,
 	conceptTokensForText,
@@ -69,6 +70,7 @@ export interface IndexedUser {
 	lastName: string;
 	nickname: string;
 	deleteAt: number;
+	isBot: boolean;
 }
 
 export interface IndexedFile {
@@ -252,6 +254,12 @@ CREATE TABLE search_index_config (
 `,
 		rebuildConceptFts: true,
 	},
+	{
+		version: 7,
+		sql: `
+ALTER TABLE users ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 ] as const;
 
 export interface MattermostStoreOptions {
@@ -298,6 +306,8 @@ export class MattermostStore {
 		this.concepts = options.concepts ?? {};
 		this.database.run("PRAGMA foreign_keys = ON");
 		this.database.run("PRAGMA journal_mode = WAL");
+		this.database.run("PRAGMA synchronous = NORMAL");
+		this.database.run(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
 		this.migrate();
 		this.synchronizeConceptIndexConfig();
 	}
@@ -406,10 +416,11 @@ ON CONFLICT(id) DO UPDATE SET alias=excluded.alias, kind=excluded.kind,
 			.get(user.id);
 		this.database
 			.query(`
-INSERT INTO users (id, username, first_name, last_name, nickname, delete_at)
-VALUES ($id, $username, $firstName, $lastName, $nickname, $deleteAt)
+INSERT INTO users (id, username, first_name, last_name, nickname, delete_at, is_bot)
+VALUES ($id, $username, $firstName, $lastName, $nickname, $deleteAt, $isBot)
 ON CONFLICT(id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name,
-  last_name=excluded.last_name, nickname=excluded.nickname, delete_at=excluded.delete_at`)
+  last_name=excluded.last_name, nickname=excluded.nickname, delete_at=excluded.delete_at,
+  is_bot=excluded.is_bot`)
 			.run({
 				$id: user.id,
 				$username: user.username,
@@ -417,6 +428,7 @@ ON CONFLICT(id) DO UPDATE SET username=excluded.username, first_name=excluded.fi
 				$lastName: user.last_name,
 				$nickname: user.nickname,
 				$deleteAt: user.delete_at,
+				$isBot: user.is_bot ? 1 : 0,
 			});
 		if (
 			existing &&
@@ -683,14 +695,52 @@ ON CONFLICT(conversation_id) DO UPDATE SET newest_post_id=excluded.newest_post_i
 				`SELECT * FROM users WHERE id IN (${placeholders})`,
 			)
 			.all(...userIds)
-			.map((row) => ({
-				id: String(row.id),
-				username: String(row.username),
-				firstName: String(row.first_name),
-				lastName: String(row.last_name),
-				nickname: String(row.nickname),
-				deleteAt: Number(row.delete_at),
-			}));
+			.map(rowToUser);
+	}
+
+	getUser(userId: string): IndexedUser | null {
+		const row = this.database
+			.query<Record<string, unknown>, [string]>(
+				"SELECT * FROM users WHERE id = ?",
+			)
+			.get(userId);
+		return row ? rowToUser(row) : null;
+	}
+
+	/** Non-deleted reply count for a thread (excludes the root post). */
+	threadReplyCount(threadId: string): number {
+		const row = this.database
+			.query<{ count: number }, [string, string]>(
+				`SELECT COUNT(*) AS count FROM posts
+WHERE thread_id = ? AND id <> ? AND delete_at = 0`,
+			)
+			.get(threadId, threadId);
+		return row?.count ?? 0;
+	}
+
+	/**
+	 * Preceding root posts in the same conversation (exclusive of the anchor),
+	 * newest-first then reversed to chronological for callers.
+	 */
+	getPrecedingRootPosts(
+		conversationId: string,
+		beforeCreateAt: number,
+		beforePostId: string,
+		limit: number,
+	): IndexedPost[] {
+		if (limit <= 0) return [];
+		const rows = this.database
+			.query<Record<string, unknown>, [string, number, number, string, number]>(
+				`SELECT * FROM posts
+WHERE conversation_id = ?
+  AND (root_id = '' OR root_id = id)
+  AND delete_at = 0
+  AND (create_at < ? OR (create_at = ? AND id < ?))
+ORDER BY create_at DESC, id DESC
+LIMIT ?`,
+			)
+			.all(conversationId, beforeCreateAt, beforeCreateAt, beforePostId, limit);
+		return rows.map(rowToPost).reverse();
 	}
 
 	getFilesForPosts(postIds: readonly string[]): IndexedFile[] {
@@ -1403,5 +1453,17 @@ function rowToPost(row: Record<string, unknown>): IndexedPost {
 		metadata: row.metadata_json
 			? JSON.parse(String(row.metadata_json))
 			: undefined,
+	};
+}
+
+function rowToUser(row: Record<string, unknown>): IndexedUser {
+	return {
+		id: String(row.id),
+		username: String(row.username),
+		firstName: String(row.first_name),
+		lastName: String(row.last_name),
+		nickname: String(row.nickname),
+		deleteAt: Number(row.delete_at),
+		isBot: Number(row.is_bot ?? 0) !== 0,
 	};
 }

@@ -1271,6 +1271,7 @@ describe("routing and ranking", () => {
 					last_name: "",
 					nickname: "",
 					delete_at: 0,
+					is_bot: false,
 				},
 				{
 					id: "other-user",
@@ -1279,6 +1280,7 @@ describe("routing and ranking", () => {
 					last_name: "",
 					nickname: "",
 					delete_at: 0,
+					is_bot: false,
 				},
 			],
 			posts: [
@@ -1567,6 +1569,7 @@ describe("routing and ranking", () => {
 					last_name: "",
 					nickname: "",
 					delete_at: 0,
+					is_bot: false,
 				},
 			],
 			posts: [

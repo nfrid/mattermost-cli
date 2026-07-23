@@ -161,55 +161,67 @@ export async function resolveConversations(
 	}
 
 	const conversations: ConversationRecord[] = [];
-	for (const [alias, configuredChannel] of Object.entries(config.channels)) {
-		if (requested && !requested.has(alias)) continue;
-		const channel = configuredChannel.id
-			? await client.getChannel(configuredChannel.id)
-			: await client.getChannelByName(config.teamId, configuredChannel.name);
-		if (channel.team_id !== config.teamId) {
-			throw new ConfigError(
-				`Configured channel ${alias} is not in team ${config.teamId}.`,
-				"channel_team_mismatch",
-			);
-		}
-		if (
-			(channel.type !== "O" && channel.type !== "P") ||
-			channel.name !== configuredChannel.name ||
-			(configuredChannel.id && channel.id !== configuredChannel.id)
-		) {
-			throw new ConfigError(
-				`Configured channel ${alias} resolved to an unexpected identity or type.`,
-				"channel_identity_mismatch",
-			);
-		}
-		conversations.push({
-			id: channel.id,
-			alias,
-			kind: "channel",
-			name: channel.name,
-			description: configuredChannel.description,
-		});
-	}
-	for (const [alias, directMessage] of Object.entries(config.directMessages)) {
-		if (requested && !requested.has(alias)) continue;
-		const channel = await client.getChannel(directMessage.channelId);
-		if (
-			(channel.type !== "D" && channel.type !== "G") ||
-			channel.id !== directMessage.channelId
-		) {
-			throw new ConfigError(
-				`Configured direct message ${alias} resolved to an unexpected identity or type.`,
-				"direct_message_identity_mismatch",
-			);
-		}
-		conversations.push({
-			id: channel.id,
-			alias,
-			kind: "direct_message",
-			name: channel.name || alias,
-			description: directMessage.description,
-		});
-	}
+	const channelEntries = Object.entries(config.channels).filter(
+		([alias]) => !requested || requested.has(alias),
+	);
+	const dmEntries = Object.entries(config.directMessages).filter(
+		([alias]) => !requested || requested.has(alias),
+	);
+	const resolvedChannels = await mapWithConcurrency(
+		channelEntries,
+		async ([alias, configuredChannel]) => {
+			const channel = configuredChannel.id
+				? await client.getChannel(configuredChannel.id)
+				: await client.getChannelByName(config.teamId, configuredChannel.name);
+			if (channel.team_id !== config.teamId) {
+				throw new ConfigError(
+					`Configured channel ${alias} is not in team ${config.teamId}.`,
+					"channel_team_mismatch",
+				);
+			}
+			if (
+				(channel.type !== "O" && channel.type !== "P") ||
+				channel.name !== configuredChannel.name ||
+				(configuredChannel.id && channel.id !== configuredChannel.id)
+			) {
+				throw new ConfigError(
+					`Configured channel ${alias} resolved to an unexpected identity or type.`,
+					"channel_identity_mismatch",
+				);
+			}
+			return {
+				id: channel.id,
+				alias,
+				kind: "channel" as const,
+				name: channel.name,
+				description: configuredChannel.description,
+			};
+		},
+	);
+	conversations.push(...resolvedChannels);
+	const resolvedDirectMessages = await mapWithConcurrency(
+		dmEntries,
+		async ([alias, directMessage]) => {
+			const channel = await client.getChannel(directMessage.channelId);
+			if (
+				(channel.type !== "D" && channel.type !== "G") ||
+				channel.id !== directMessage.channelId
+			) {
+				throw new ConfigError(
+					`Configured direct message ${alias} resolved to an unexpected identity or type.`,
+					"direct_message_identity_mismatch",
+				);
+			}
+			return {
+				id: channel.id,
+				alias,
+				kind: "direct_message" as const,
+				name: channel.name || alias,
+				description: directMessage.description,
+			};
+		},
+	);
+	conversations.push(...resolvedDirectMessages);
 	return conversations;
 }
 

@@ -5,6 +5,7 @@ import {
 	matchesQueryExpansion,
 	type QueryExpansion,
 } from "./query-expansion.ts";
+import { deadlineReached } from "./runtime-limits.ts";
 import {
 	type ConceptQueryMatch,
 	conceptQueryMatches,
@@ -644,6 +645,14 @@ export function widenedRouting(
 	};
 }
 
+export interface SearchThreadsOptions {
+	deadlineAt?: number;
+	incomplete?: { value: boolean };
+	includeAutomation?: boolean;
+	suppressAuthors?: readonly string[];
+	threadCache?: Map<string, IndexedPost[]>;
+}
+
 export function searchThreads(
 	store: MattermostStore,
 	subject: MattermostSubject,
@@ -651,6 +660,7 @@ export function searchThreads(
 	routing: RoutingResult,
 	limit = 100,
 	filters: ThreadSearchFilters = {},
+	options: SearchThreadsOptions = {},
 ): ThreadCandidate[] {
 	const conversations = new Map(
 		routing.conversations.map((conversation) => [
@@ -661,7 +671,52 @@ export function searchThreads(
 	const grouped = new Map<string, CandidateGroup>();
 	const conversationIds = [...conversations.keys()];
 	const sourceLimit = Math.min(limit, MAX_CANDIDATES_PER_SOURCE);
+	const threadCache = options.threadCache ?? new Map<string, IndexedPost[]>();
+	const getThread = (threadId: string): IndexedPost[] => {
+		const cached = threadCache.get(threadId);
+		if (cached) return cached;
+		const thread = store.getThread(threadId);
+		threadCache.set(threadId, thread);
+		return thread;
+	};
+	const timedOut = (): boolean => {
+		if (!deadlineReached(options.deadlineAt)) return false;
+		if (options.incomplete) options.incomplete.value = true;
+		return true;
+	};
+
+	const relationships =
+		subject.kind === "ticket"
+			? store.getTicketRelationships(subject.ticketKey)
+			: [];
+	for (const relationship of relationships) {
+		const thread = getThread(relationship.threadId);
+		if (!thread.length || !conversations.has(thread[0]?.conversationId ?? ""))
+			continue;
+		const group = grouped.get(relationship.threadId) ?? createCandidateGroup();
+		grouped.set(relationship.threadId, group);
+	}
+
+	const strongPass: Array<{
+		probe: RetrievalProbe;
+		retrieve: (
+			source: LexicalRetrievalSource,
+			value: string,
+			fusionSource?: RankFusionSource,
+			fusionMetadata?: Pick<
+				RankFusionContribution,
+				| "conceptId"
+				| "sourcePhrase"
+				| "fallbackKind"
+				| "minimumSimilarity"
+				| "maximumEditDistance"
+			>,
+		) => ReturnType<MattermostStore["search"]>;
+		coveredTerms: Set<string>;
+	}> = [];
+
 	for (const probe of probes) {
+		if (timedOut()) break;
 		const requestCache = new Map<
 			string,
 			ReturnType<MattermostStore["search"]>
@@ -679,6 +734,7 @@ export function searchThreads(
 				| "maximumEditDistance"
 			> = {},
 		): ReturnType<MattermostStore["search"]> => {
+			if (timedOut()) return [];
 			const key = `${source}\0${normalizeSearchText(value)}`;
 			const cached = requestCache.get(key);
 			if (cached) {
@@ -694,8 +750,10 @@ export function searchThreads(
 			return hits;
 		};
 		const coveredTerms = new Set<string>();
+		strongPass.push({ probe, retrieve, coveredTerms });
 		const requests = deduplicateLexicalRequests(strongLexicalRequests(probe));
 		for (const request of requests) {
+			if (timedOut()) break;
 			const hits = retrieve(request.source, request.value);
 			if (!hits.length) continue;
 			if (request.source === "term_fts") {
@@ -707,109 +765,50 @@ export function searchThreads(
 				for (const term of probe.terms) coveredTerms.add(term);
 			}
 		}
-		const morphEntries = probe.terms
-			.map((term) => ({ term, morph: morphSearchTerms([term])[0] }))
-			.filter(
-				(entry): entry is { term: string; morph: string } =>
-					entry.morph !== undefined,
-			)
-			.slice(0, MAX_MORPH_TERMS_PER_PROBE);
-		if (morphEntries.length > 1) {
-			const hits = retrieve(
-				"morph_fts",
-				morphEntries.map(({ morph }) => morph).join(" "),
+		if (!timedOut()) {
+			addStructuredHits(
+				grouped,
+				store,
+				probe,
+				store.searchEntities(
+					probe.value,
+					conversationIds,
+					sourceLimit,
+					filters,
+					probe.kind === "participant" ? "username" : undefined,
+				),
 			);
-			if (hits.length) {
-				for (const { term } of morphEntries) coveredTerms.add(term);
-			}
 		}
-		for (const morph of new Set(morphEntries.map((entry) => entry.morph))) {
-			const hits = retrieve("morph_fts", morph);
-			if (!hits.length) continue;
-			for (const entry of morphEntries) {
-				if (entry.morph === morph) coveredTerms.add(entry.term);
-			}
-		}
-		for (const concept of probe.conceptMatches ?? []) {
-			retrieve("concept_fts", conceptToken(concept.conceptId), "concept_fts", {
-				conceptId: concept.conceptId,
-				sourcePhrase: concept.sourcePhrase,
-			});
-		}
-		for (const expansion of probe.expansions ?? []) {
-			const source =
-				expansion.match === "morph"
-					? "morph_fts"
-					: expansion.match === "prefix"
-						? "prefix_fts"
-						: expansion.value.includes(" ")
-							? "exact_phrase"
-							: "term_fts";
-			const value =
-				expansion.match === "morph"
-					? normalizeMorphText(expansion.value)
-					: expansion.value;
-			if (value) retrieve(source, value, expansion.kind);
-		}
-		let fuzzyRequestCount = 0;
-		for (const term of probe.terms) {
-			if (
-				coveredTerms.has(term) ||
-				fuzzyRequestCount >= MAX_FUZZY_REQUESTS_PER_PROBE
-			) {
-				continue;
-			}
-			const fallback = typoFallbackPolicy(probe, term);
-			if (!fallback) continue;
-			if (probe.conceptMatches?.length && fallback.kind === "russian_word") {
-				continue;
-			}
-			if (fallback.allowPrefix && term.length >= MIN_PREFIX_LENGTH) {
-				fuzzyRequestCount += 1;
-				const prefixHits = retrieve("prefix_fts", term, "prefix_fts", {
-					fallbackKind: fallback.kind,
-				});
-				if (prefixHits.length) continue;
-			}
-			const trigram = trigramSearchPolicy(term);
-			if (!trigram || fuzzyRequestCount >= MAX_FUZZY_REQUESTS_PER_PROBE) {
-				continue;
-			}
-			fuzzyRequestCount += 1;
-			retrieve("trigram", term, "trigram", {
-				fallbackKind: fallback.kind,
-				minimumSimilarity: trigram.minimumSimilarity,
-				maximumEditDistance: trigram.maximumEditDistance,
-			});
-		}
-		addStructuredHits(
-			grouped,
-			store,
-			probe,
-			store.searchEntities(
-				probe.value,
-				conversationIds,
-				sourceLimit,
-				filters,
-				probe.kind === "participant" ? "username" : undefined,
-			),
-		);
 	}
 
-	const relationships =
-		subject.kind === "ticket"
-			? store.getTicketRelationships(subject.ticketKey)
-			: [];
-	for (const relationship of relationships) {
-		const thread = store.getThread(relationship.threadId);
-		if (!thread.length || !conversations.has(thread[0]?.conversationId ?? ""))
-			continue;
-		const group = grouped.get(relationship.threadId) ?? createCandidateGroup();
-		grouped.set(relationship.threadId, group);
+	const strongTicket =
+		subject.kind === "ticket" &&
+		(relationships.length > 0 ||
+			hasTicketHitInGrouped(grouped, getThread, subject.ticketKey));
+
+	if (!strongTicket && !timedOut()) {
+		for (const entry of strongPass) {
+			if (timedOut()) break;
+			runWeakRetrieval(
+				entry.probe,
+				entry.retrieve,
+				entry.coveredTerms,
+				timedOut,
+			);
+		}
 	}
 
 	return [...grouped.entries()]
 		.filter(([threadId]) => store.threadMatchesFilters(threadId, filters))
+		.filter(([threadId]) => {
+			if (options.includeAutomation) return true;
+			return !isUnrepliedAutomationThread(
+				store,
+				threadId,
+				getThread,
+				options.suppressAuthors ?? [],
+			);
+		})
 		.map(([threadId, group]) =>
 			candidateFromGroup(
 				store,
@@ -819,10 +818,149 @@ export function searchThreads(
 				subject,
 				probes,
 				relationships,
+				getThread,
 			),
 		)
 		.filter((candidate): candidate is ThreadCandidate => candidate !== null)
 		.sort(compareCandidates);
+}
+
+function runWeakRetrieval(
+	probe: RetrievalProbe,
+	retrieve: (
+		source: LexicalRetrievalSource,
+		value: string,
+		fusionSource?: RankFusionSource,
+		fusionMetadata?: Pick<
+			RankFusionContribution,
+			| "conceptId"
+			| "sourcePhrase"
+			| "fallbackKind"
+			| "minimumSimilarity"
+			| "maximumEditDistance"
+		>,
+	) => ReturnType<MattermostStore["search"]>,
+	coveredTerms: Set<string>,
+	timedOut: () => boolean,
+): void {
+	const morphEntries = probe.terms
+		.map((term) => ({ term, morph: morphSearchTerms([term])[0] }))
+		.filter(
+			(entry): entry is { term: string; morph: string } =>
+				entry.morph !== undefined,
+		)
+		.slice(0, MAX_MORPH_TERMS_PER_PROBE);
+	if (morphEntries.length > 1 && !timedOut()) {
+		const hits = retrieve(
+			"morph_fts",
+			morphEntries.map(({ morph }) => morph).join(" "),
+		);
+		if (hits.length) {
+			for (const { term } of morphEntries) coveredTerms.add(term);
+		}
+	}
+	for (const morph of new Set(morphEntries.map((entry) => entry.morph))) {
+		if (timedOut()) return;
+		const hits = retrieve("morph_fts", morph);
+		if (!hits.length) continue;
+		for (const entry of morphEntries) {
+			if (entry.morph === morph) coveredTerms.add(entry.term);
+		}
+	}
+	for (const concept of probe.conceptMatches ?? []) {
+		if (timedOut()) return;
+		retrieve("concept_fts", conceptToken(concept.conceptId), "concept_fts", {
+			conceptId: concept.conceptId,
+			sourcePhrase: concept.sourcePhrase,
+		});
+	}
+	for (const expansion of probe.expansions ?? []) {
+		if (timedOut()) return;
+		const source =
+			expansion.match === "morph"
+				? "morph_fts"
+				: expansion.match === "prefix"
+					? "prefix_fts"
+					: expansion.value.includes(" ")
+						? "exact_phrase"
+						: "term_fts";
+		const value =
+			expansion.match === "morph"
+				? normalizeMorphText(expansion.value)
+				: expansion.value;
+		if (value) retrieve(source, value, expansion.kind);
+	}
+	let fuzzyRequestCount = 0;
+	for (const term of probe.terms) {
+		if (timedOut()) return;
+		if (
+			coveredTerms.has(term) ||
+			fuzzyRequestCount >= MAX_FUZZY_REQUESTS_PER_PROBE
+		) {
+			continue;
+		}
+		const fallback = typoFallbackPolicy(probe, term);
+		if (!fallback) continue;
+		if (probe.conceptMatches?.length && fallback.kind === "russian_word") {
+			continue;
+		}
+		if (fallback.allowPrefix && term.length >= MIN_PREFIX_LENGTH) {
+			fuzzyRequestCount += 1;
+			const prefixHits = retrieve("prefix_fts", term, "prefix_fts", {
+				fallbackKind: fallback.kind,
+			});
+			if (prefixHits.length) continue;
+		}
+		const trigram = trigramSearchPolicy(term);
+		if (!trigram || fuzzyRequestCount >= MAX_FUZZY_REQUESTS_PER_PROBE) {
+			continue;
+		}
+		fuzzyRequestCount += 1;
+		retrieve("trigram", term, "trigram", {
+			fallbackKind: fallback.kind,
+			minimumSimilarity: trigram.minimumSimilarity,
+			maximumEditDistance: trigram.maximumEditDistance,
+		});
+	}
+}
+
+function hasTicketHitInGrouped(
+	grouped: Map<string, CandidateGroup>,
+	getThread: (threadId: string) => IndexedPost[],
+	ticketKey: string,
+): boolean {
+	for (const threadId of grouped.keys()) {
+		const thread = getThread(threadId);
+		if (thread.some((post) => contains(post.message, ticketKey))) return true;
+	}
+	return false;
+}
+
+export function isUnrepliedAutomationThread(
+	store: MattermostStore,
+	threadId: string,
+	getThread: (threadId: string) => IndexedPost[],
+	suppressAuthors: readonly string[],
+): boolean {
+	if (store.threadReplyCount(threadId) > 0) return false;
+	const thread = getThread(threadId);
+	const root = thread.find((post) => post.id === threadId) ?? thread[0];
+	if (!root) return false;
+	return isAutomationAuthor(store, root, suppressAuthors);
+}
+
+export function isAutomationAuthor(
+	store: MattermostStore,
+	post: IndexedPost,
+	suppressAuthors: readonly string[] = [],
+): boolean {
+	const user = store.getUser(post.userId);
+	if (user?.isBot) return true;
+	if (user && suppressAuthors.includes(user.username)) return true;
+	const props = post.props ?? {};
+	if (props.from_bot === true || props.from_webhook === true) return true;
+	if (props.from_bot === "true" || props.from_webhook === "true") return true;
+	return false;
 }
 
 function scoreVector(rank: Partial<CandidateRank>): ScoreVector {
@@ -1134,9 +1272,10 @@ function candidateFromGroup(
 	subject: MattermostSubject,
 	probes: readonly RetrievalProbe[],
 	relationships: readonly TicketThreadRelationship[],
+	getThread: (threadId: string) => IndexedPost[] = (id) => store.getThread(id),
 ): ThreadCandidate | null {
 	const { matches } = group;
-	const thread = store.getThread(threadId);
+	const thread = getThread(threadId);
 	if (!thread.length) return null;
 	const root = thread.find((post) => post.id === threadId) ?? thread[0];
 	if (!root) return null;

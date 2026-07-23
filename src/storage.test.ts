@@ -29,6 +29,7 @@ const user: MattermostUser = {
 	last_name: "Example",
 	nickname: "",
 	delete_at: 0,
+	is_bot: false,
 };
 
 afterEach(async () => {
@@ -42,10 +43,10 @@ describe("MattermostStore", () => {
 		const directory = await temporaryDirectory();
 		const path = join(directory, "index.sqlite3");
 		const first = await MattermostStore.open(path);
-		expect(first.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(first.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6, 7]);
 		first.close();
 		const second = await MattermostStore.open(path);
-		expect(second.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(second.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6, 7]);
 		second.close();
 	});
 
@@ -83,7 +84,7 @@ describe("MattermostStore", () => {
 		before.close();
 
 		const after = await MattermostStore.open(path);
-		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6, 7]);
 		expect(
 			after.search("ошибка api платеж подтвержден", [conversation.id]),
 		).toHaveLength(1);
@@ -117,7 +118,7 @@ describe("MattermostStore", () => {
 		before.close();
 
 		const after = await MattermostStore.open(path);
-		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6, 7]);
 		expect(after.listEntities("post-1")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
@@ -146,7 +147,7 @@ describe("MattermostStore", () => {
 		before.close();
 
 		const after = await MattermostStore.open(path);
-		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6, 7]);
 		expect(
 			after.search("зависш платеж", [conversation.id], 10, {
 				source: "morph_fts",
@@ -178,7 +179,7 @@ describe("MattermostStore", () => {
 			"duplicate-charge": ["повторное списание", "списали дважды"],
 		};
 		const after = await MattermostStore.open(path, { concepts });
-		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6, 7]);
 		expect(
 			after.search(conceptToken("duplicate-charge"), [conversation.id], 10, {
 				source: "concept_fts",

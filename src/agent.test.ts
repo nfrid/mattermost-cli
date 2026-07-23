@@ -18,7 +18,7 @@ const ROOT = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 const REPLY = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 describe("agent projection", () => {
-	test("projects context evidence without storage, packing, or duplicate warning fields", async () => {
+	test("projects context evidence as consecutive author groups", async () => {
 		const store = await seededStore();
 		const context = await getMattermostContext(
 			{
@@ -60,23 +60,27 @@ describe("agent projection", () => {
 					omitted: { posts: 0, attachments: 0 },
 					posts: [
 						{
-							id: ROOT,
-							at: "1970-01-01T00:00:00.010Z",
 							author: "alice",
-							text: "synthetic payment evidence",
 							displayName: "Alice Example",
-						},
-						{
-							id: REPLY,
-							at: "1970-01-01T00:00:00.020Z",
-							author: "alice",
-							text: "payment evidence confirmed",
-							displayName: "Alice Example",
-							files: [
+							from: "1970-01-01T00:00:00.010Z",
+							to: "1970-01-01T00:00:00.020Z",
+							messages: [
 								{
-									name: "trace.txt",
-									mimeType: "text/plain",
-									size: 42,
+									id: ROOT,
+									text: "synthetic payment evidence",
+									at: "1970-01-01T00:00:00.010Z",
+								},
+								{
+									id: REPLY,
+									text: "payment evidence confirmed",
+									at: "1970-01-01T00:00:00.020Z",
+									files: [
+										{
+											name: "trace.txt",
+											mimeType: "text/plain",
+											size: 42,
+										},
+									],
 								},
 							],
 						},
@@ -121,8 +125,15 @@ describe("agent projection", () => {
 				conversation: "payments",
 				kind: "channel",
 				posts: [
-					{ id: ROOT, editedAt: "1970-01-01T00:00:00.030Z" },
-					{ id: REPLY, text: "", deleted: true },
+					{
+						author: "alice",
+						from: "1970-01-01T00:00:00.010Z",
+						to: "1970-01-01T00:00:00.020Z",
+						messages: [
+							{ id: ROOT, editedAt: "1970-01-01T00:00:00.030Z" },
+							{ id: REPLY, text: "", deleted: true },
+						],
+					},
 				],
 			},
 		});

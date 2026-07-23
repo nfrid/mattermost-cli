@@ -4,7 +4,7 @@ import type {
 	SearchContextResult,
 	ThreadResult,
 } from "./context.ts";
-import type { PackedPost, PackedThread } from "./packing.ts";
+import type { EvidencePost, PackedPost, PackedThread } from "./packing.ts";
 import type { CommandResult, Warning } from "./results.ts";
 import type { MattermostSubject, RankingReason } from "./retrieval.ts";
 
@@ -14,15 +14,22 @@ export interface AgentFile {
 	size: number;
 }
 
-export interface AgentPost {
+export interface AgentMessage {
 	id: string;
-	at: string;
-	author: string;
 	text: string;
-	displayName?: string;
+	at?: string;
 	editedAt?: string;
 	deleted?: true;
 	files?: AgentFile[];
+}
+
+/** Consecutive posts from one author, collapsed to reduce envelope noise. */
+export interface AgentMessageGroup {
+	author: string;
+	displayName?: string;
+	from: string;
+	to?: string;
+	messages: AgentMessage[];
 }
 
 export interface AgentStatus {
@@ -44,7 +51,9 @@ export interface AgentThread {
 	url: string;
 	why?: RankingReason[];
 	omitted: AgentOmission;
-	posts: AgentPost[];
+	posts: AgentMessageGroup[];
+	/** Prior DM root posts for short threads (not replies of this thread). */
+	surround?: AgentMessageGroup[];
 }
 
 export interface AgentCandidate {
@@ -180,6 +189,9 @@ function projectContextThread(thread: ContextThread): AgentThread {
 			thread.link,
 		),
 		why: meaningfulReasons(thread.reasons),
+		...(thread.surround?.length
+			? { surround: groupEvidencePosts(thread.surround) }
+			: {}),
 	};
 }
 
@@ -202,11 +214,83 @@ function projectPackedThread(
 			attachments: thread.totalOmittedAttachments,
 			...(omittedNames.length ? { files: omittedNames } : {}),
 		},
-		posts: thread.posts.map(projectPost),
+		posts: groupPackedPosts(thread.posts),
 	};
 }
 
-function projectPost(post: PackedPost): AgentPost {
+function groupPackedPosts(posts: readonly PackedPost[]): AgentMessageGroup[] {
+	return groupPosts(
+		posts.map((post) => ({
+			id: post.id,
+			author: post.authorUsername,
+			displayName: post.authorDisplayName,
+			createAt: post.createAt,
+			updateAt: post.updateAt,
+			deleteAt: post.deleteAt,
+			message: post.message,
+			attachments: post.attachments,
+		})),
+	);
+}
+
+function groupEvidencePosts(
+	posts: readonly EvidencePost[],
+): AgentMessageGroup[] {
+	return groupPosts(
+		posts.map((post) => ({
+			id: post.id,
+			author: post.authorUsername,
+			displayName: post.authorDisplayName,
+			createAt: post.createAt,
+			updateAt: post.updateAt,
+			deleteAt: post.deleteAt,
+			message: post.message,
+			attachments: post.attachments,
+		})),
+	);
+}
+
+function groupPosts(
+	posts: readonly {
+		id: string;
+		author: string;
+		displayName: string;
+		createAt: number;
+		updateAt: number;
+		deleteAt: number;
+		message: string;
+		attachments: PackedPost["attachments"];
+	}[],
+): AgentMessageGroup[] {
+	const groups: AgentMessageGroup[] = [];
+	for (const post of posts) {
+		const message = projectMessage(post);
+		const previous = groups[groups.length - 1];
+		if (previous && previous.author === post.author) {
+			previous.messages.push(message);
+			previous.to = iso(post.createAt);
+			continue;
+		}
+		groups.push({
+			author: post.author,
+			...(post.displayName && post.displayName !== post.author
+				? { displayName: post.displayName }
+				: {}),
+			from: iso(post.createAt),
+			messages: [message],
+		});
+	}
+	return groups;
+}
+
+function projectMessage(post: {
+	id: string;
+	createAt: number;
+	updateAt: number;
+	deleteAt: number;
+	message: string;
+	attachments: PackedPost["attachments"];
+}): AgentMessage {
 	const files = post.attachments.map(({ name, mimeType, size }) => ({
 		name,
 		mimeType,
@@ -214,12 +298,8 @@ function projectPost(post: PackedPost): AgentPost {
 	}));
 	return {
 		id: post.id,
-		at: iso(post.createAt),
-		author: post.authorUsername,
 		text: post.message,
-		...(post.authorDisplayName && post.authorDisplayName !== post.authorUsername
-			? { displayName: post.authorDisplayName }
-			: {}),
+		at: iso(post.createAt),
 		...(post.updateAt > post.createAt ? { editedAt: iso(post.updateAt) } : {}),
 		...(post.deleteAt ? { deleted: true as const } : {}),
 		...(files.length ? { files } : {}),

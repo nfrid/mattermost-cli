@@ -11,6 +11,7 @@ describe("thread packing", () => {
 			.reduce((sum, post) => sum + renderedPostUnits(post), 0);
 		const packed = packThread("p0", posts, {
 			matchingPostIds: ["p2"],
+			neighborhoodRadius: 1,
 			limit: units,
 		});
 		expect(packed.selectionStrategy).toEqual([

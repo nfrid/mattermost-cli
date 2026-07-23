@@ -342,6 +342,7 @@ describe("CLI output", () => {
 					last_name: "Example",
 					nickname: "",
 					delete_at: 0,
+					is_bot: false,
 				})) as unknown as typeof fetch,
 		});
 

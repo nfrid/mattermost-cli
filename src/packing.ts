@@ -46,6 +46,8 @@ export interface PackedThread {
 export interface PackThreadOptions {
 	matchingPostIds?: readonly string[];
 	aroundPostId?: string;
+	/** Inclusive neighbor distance around each match / aroundPostId. Default 8. */
+	neighborhoodRadius?: number;
 	limit: number;
 	full?: boolean;
 }
@@ -88,27 +90,31 @@ export function packThread(
 			...(options.matchingPostIds ?? []),
 			...(options.aroundPostId ? [options.aroundPostId] : []),
 		];
-		const neighborhood: string[] = [];
-		for (const target of neighborhoodTargets) {
-			const index = chronological.findIndex(({ id }) => id === target);
-			if (index < 0) continue;
-			for (
-				let cursor = Math.max(0, index - 1);
-				cursor <= index + 1;
-				cursor += 1
-			) {
-				const id = chronological[cursor]?.id;
-				if (id) neighborhood.push(id);
+		const radius = Math.max(1, options.neighborhoodRadius ?? 8);
+		for (let distance = 1; distance <= radius; distance += 1) {
+			const ring: string[] = [];
+			for (const target of neighborhoodTargets) {
+				const index = chronological.findIndex(({ id }) => id === target);
+				if (index < 0) continue;
+				const before = chronological[index - distance]?.id;
+				const after = chronological[index + distance]?.id;
+				if (before) ring.push(before);
+				if (after) ring.push(after);
+			}
+			add(
+				ring,
+				distance === 1 ? "match_neighborhoods" : "match_neighborhoods_extended",
+			);
+			if (distance === 1) {
+				add(
+					chronological
+						.slice()
+						.reverse()
+						.map(({ id }) => id),
+					"latest_posts",
+				);
 			}
 		}
-		add(neighborhood, "match_neighborhoods");
-		add(
-			chronological
-				.slice()
-				.reverse()
-				.map(({ id }) => id),
-			"latest_posts",
-		);
 	}
 
 	const limit = options.full

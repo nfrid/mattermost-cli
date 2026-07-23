@@ -1,3 +1,4 @@
+import chalk from "chalk";
 import { Command, CommanderError, Option } from "commander";
 import packageJson from "../package.json" with { type: "json" };
 import { projectAgentResult } from "./agent.ts";
@@ -70,6 +71,7 @@ interface CommandOptions {
 	widen?: boolean;
 	full?: boolean;
 	around?: string;
+	includeAutomation?: boolean;
 }
 
 export async function runCli(
@@ -78,6 +80,8 @@ export async function runCli(
 ): Promise<number> {
 	const stdout = context.stdout ?? process.stdout;
 	const stderr = context.stderr ?? process.stderr;
+	if (args.includes("--no-color")) chalk.level = 0;
+	else if (args.includes("--color")) chalk.level = 1;
 	let activeCommand = inferCommand(args);
 	let pretty = args.includes("--pretty");
 	let agent = args.includes("--agent");
@@ -229,6 +233,10 @@ function createProgram(
 		)
 		.option("--more", "use expanded budgets and human rendering")
 		.option("--no-widen", "disable one-time routing fallback")
+		.option(
+			"--include-automation",
+			"include unreplied bot/automation root posts in results",
+		)
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (subject?: string) => {
 			await run("context", program.opts<GlobalOptions>(), {
@@ -267,6 +275,10 @@ function createProgram(
 		.option("--has-file", "require an attachment in the thread")
 		.option("--file <pattern>", "require an attachment filename substring")
 		.option("--no-widen", "disable one-time routing fallback")
+		.option(
+			"--include-automation",
+			"include unreplied bot/automation root posts in results",
+		)
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (subject?: string) => {
 			await run("search", program.opts<GlobalOptions>(), {
@@ -367,6 +379,7 @@ async function executeCommand(
 						more: commandOptions.more,
 						remoteSearch: commandOptions.remoteSearch,
 						noWiden: commandOptions.widen === false,
+						includeAutomation: commandOptions.includeAutomation,
 					},
 					dependencies,
 				);
@@ -384,6 +397,7 @@ async function executeCommand(
 					hasFile: commandOptions.hasFile,
 					file: commandOptions.file,
 					noWiden: commandOptions.widen === false,
+					includeAutomation: commandOptions.includeAutomation,
 				});
 			case "thread":
 				if (!commandOptions.target)
