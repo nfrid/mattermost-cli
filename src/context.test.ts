@@ -65,6 +65,50 @@ describe("context pipeline", () => {
 		store.close();
 	});
 
+	test("preserves typed agent probe origins through candidate matches", async () => {
+		const store = await seededStore({ fresh: true });
+		const result = await searchMattermost(
+			{
+				probes: [
+					{ kind: "ticket_title", value: "payment timeout" },
+					{ kind: "ticket_description", value: "follow-up evidence" },
+				],
+				channels: ["payments"],
+			},
+			{ config: configFixture(), store, now: () => 100 },
+		);
+
+		expect(result.subject).toMatchObject({
+			kind: "text",
+			text: "payment timeout",
+		});
+		expect(result.probes).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "ticket_title",
+					value: "payment timeout",
+				}),
+				expect.objectContaining({
+					kind: "ticket_description",
+					value: "follow-up evidence",
+				}),
+			]),
+		);
+		expect(result.candidates[0]?.matches).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					probe: "payment timeout",
+					probeKind: "ticket_title",
+				}),
+				expect.objectContaining({
+					probe: "follow-up evidence",
+					probeKind: "ticket_description",
+				}),
+			]),
+		);
+		store.close();
+	});
+
 	test("reports unmapped hints and probes that are ranking signals without text matches", async () => {
 		const store = await seededStore({ fresh: true });
 		store.linkTicketThread("PROJ-2113", ROOT, ROOT, "explicit");
@@ -111,6 +155,261 @@ describe("context pipeline", () => {
 			expect.arrayContaining([
 				expect.objectContaining({ kind: "unmatched_retrieval_probe" }),
 			]),
+		);
+		store.close();
+	});
+
+	test("applies author, date, and attachment filters and reports them", async () => {
+		const store = await seededStore({ fresh: true });
+		const filteredRoot = "eeeeeeeeeeeeeeeeeeeeeeeeee";
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			users: [userFixture({ id: "user-2", username: "bob" })],
+			files: [
+				{
+					id: "filter-file",
+					user_id: "user-2",
+					post_id: filteredRoot,
+					create_at: 40,
+					update_at: 40,
+					delete_at: 0,
+					name: "incident-trace.json",
+					extension: "json",
+					size: 42,
+					mime_type: "application/json",
+				},
+			],
+			posts: [
+				postFixture({
+					id: filteredRoot,
+					user_id: "user-2",
+					channel_id: "channel-payments",
+					message: "payment timeout — приложил логи",
+					file_ids: ["filter-file"],
+					create_at: 40,
+					update_at: 40,
+				}),
+			],
+		});
+		const input = {
+			subject: "payment timeout",
+			channels: ["payments"],
+			from: "@bob",
+			after: "1970-01-01T00:00:00.030Z",
+			before: "1970-01-01T00:00:00.050Z",
+			hasFile: true,
+			file: "TRACE",
+		} as const;
+		const search = await searchMattermost(input, {
+			config: configFixture(),
+			store,
+			now: () => 100,
+		});
+		expect(search.candidates.map(({ threadId }) => threadId)).toEqual([
+			filteredRoot,
+		]);
+		expect(search.filters).toEqual({
+			from: "bob",
+			after: "1970-01-01T00:00:00.030Z",
+			before: "1970-01-01T00:00:00.050Z",
+			hasFile: true,
+			file: "TRACE",
+		});
+		const structured = await getMattermostContext(
+			{
+				subject: "incident-trace.json",
+				channels: ["payments"],
+				from: "bob",
+				file: "trace.json",
+				local: true,
+			},
+			{ config: configFixture(), store, now: () => 100 },
+		);
+		expect(structured.threads[0]).toMatchObject({
+			threadId: filteredRoot,
+			matchingPostIds: [filteredRoot],
+			reasons: expect.arrayContaining(["structured_entity_match"]),
+		});
+		const empty = await searchMattermost(
+			{ ...input, file: "missing.csv" },
+			{ config: configFixture(), store, now: () => 100 },
+		);
+		expect(empty.candidates).toEqual([]);
+		await expect(
+			searchMattermost(
+				{ subject: "payment", after: "not-a-date" },
+				{ config: configFixture(), store },
+			),
+		).rejects.toMatchObject({ kind: "invalid_search_filter" });
+		for (const after of ["2026-01-01T12:00:00", "2026-01-01 12:00:00"]) {
+			await expect(
+				searchMattermost(
+					{ subject: "payment", after },
+					{ config: configFixture(), store },
+				),
+			).rejects.toMatchObject({ kind: "invalid_search_filter" });
+		}
+		store.close();
+	});
+
+	test("rejects remote search in local-only API mode", async () => {
+		const store = await seededStore({ fresh: true });
+		await expect(
+			getMattermostContext(
+				{ subject: "payment", local: true, remoteSearch: true },
+				{ config: configFixture(), store },
+			),
+		).rejects.toMatchObject({ kind: "invalid_remote_search_mode" });
+		store.close();
+	});
+
+	test("uses explicit bounded remote search without escaping routed conversations", async () => {
+		const store = await seededStore({ fresh: true });
+		const client = new SearchContextClient();
+		const remoteRoot = "rrrrrrrrrrrrrrrrrrrrrrrrrr";
+		const outsideRoot = "ssssssssssssssssssssssssss";
+		const allowedPost = postFixture({
+			id: remoteRoot,
+			channel_id: "channel-payments",
+			message: "orphaned quasar zxqv",
+			create_at: 50,
+		});
+		const outsidePost = postFixture({
+			id: outsideRoot,
+			channel_id: "channel-platform",
+			message: "orphaned quasar zxqv",
+			create_at: 60,
+		});
+		client.searchResult = list(outsidePost, allowedPost);
+		client.threads.set(remoteRoot, list(allowedPost));
+		const result = await getMattermostContext(
+			{
+				subject: "orphaned quasar zxqv",
+				queries: ["extra one", "extra two", "extra three", "extra four"],
+				channels: ["payments"],
+				remoteSearch: true,
+			},
+			{ config: configFixture(), store, client, now: () => 100 },
+		);
+		expect(result.remoteSearch).toEqual({
+			requested: true,
+			performed: true,
+			reason: "explicit",
+			queries: [
+				"orphaned quasar zxqv",
+				"extra one",
+				"extra two",
+				"extra three",
+			].map((probe) => ({
+				probe,
+				returnedPosts: 2,
+				acceptedPosts: 1,
+			})),
+			candidateThreads: 1,
+			failures: 0,
+		});
+		expect(result.threads[0]).toMatchObject({
+			threadId: remoteRoot,
+			reasons: expect.arrayContaining(["remote_search"]),
+		});
+		expect(client.threadRequests).toEqual([remoteRoot]);
+		expect(client.searchRequests).toHaveLength(4);
+		expect(client.searchRequests[0]).toEqual({
+			teamId: "team-id",
+			terms: "orphaned quasar zxqv",
+			isOrSearch: false,
+			page: 0,
+			perPage: 20,
+		});
+		expect(client.searchRequests.map(({ terms }) => terms)).not.toContain(
+			"extra four",
+		);
+		expect(store.getPost(remoteRoot)).not.toBeNull();
+		expect(store.getPost(outsideRoot)).toBeNull();
+		store.close();
+	});
+
+	test("keeps later independent remote probes eligible for the global cap", async () => {
+		const store = await seededStore({ fresh: true });
+		const client = new SearchContextClient();
+		const alphaPosts = Array.from({ length: 12 }, (_, index) =>
+			postFixture({
+				id: `${String(index).padStart(26, "a")}`,
+				channel_id: "channel-payments",
+				message: "alpha remote candidate",
+				create_at: 100 + index,
+			}),
+		);
+		const omega = postFixture({
+			id: "zzzzzzzzzzzzzzzzzzzzzzzzzz",
+			channel_id: "channel-payments",
+			message: "omega remote candidate",
+			create_at: 1_000,
+		});
+		client.searchResults.set("alpha", list(...alphaPosts));
+		client.searchResults.set("omega", list(omega));
+		for (const post of [...alphaPosts, omega]) {
+			client.threads.set(post.id, list(post));
+		}
+		const config = configFixture({
+			budgets: {
+				defaultMaxCharacters: 10_000,
+				defaultPerThreadCharacters: 500,
+				defaultMaxThreads: 20,
+				moreMaxCharacters: 20_000,
+				morePerThreadCharacters: 1_000,
+				moreMaxThreads: 20,
+			},
+		});
+		const result = await getMattermostContext(
+			{
+				subject: "alpha",
+				queries: ["omega"],
+				channels: ["payments"],
+				remoteSearch: true,
+			},
+			{ config, store, client, now: () => 2_000 },
+		);
+		expect(result.remoteSearch.candidateThreads).toBe(12);
+		expect(result.threads.some(({ threadId }) => threadId === omega.id)).toBe(
+			true,
+		);
+		store.close();
+	});
+
+	test("keeps local evidence when automatic remote fallback fails", async () => {
+		const store = await seededStore({ fresh: true });
+		const client = new SearchContextClient();
+		client.failSearch = true;
+		const localThread = list(
+			postFixture({
+				id: ROOT,
+				channel_id: "channel-payments",
+				message: "payment timeout shared evidence",
+				create_at: 10,
+			}),
+			postFixture({
+				id: REPLY,
+				root_id: ROOT,
+				channel_id: "channel-payments",
+				message: "payment timeout reply",
+				create_at: 20,
+			}),
+		);
+		client.threads.set(ROOT, localThread);
+		const result = await getMattermostContext(
+			{ subject: "payment timeout", channels: ["payments"] },
+			{ config: configFixture(), store, client, now: () => 100 },
+		);
+		expect(result.threads[0]?.threadId).toBe(ROOT);
+		expect(result.remoteSearch).toMatchObject({
+			requested: false,
+			performed: true,
+			reason: "incomplete_local_coverage",
+			failures: 1,
+		});
+		expect(result.warnings).toContainEqual(
+			expect.objectContaining({ kind: "remote_search_failed" }),
 		);
 		store.close();
 	});
@@ -186,6 +485,46 @@ describe("context pipeline", () => {
 		expect(result.threads[0]?.posts[0]?.message).toBe(
 			"ПЛАТЁЖ снова не прошёл из-за ошибки провайдера",
 		);
+		store.close();
+	});
+
+	test("uses configured mixed-language synonyms and exposes their evidence", async () => {
+		const store = await seededStore({ fresh: true });
+		const synonymRoot = "ffffffffffffffffffffffffff";
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			posts: [
+				postFixture({
+					id: synonymRoot,
+					channel_id: "channel-payments",
+					message: "Data replication blocked by a stale database lock",
+					create_at: 45,
+				}),
+			],
+		});
+		const result = await searchMattermost(
+			{ subject: "репликация", channels: ["payments"] },
+			{
+				config: configFixture({
+					synonyms: { репликация: ["data replication"] },
+				}),
+				store,
+				now: () => 100,
+			},
+		);
+		expect(result.probes[0]?.expansions).toContainEqual({
+			sourceTerm: "репликация",
+			value: "data replication",
+			kind: "synonym",
+			match: "exact",
+		});
+		expect(result.candidates[0]).toMatchObject({
+			threadId: synonymRoot,
+			reasons: expect.arrayContaining([
+				"all_expanded_terms_in_thread",
+				"query_expansion",
+			]),
+		});
 		store.close();
 	});
 
@@ -620,6 +959,33 @@ class FakeContextClient implements ContextClient {
 	async getThread(postId: string): Promise<MattermostPostList> {
 		this.threadRequests.push(postId);
 		return this.threads.get(postId) ?? this.thread;
+	}
+}
+
+class SearchContextClient extends FakeContextClient {
+	readonly searchRequests: Array<{
+		teamId: string;
+		terms: string;
+		isOrSearch?: boolean;
+		page?: number;
+		perPage?: number;
+	}> = [];
+	searchResult: MattermostPostList = list();
+	readonly searchResults = new Map<string, MattermostPostList>();
+	failSearch = false;
+
+	async searchTeamPosts(
+		teamId: string,
+		options: {
+			terms: string;
+			isOrSearch?: boolean;
+			page?: number;
+			perPage?: number;
+		},
+	): Promise<MattermostPostList> {
+		this.searchRequests.push({ teamId, ...options });
+		if (this.failSearch) throw new Error("Synthetic remote search failure");
+		return this.searchResults.get(options.terms) ?? this.searchResult;
 	}
 }
 

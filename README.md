@@ -4,7 +4,7 @@ Standalone, read-only Mattermost retrieval and indexing. V1 provides authenticat
 
 ## Security model
 
-The HTTP client exposes named `GET` operations only. It cannot post, edit, react, delete, or download attachment contents, and it does not export a generic HTTP helper. Explicitly configured channels and DMs are enforced again at sync, local-search, routing, and thread-hydration boundaries.
+The HTTP client exposes named read operations only: bounded `GET` requests and one bounded Mattermost post-search `POST`. It cannot post messages, edit, react, delete, or download attachment contents, and it does not export a generic HTTP helper. Explicitly configured channels and DMs are enforced again at sync, local-search, routing, and thread-hydration boundaries.
 
 Mattermost PATs inherit the permissions of their user; they do not provide fine-grained scopes. Create a PAT under the Mattermost profile security settings only if PATs are enabled, use the least-privileged suitable account, and configure only conversations this tool needs. Never put a PAT in command arguments, committed files, logs, or issue text.
 
@@ -39,6 +39,9 @@ Edit `.mattermost/config.json`. Channels and direct messages are separate allowl
   "url": "https://mattermost.example.test",
   "teamId": "team-id",
   "historyDays": 365,
+  "synonyms": {
+    "репликация": ["replication", "data replication"]
+  },
   "channels": {
     "engineering": {
       "id": "channel-id",
@@ -108,15 +111,23 @@ bun run src/bin.ts thread <post-id-or-permalink> --more
 bun run src/bin.ts thread <post-id-or-permalink> --full
 ```
 
-Repeated `--query`, `--repository`, `--scope`, and `--channel` options are supported. Queries are independent ranking/retrieval signals, not mandatory filters: a ticket relationship or other stronger evidence can still select a candidate with no textual query match, and the result emits an `unmatched_retrieval_probe` warning when that happens. Unknown repository or scope metadata hints emit `unmapped_routing_hint` rather than being ignored silently.
+Repeated `--query`, `--repository`, `--scope`, and `--channel` options are supported. Queries are independent ranking/retrieval signals, not mandatory filters: a ticket relationship or other stronger evidence can still select a candidate with no textual query match, and the result emits an `unmatched_retrieval_probe` warning when that happens. Unknown repository or scope metadata hints emit `unmapped_routing_hint` rather than being ignored silently. Package callers can additionally pass typed `probes` for ticket titles/descriptions, repositories, file paths, symbols, errors, services, and participants; probe kinds are retained in match, structured-match, fusion, and remote-search diagnostics.
 
 English and Russian significant terms and stop words are recognized. Russian search is case-insensitive and treats `ё`/`е` equivalently while preserving original messages in output.
+
+The local index also extracts conservative engineering entities such as tickets, repository references, pull requests, commits, URLs and permalinks, file paths, scoped packages, code symbols, error codes, usernames, services, and attachment filenames. Exact structured matches are reported separately from lexical evidence and can admit a candidate without weakening conversation allowlists.
+
+Russian retrieval uses bounded inflection-prefix variants, a small built-in set of common Russian/English engineering aliases, and mixed-script transliteration for technical tokens. Project-specific synonym groups can be configured with the top-level `synonyms` object; groups are symmetric, limited to 32 keys and eight aliases per key, and reported in each probe’s `expansions` diagnostics. Exact phrases and exact all-term matches retain stronger ranking evidence than expanded matches.
+
+Both `context` and `search` support hard thread filters: `--from <username>`, `--after <date>`, `--before <date>`, `--has-file`, and case-insensitive attachment filename substring matching with `--file <pattern>`. Dates are normalized to ISO timestamps in JSON; date-only values use UTC, date-times require `Z` or an explicit UTC offset, `after` is inclusive, and `before` is exclusive. `--file` implies `--has-file`.
 
 Explicit `--channel` aliases are a hard V1 allowlist: sync, local search, widening, direct resolution, and final hydration cannot leave them. Without explicit channels, routing may widen once unless `--no-widen` is set.
 
 - Normal `context` reconciles stale routed conversations and re-fetches selected threads.
+- When routed local coverage remains stale or cutoff-bounded, `context` may use Mattermost’s bounded native post search after local retrieval; `--remote-search` requests it explicitly.
+- Remote search uses only the named read-only team post-search operation—no generic HTTP helper is exposed. It runs at most four independent probes, accepts at most 20 posts per probe and 12 thread roots, rejects posts outside the currently routed configured conversations before hydration, and reports failures without discarding usable local evidence.
 - `--fresh` forces routed reconciliation.
-- `--local` performs zero network calls and reports stale/cutoff-bounded evidence.
+- `--local` performs zero network calls and conflicts with `--remote-search`.
 - `search` is always local discovery, includes a permalink per candidate, and reports search coverage; use `context` before relying on a result.
 - Default human `context` output shows a compact root/match/latest view while JSON retains the complete bounded packet.
 - `--more` increases bounded packet limits and expands human rendering.
@@ -140,9 +151,9 @@ Add `--json` to emit exactly one minified JSON document on stdout. Use `--pretty
 }
 ```
 
-Failures replace `data` with a stable error containing `source`, `kind`, and `message`. Retrieval contracts include freshness mode/timestamps, `searchCoverageComplete`, `selectedThreadsComplete` for context packets, searched conversations and routing evidence (including unmatched hints), explicit-channel/widening state, deterministic ranking reasons/order, candidate permalinks, budgets, and omission counts. The legacy `complete` field remains an alias for search coverage in V1.
+Failures replace `data` with a stable error containing `source`, `kind`, and `message`. Retrieval contracts include freshness mode/timestamps, `searchCoverageComplete`, `selectedThreadsComplete` for context packets, searched conversations and routing evidence (including unmatched hints), explicit-channel/widening state, deterministic ranking reasons/order, candidate permalinks, budgets, and omission counts. Context packets also expose whether bounded remote search was requested or performed, its trigger, per-probe accepted counts, failures, and `remote_search` selection reasons. The legacy `complete` field remains an alias for search coverage in V1.
 
-Use `--agent` for a minified agent-oriented projection of the same validated result. It flattens successful command data into the top-level envelope and, for `context`, `search`, and `thread`, replaces retrieval internals with a normalized subject, completeness status, semantic selection reasons, ISO timestamps, compact posts/files, permalinks, omission counts, and freshness anomalies. Warnings appear only once at the top level. `--agent` conflicts with `--json` and `--pretty`.
+Use `--agent` for a minified agent-oriented projection of the same validated result. It flattens successful command data into the top-level envelope and, for `context`, `search`, and `thread`, replaces retrieval internals with a normalized subject, completeness status, semantic selection reasons, ISO timestamps, compact posts/files, permalinks, and omission counts. Detailed per-conversation freshness evidence remains available in `--json`; `--agent` retains only aggregate completeness status and relevant warnings. Warnings appear only once at the top level. `--agent` conflicts with `--json` and `--pretty`.
 
 Zod schemas and inferred TypeScript types for every command are exported from the package, including `commandResultV1Schema`, command-specific `*ResultV1Schema` values, and `parseCommandResultV1`. Complete synthetic V1 golden documents live in `src/contracts.v1.fixture.json`.
 
@@ -163,6 +174,17 @@ import {
 const data = await getMattermostContext({
   subject: "PROJ-123",
   repositories: ["example-service"],
+  probes: [
+    { kind: "ticket_title", value: "Payment reconciliation timeout" },
+    { kind: "file_path", value: "src/payments/reconcile.ts" },
+    { kind: "symbol", value: "reconcilePayment" },
+    { kind: "error_message", value: "upstream request timed out" },
+  ],
+  from: "alice",
+  after: "2026-01-01",
+  hasFile: true,
+  file: ".log",
+  remoteSearch: true,
 });
 
 contextResultV1Schema.parse({

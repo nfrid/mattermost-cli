@@ -14,6 +14,7 @@ import {
 	mattermostFileInfoSchema,
 	mattermostPostListSchema,
 	mattermostPostSchema,
+	mattermostPostSearchResultSchema,
 	mattermostTeamSchema,
 	mattermostUserSchema,
 } from "./schemas.ts";
@@ -38,7 +39,15 @@ const channelPostOptionsSchema = z
 		{ message: "since, before, and after cannot be combined" },
 	);
 
+const teamPostSearchOptionsSchema = z.object({
+	terms: z.string().trim().min(2).max(256),
+	isOrSearch: z.boolean().default(false),
+	page: z.number().int().min(0).max(10).default(0),
+	perPage: z.number().int().min(1).max(100).default(20),
+});
+
 export type ChannelPostOptions = z.input<typeof channelPostOptionsSchema>;
+export type TeamPostSearchOptions = z.input<typeof teamPostSearchOptionsSchema>;
 
 export class MattermostApiError extends AppError {
 	constructor(
@@ -130,6 +139,23 @@ export class MattermostClient {
 		);
 	}
 
+	async searchTeamPosts(
+		teamId: string,
+		options: TeamPostSearchOptions,
+	): Promise<MattermostPostList> {
+		const parsed = teamPostSearchOptionsSchema.parse(options);
+		return this.postJson(
+			`/teams/${encodeURIComponent(teamId)}/posts/search`,
+			mattermostPostSearchResultSchema,
+			{
+				terms: parsed.terms,
+				is_or_search: parsed.isOrSearch,
+				page: parsed.page,
+				per_page: parsed.perPage,
+			},
+		);
+	}
+
 	async getPost(postId: string): Promise<MattermostPost> {
 		return this.getJson(
 			`/posts/${encodeURIComponent(postId)}`,
@@ -151,10 +177,28 @@ export class MattermostClient {
 		);
 	}
 
-	private async getJson<T>(
+	private getJson<T>(
 		path: string,
 		schema: z.ZodType<T>,
 		searchParams: Record<string, string> = {},
+	): Promise<T> {
+		return this.#requestJson("GET", path, schema, searchParams);
+	}
+
+	private postJson<T>(
+		path: string,
+		schema: z.ZodType<T>,
+		body: unknown,
+	): Promise<T> {
+		return this.#requestJson("POST", path, schema, {}, body);
+	}
+
+	async #requestJson<T>(
+		method: "GET" | "POST",
+		path: string,
+		schema: z.ZodType<T>,
+		searchParams: Record<string, string> = {},
+		body?: unknown,
 	): Promise<T> {
 		const url = new URL(`${this.baseUrl}${path}`);
 
@@ -166,11 +210,13 @@ export class MattermostClient {
 
 		try {
 			response = await this.fetchImplementation(url, {
-				method: "GET",
+				method,
 				headers: {
 					Accept: "application/json",
 					Authorization: `Bearer ${this.token}`,
+					...(body === undefined ? {} : { "Content-Type": "application/json" }),
 				},
+				...(body === undefined ? {} : { body: JSON.stringify(body) }),
 				signal: AbortSignal.timeout(this.timeoutMs),
 			});
 		} catch (error) {

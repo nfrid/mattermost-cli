@@ -53,6 +53,12 @@ export const mattermostPostListSchema = z.object({
 	prev_post_id: z.string().optional(),
 });
 
+export const mattermostPostSearchResultSchema = mattermostPostListSchema.extend(
+	{
+		order: z.array(idSchema).max(100),
+	},
+);
+
 export const mattermostFileInfoSchema = z.object({
 	id: idSchema,
 	user_id: idSchema,

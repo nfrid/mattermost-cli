@@ -58,9 +58,15 @@ interface CommandOptions {
 	repository?: string[];
 	scope?: string[];
 	channel?: string[];
+	from?: string;
+	after?: string;
+	before?: string;
+	hasFile?: boolean;
+	file?: string;
 	fresh?: boolean;
 	local?: boolean;
 	more?: boolean;
+	remoteSearch?: boolean;
 	widen?: boolean;
 	full?: boolean;
 	around?: string;
@@ -208,8 +214,19 @@ function createProgram(
 			collect,
 			[],
 		)
+		.option("--from <username>", "require the username in the thread")
+		.option("--after <date>", "require a post at or after this date")
+		.option("--before <date>", "require a post before this date")
+		.option("--has-file", "require an attachment in the thread")
+		.option("--file <pattern>", "require an attachment filename substring")
 		.option("--fresh", "force reconciliation of routed conversations")
 		.option("--local", "perform no network calls")
+		.addOption(
+			new Option(
+				"--remote-search",
+				"request bounded Mattermost server-side search fallback",
+			).conflicts("local"),
+		)
 		.option("--more", "use expanded budgets and human rendering")
 		.option("--no-widen", "disable one-time routing fallback")
 		.addHelpText("after", GLOBAL_HELP)
@@ -244,6 +261,11 @@ function createProgram(
 			collect,
 			[],
 		)
+		.option("--from <username>", "require the username in the thread")
+		.option("--after <date>", "require a post at or after this date")
+		.option("--before <date>", "require a post before this date")
+		.option("--has-file", "require an attachment in the thread")
+		.option("--file <pattern>", "require an attachment filename substring")
 		.option("--no-widen", "disable one-time routing fallback")
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (subject?: string) => {
@@ -335,9 +357,15 @@ async function executeCommand(
 						repositories: commandOptions.repository,
 						scopes: commandOptions.scope,
 						channels: commandOptions.channel,
+						from: commandOptions.from,
+						after: commandOptions.after,
+						before: commandOptions.before,
+						hasFile: commandOptions.hasFile,
+						file: commandOptions.file,
 						fresh: commandOptions.fresh,
 						local: commandOptions.local,
 						more: commandOptions.more,
+						remoteSearch: commandOptions.remoteSearch,
 						noWiden: commandOptions.widen === false,
 					},
 					dependencies,
@@ -350,6 +378,11 @@ async function executeCommand(
 					repositories: commandOptions.repository,
 					scopes: commandOptions.scope,
 					channels: commandOptions.channel,
+					from: commandOptions.from,
+					after: commandOptions.after,
+					before: commandOptions.before,
+					hasFile: commandOptions.hasFile,
+					file: commandOptions.file,
 					noWiden: commandOptions.widen === false,
 				});
 			case "thread":

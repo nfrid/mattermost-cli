@@ -17,6 +17,7 @@ export function configFixture(
 		reconciliationOverlapMs: 30_000,
 		historyDays: 365,
 		pageSize: 100,
+		synonyms: {},
 		budgets: {
 			defaultMaxCharacters: 1_000,
 			defaultPerThreadCharacters: 500,

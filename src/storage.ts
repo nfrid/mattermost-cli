@@ -2,6 +2,11 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync } from "node:fs";
 import { chmod, mkdir } from "node:fs/promises";
 import { basename, dirname } from "node:path";
+import {
+	type EngineeringEntity,
+	type EngineeringEntityKind,
+	extractEngineeringEntities,
+} from "./entities.ts";
 import { DatabaseError } from "./errors.ts";
 import type {
 	MattermostFileInfo,
@@ -75,6 +80,46 @@ export interface TicketThreadRelationship {
 	threadId: string;
 	sourcePostId: string;
 	origin: "discovered" | "explicit";
+}
+
+export type LexicalRetrievalSource =
+	| "exact_phrase"
+	| "strict_fts"
+	| "broad_fts"
+	| "term_fts"
+	| "prefix_fts"
+	| "trigram";
+
+export interface LexicalHit {
+	post: IndexedPost;
+	source: LexicalRetrievalSource;
+	sourceQuery: string;
+	rank: number;
+	bm25: number;
+	snippet: string;
+}
+
+export interface LexicalSearchOptions {
+	source?: LexicalRetrievalSource;
+	filters?: ThreadSearchFilters;
+}
+
+export interface StructuredEntityRecord extends EngineeringEntity {
+	postId: string;
+	threadId: string;
+	conversationId: string;
+}
+
+export interface StructuredEntityHit extends StructuredEntityRecord {
+	query: string;
+}
+
+export interface ThreadSearchFilters {
+	username?: string;
+	after?: number;
+	before?: number;
+	hasFile?: boolean;
+	filePattern?: string;
 }
 
 const migrations = [
@@ -153,6 +198,28 @@ CREATE VIRTUAL TABLE posts_fts USING fts5(post_id UNINDEXED, message, tokenize='
 		version: 2,
 		sql: "DELETE FROM posts_fts;",
 		rebuildFts: true,
+	},
+	{
+		version: 3,
+		sql: `
+CREATE TABLE post_entities (
+  post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  value TEXT NOT NULL,
+  normalized_value TEXT NOT NULL,
+  PRIMARY KEY (post_id, kind, normalized_value)
+);
+CREATE INDEX post_entities_lookup ON post_entities(kind, normalized_value, conversation_id);
+CREATE INDEX post_entities_thread ON post_entities(thread_id);
+`,
+		rebuildEntities: true,
+	},
+	{
+		version: 4,
+		sql: "DELETE FROM post_entities;",
+		rebuildEntities: true,
 	},
 ] as const;
 
@@ -283,6 +350,11 @@ ON CONFLICT(id) DO UPDATE SET alias=excluded.alias, kind=excluded.kind,
 	}
 
 	upsertUser(user: MattermostUser): void {
+		const existing = this.database
+			.query<{ username: string; delete_at: number }, [string]>(
+				"SELECT username, delete_at FROM users WHERE id = ?",
+			)
+			.get(user.id);
 		this.database
 			.query(`
 INSERT INTO users (id, username, first_name, last_name, nickname, delete_at)
@@ -297,6 +369,18 @@ ON CONFLICT(id) DO UPDATE SET username=excluded.username, first_name=excluded.fi
 				$nickname: user.nickname,
 				$deleteAt: user.delete_at,
 			});
+		if (
+			existing &&
+			(existing.username !== user.username ||
+				existing.delete_at !== user.delete_at)
+		) {
+			const postIds = this.database
+				.query<{ id: string }, [string]>(
+					"SELECT id FROM posts WHERE user_id = ? ORDER BY id",
+				)
+				.all(user.id);
+			for (const { id } of postIds) this.reindexStoredPostEntities(id);
+		}
 	}
 
 	upsertPost(post: MattermostPost): void {
@@ -340,6 +424,9 @@ ON CONFLICT(id) DO UPDATE SET root_id=excluded.root_id, thread_id=excluded.threa
 			});
 		this.database.query("DELETE FROM posts_fts WHERE post_id = ?").run(post.id);
 		this.database
+			.query("DELETE FROM post_entities WHERE post_id = ?")
+			.run(post.id);
+		this.database
 			.query("DELETE FROM post_files WHERE post_id = ?")
 			.run(post.id);
 		if (!post.delete_at && post.message) {
@@ -367,6 +454,7 @@ ON CONFLICT(id) DO UPDATE SET root_id=excluded.root_id, thread_id=excluded.threa
 					)
 					.run(key, threadId, post.id);
 			}
+			this.indexPostEntities(post, threadId);
 		}
 	}
 
@@ -413,6 +501,7 @@ ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id, post_id=excluded.post_id
 				$size: file.size,
 				$mimeType: file.mime_type,
 			});
+		this.reindexStoredPostEntities(file.post_id);
 	}
 
 	getCheckpoint(conversationId: string): SyncCheckpoint | null {
@@ -587,21 +676,313 @@ WHERE t.ticket_key = ? ORDER BY p.conversation_id`)
 			.map(({ conversation_id }) => conversation_id);
 	}
 
+	threadMatchesFilters(
+		threadId: string,
+		filters: ThreadSearchFilters = {},
+	): boolean {
+		const postClauses = ["p.thread_id = $threadId", "p.delete_at = 0"];
+		const parameters: Record<string, string | number> = {
+			$threadId: threadId,
+		};
+		if (filters.username) {
+			postClauses.push("lower(u.username) = lower($username)");
+			parameters.$username = filters.username.replace(/^@/, "");
+		}
+		if (filters.after !== undefined) {
+			postClauses.push("p.create_at >= $after");
+			parameters.$after = filters.after;
+		}
+		if (filters.before !== undefined) {
+			postClauses.push("p.create_at < $before");
+			parameters.$before = filters.before;
+		}
+		if (
+			!this.database
+				.query<{ matched: number }, Record<string, string | number>>(`
+SELECT 1 AS matched FROM posts p LEFT JOIN users u ON u.id = p.user_id
+WHERE ${postClauses.join(" AND ")} LIMIT 1`)
+				.get(parameters)
+		) {
+			return false;
+		}
+		if (!filters.hasFile && !filters.filePattern) return true;
+		const fileClauses = [
+			"p.thread_id = $threadId",
+			"p.delete_at = 0",
+			"f.delete_at = 0",
+		];
+		if (filters.filePattern) {
+			fileClauses.push("instr(lower(f.name), lower($filePattern)) > 0");
+			parameters.$filePattern = filters.filePattern;
+		}
+		return Boolean(
+			this.database
+				.query<{ matched: number }, Record<string, string | number>>(`
+SELECT 1 AS matched FROM posts p
+JOIN post_files pf ON pf.post_id = p.id
+JOIN files f ON f.id = pf.file_id
+WHERE ${fileClauses.join(" AND ")} LIMIT 1`)
+				.get(parameters),
+		);
+	}
+
+	searchEntities(
+		probe: string,
+		conversationIds: readonly string[],
+		limit = 100,
+		filters: ThreadSearchFilters = {},
+		kindHint?: EngineeringEntityKind,
+	): StructuredEntityHit[] {
+		if (!conversationIds.length) return [];
+		const queryEntities = kindHint
+			? [
+					{
+						kind: kindHint,
+						value: probe.trim().replace(/^@/, ""),
+						normalizedValue: normalizeSearchText(
+							probe.trim().replace(/^@/, ""),
+						),
+					},
+				]
+			: extractEngineeringEntities(probe);
+		if (!queryEntities.length) return [];
+		const conversationPlaceholders = conversationIds.map(() => "?").join(", ");
+		const threadFilter = buildThreadFilterSql("pe", filters);
+		const hits = new Map<string, StructuredEntityHit>();
+		for (const entity of queryEntities) {
+			const kinds: EngineeringEntityKind[] =
+				entity.kind === "file_path"
+					? ["file_path", "attachment_filename"]
+					: [entity.kind];
+			const kindPlaceholders = kinds.map(() => "?").join(", ");
+			const rows = this.database
+				.query<Record<string, unknown>, (string | number)[]>(`
+SELECT pe.* FROM post_entities pe
+WHERE kind IN (${kindPlaceholders}) AND normalized_value = ?
+  AND conversation_id IN (${conversationPlaceholders})${threadFilter.clause}
+ORDER BY thread_id, post_id, kind LIMIT ?`)
+				.all(
+					...kinds,
+					entity.normalizedValue,
+					...conversationIds,
+					...threadFilter.parameters,
+					limit,
+				);
+			for (const row of rows) {
+				const hit: StructuredEntityHit = {
+					postId: String(row.post_id),
+					threadId: String(row.thread_id),
+					conversationId: String(row.conversation_id),
+					kind: String(row.kind) as EngineeringEntityKind,
+					value: String(row.value),
+					normalizedValue: String(row.normalized_value),
+					query: entity.value,
+				};
+				hits.set(`${hit.postId}\0${hit.kind}\0${hit.normalizedValue}`, hit);
+			}
+		}
+		return [...hits.values()].slice(0, limit);
+	}
+
+	listEntities(threadId?: string): StructuredEntityRecord[] {
+		const rows = threadId
+			? this.database
+					.query<Record<string, unknown>, [string]>(
+						"SELECT * FROM post_entities WHERE thread_id = ? ORDER BY post_id, kind, normalized_value",
+					)
+					.all(threadId)
+			: this.database
+					.query<Record<string, unknown>, []>(
+						"SELECT * FROM post_entities ORDER BY thread_id, post_id, kind, normalized_value",
+					)
+					.all();
+		return rows.map((row) => ({
+			postId: String(row.post_id),
+			threadId: String(row.thread_id),
+			conversationId: String(row.conversation_id),
+			kind: String(row.kind) as EngineeringEntityKind,
+			value: String(row.value),
+			normalizedValue: String(row.normalized_value),
+		}));
+	}
+
 	search(
 		probe: string,
 		conversationIds: readonly string[],
 		limit = 50,
-	): IndexedPost[] {
-		const match = buildFtsProbe(probe);
+		options: LexicalSearchOptions = {},
+	): LexicalHit[] {
+		const source = options.source ?? "strict_fts";
+		const normalizedProbe = normalizeSearchText(probe).trim();
+		const match = buildFtsQuery(probe, source);
 		if (!match || conversationIds.length === 0) return [];
 		const placeholders = conversationIds.map(() => "?").join(", ");
-		return this.database
+		const threadFilter = buildThreadFilterSql("p", options.filters ?? {});
+		if (source === "trigram") {
+			return this.searchTrigrams(
+				normalizedProbe,
+				conversationIds,
+				limit,
+				threadFilter,
+			);
+		}
+		const rows = this.database
+			.query<Record<string, unknown>, (string | number)[]>(`
+SELECT p.*, bm25(posts_fts) AS lexical_bm25,
+  snippet(posts_fts, 1, '', '', ' … ', 24) AS lexical_snippet
+FROM posts_fts f JOIN posts p ON p.id = f.post_id
+WHERE posts_fts MATCH ? AND p.conversation_id IN (${placeholders})${threadFilter.clause}
+ORDER BY lexical_bm25, p.create_at DESC, p.id LIMIT ?`)
+			.all(match, ...conversationIds, ...threadFilter.parameters, limit);
+		return rows.map((row, index) => ({
+			post: rowToPost(row),
+			source,
+			sourceQuery: normalizedProbe,
+			rank: index + 1,
+			bm25: Number(row.lexical_bm25),
+			snippet: String(row.lexical_snippet).trim(),
+		}));
+	}
+
+	private searchTrigrams(
+		probe: string,
+		conversationIds: readonly string[],
+		limit: number,
+		threadFilter: { clause: string; parameters: Array<string | number> },
+	): LexicalHit[] {
+		const trigrams = stringTrigrams(probe).slice(0, 12);
+		if (!trigrams.length) return [];
+		const placeholders = conversationIds.map(() => "?").join(", ");
+		const trigramClauses = trigrams.map(() => "instr(f.message, ?) > 0");
+		const rows = this.database
 			.query<Record<string, unknown>, (string | number)[]>(`
 SELECT p.* FROM posts_fts f JOIN posts p ON p.id = f.post_id
-WHERE posts_fts MATCH ? AND p.conversation_id IN (${placeholders})
-ORDER BY bm25(posts_fts), p.create_at DESC LIMIT ?`)
-			.all(match, ...conversationIds, limit)
+WHERE (${trigramClauses.join(" OR ")})
+  AND p.conversation_id IN (${placeholders})${threadFilter.clause}
+ORDER BY p.create_at DESC, p.id LIMIT ?`)
+			.all(
+				...trigrams,
+				...conversationIds,
+				...threadFilter.parameters,
+				Math.max(limit * 5, 200),
+			);
+		return rows
+			.map((row) => {
+				const message = String(row.message);
+				const similarity = bestTokenTrigramSimilarity(message, probe);
+				return { row, message, similarity };
+			})
+			.filter(({ similarity }) => similarity >= 0.5)
+			.sort(
+				(left, right) =>
+					right.similarity - left.similarity ||
+					Number(right.row.create_at) - Number(left.row.create_at) ||
+					String(left.row.id).localeCompare(String(right.row.id)),
+			)
+			.slice(0, limit)
+			.map(({ row, message, similarity }, index) => ({
+				post: rowToPost(row),
+				source: "trigram",
+				sourceQuery: probe,
+				rank: index + 1,
+				bm25: -similarity,
+				snippet: matchCenteredSnippet(message, trigrams[0] ?? probe),
+			}));
+	}
+
+	private reindexStoredPostEntities(postId: string): void {
+		const post = this.getPost(postId);
+		if (!post || post.deleteAt) return;
+		this.database
+			.query("DELETE FROM post_entities WHERE post_id = ?")
+			.run(postId);
+		this.indexPostEntities(
+			{
+				id: post.id,
+				root_id: post.rootId,
+				channel_id: post.conversationId,
+				user_id: post.userId,
+				create_at: post.createAt,
+				update_at: post.updateAt,
+				delete_at: post.deleteAt,
+				message: post.message,
+				type: "",
+				props: post.props,
+				file_ids: [],
+				metadata: post.metadata,
+			},
+			post.threadId,
+		);
+	}
+
+	private indexPostEntities(post: MattermostPost, threadId: string): void {
+		const entities = extractEngineeringEntities(post.message);
+		const author = this.database
+			.query<{ username: string }, [string]>(
+				"SELECT username FROM users WHERE id = ? AND delete_at = 0",
+			)
+			.get(post.user_id);
+		if (author?.username) {
+			entities.push({
+				kind: "username",
+				value: author.username,
+				normalizedValue: normalizeSearchText(author.username),
+			});
+		}
+		const attachmentNames = this.database
+			.query<{ name: string }, [string]>(
+				`SELECT f.name FROM files f JOIN post_files pf ON pf.file_id = f.id
+WHERE pf.post_id = ? AND f.delete_at = 0 ORDER BY f.id`,
+			)
+			.all(post.id)
+			.map(({ name }) => ({
+				kind: "attachment_filename" as const,
+				value: name,
+				normalizedValue: normalizeSearchText(name),
+			}));
+		const insert = this.database.query(`
+INSERT OR IGNORE INTO post_entities
+  (post_id, thread_id, conversation_id, kind, value, normalized_value)
+VALUES (?, ?, ?, ?, ?, ?)`);
+		for (const entity of [...entities, ...attachmentNames]) {
+			insert.run(
+				post.id,
+				threadId,
+				post.channel_id,
+				entity.kind,
+				entity.value,
+				entity.normalizedValue,
+			);
+		}
+	}
+
+	private rebuildEntities(): void {
+		this.database.run("DELETE FROM post_entities");
+		const posts = this.database
+			.query<Record<string, unknown>, []>(
+				"SELECT * FROM posts WHERE delete_at = 0 ORDER BY id",
+			)
+			.all()
 			.map(rowToPost);
+		for (const post of posts) {
+			this.indexPostEntities(
+				{
+					id: post.id,
+					root_id: post.rootId,
+					channel_id: post.conversationId,
+					user_id: post.userId,
+					create_at: post.createAt,
+					update_at: post.updateAt,
+					delete_at: post.deleteAt,
+					message: post.message,
+					type: "",
+					props: post.props,
+					file_ids: [],
+					metadata: post.metadata,
+				},
+				post.threadId,
+			);
+		}
 	}
 
 	private migrate(): void {
@@ -625,6 +1006,9 @@ ORDER BY bm25(posts_fts), p.create_at DESC LIMIT ?`)
 					for (const post of posts) {
 						insert.run(post.id, normalizeSearchText(post.message));
 					}
+				}
+				if ("rebuildEntities" in migration && migration.rebuildEntities) {
+					this.rebuildEntities();
 				}
 				this.database
 					.query(
@@ -657,14 +1041,133 @@ function secureDatabaseFiles(path: string): void {
 	}
 }
 
+function buildThreadFilterSql(
+	threadAlias: string,
+	filters: ThreadSearchFilters,
+): { clause: string; parameters: Array<string | number> } {
+	if (
+		!filters.username &&
+		filters.after === undefined &&
+		filters.before === undefined &&
+		!filters.hasFile &&
+		!filters.filePattern
+	) {
+		return { clause: "", parameters: [] };
+	}
+	const parameters: Array<string | number> = [];
+	const postClauses = [
+		`fp.thread_id = ${threadAlias}.thread_id`,
+		"fp.delete_at = 0",
+	];
+	if (filters.username) {
+		postClauses.push("lower(fu.username) = lower(?)");
+		parameters.push(filters.username.replace(/^@/, ""));
+	}
+	if (filters.after !== undefined) {
+		postClauses.push("fp.create_at >= ?");
+		parameters.push(filters.after);
+	}
+	if (filters.before !== undefined) {
+		postClauses.push("fp.create_at < ?");
+		parameters.push(filters.before);
+	}
+	let clause = ` AND EXISTS (
+SELECT 1 FROM posts fp LEFT JOIN users fu ON fu.id = fp.user_id
+WHERE ${postClauses.join(" AND ")})`;
+	if (filters.hasFile || filters.filePattern) {
+		const fileClauses = [
+			`ffp.thread_id = ${threadAlias}.thread_id`,
+			"ffp.delete_at = 0",
+			"ff.delete_at = 0",
+		];
+		if (filters.filePattern) {
+			fileClauses.push("instr(lower(ff.name), lower(?)) > 0");
+			parameters.push(filters.filePattern);
+		}
+		clause += ` AND EXISTS (
+SELECT 1 FROM posts ffp
+JOIN post_files fpf ON fpf.post_id = ffp.id
+JOIN files ff ON ff.id = fpf.file_id
+WHERE ${fileClauses.join(" AND ")})`;
+	}
+	return { clause, parameters };
+}
+
+function matchCenteredSnippet(
+	message: string,
+	normalizedProbe: string,
+): string {
+	const normalized = normalizeSearchText(message);
+	const index = normalized.indexOf(normalizedProbe);
+	if (index < 0 || message.length <= 240) return message;
+	const start = Math.max(0, index - 100);
+	const end = Math.min(message.length, index + normalizedProbe.length + 100);
+	return `${start ? "… " : ""}${message.slice(start, end)}${end < message.length ? " …" : ""}`;
+}
+
+function stringTrigrams(value: string): string[] {
+	const normalized = normalizeSearchText(value).trim();
+	if (normalized.length < 3) return [];
+	return [
+		...new Set(
+			Array.from({ length: normalized.length - 2 }, (_, index) =>
+				normalized.slice(index, index + 3),
+			),
+		),
+	];
+}
+
+function bestTokenTrigramSimilarity(message: string, probe: string): number {
+	const expected = new Set(stringTrigrams(probe));
+	if (!expected.size) return 0;
+	const tokens = normalizeSearchText(message).match(/[\p{L}\p{N}_-]+/gu) ?? [];
+	let best = 0;
+	for (const token of tokens) {
+		const actual = new Set(stringTrigrams(token));
+		if (!actual.size) continue;
+		let overlap = 0;
+		for (const trigram of expected) {
+			if (actual.has(trigram)) overlap += 1;
+		}
+		best = Math.max(best, (2 * overlap) / (expected.size + actual.size));
+	}
+	return best;
+}
+
 export function buildFtsProbe(value: string): string | null {
+	return buildFtsQuery(value, "strict_fts");
+}
+
+export function buildFtsQuery(
+	value: string,
+	source: LexicalRetrievalSource,
+): string | null {
 	const terms = normalizeSearchText(value).match(/[\p{L}\p{N}_-]+/gu);
 	if (!terms?.length) return null;
-	return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" AND ");
+	const escaped = terms.map((term) => term.replaceAll('"', '""'));
+	switch (source) {
+		case "exact_phrase":
+			return `"${escaped.join(" ")}"`;
+		case "broad_fts":
+			return escaped.map((term) => `"${term}"`).join(" OR ");
+		case "prefix_fts":
+			return escaped.map((term) => `"${term}"*`).join(" AND ");
+		case "trigram":
+			return terms.join(" ");
+		case "strict_fts":
+		case "term_fts":
+			return escaped.map((term) => `"${term}"`).join(" AND ");
+	}
 }
 
 function discoveredTicketKeys(message: string): string[] {
-	return [...new Set(message.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? [])];
+	return [
+		...new Set(
+			(message.match(/\b[A-Z][A-Z0-9]+-\d+\b/gi) ?? []).map((key) =>
+				key.toUpperCase(),
+			),
+		),
+	];
 }
 
 function rowToPost(row: Record<string, unknown>): IndexedPost {

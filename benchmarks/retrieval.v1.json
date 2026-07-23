@@ -1,0 +1,941 @@
+{
+	"schemaVersion": 1,
+	"name": "initial-realistic-searches",
+	"conversations": [
+		{
+			"id": "channel-payments",
+			"alias": "payments",
+			"kind": "channel",
+			"name": "payments",
+			"description": "Payments and billing engineering",
+			"priority": 100,
+			"repositories": ["payment-api"],
+			"scopes": ["payments"]
+		},
+		{
+			"id": "channel-platform",
+			"alias": "platform",
+			"kind": "channel",
+			"name": "platform",
+			"description": "Platform engineering",
+			"priority": 50,
+			"repositories": ["worker-runtime"],
+			"scopes": ["platform"]
+		}
+	],
+	"posts": [
+		{
+			"id": "thread-ticket",
+			"conversationId": "channel-payments",
+			"createAt": 100,
+			"message": "PAY-1777 payment callback investigation"
+		},
+		{
+			"id": "thread-phrase",
+			"conversationId": "channel-payments",
+			"createAt": 200,
+			"message": "The exact error is connection pool exhausted during checkout"
+		},
+		{
+			"id": "thread-distributed",
+			"conversationId": "channel-platform",
+			"createAt": 300,
+			"message": "Background worker rollout discussion"
+		},
+		{
+			"id": "reply-distributed-timeout",
+			"rootId": "thread-distributed",
+			"conversationId": "channel-platform",
+			"createAt": 301,
+			"message": "The symptom is a timeout under load"
+		},
+		{
+			"id": "reply-distributed-retry",
+			"rootId": "thread-distributed",
+			"conversationId": "channel-platform",
+			"createAt": 302,
+			"message": "Retries happen in the queue consumer"
+		},
+		{
+			"id": "thread-engineering",
+			"conversationId": "channel-platform",
+			"createAt": 400,
+			"message": "worker-runtime src/jobs/dispatch.ts calls scheduleRetry for failed jobs"
+		},
+		{
+			"id": "thread-russian",
+			"conversationId": "channel-payments",
+			"createAt": 500,
+			"message": "Разобрались с зависшими платежами и повторным списанием"
+		},
+		{
+			"id": "thread-mixed-language",
+			"conversationId": "channel-payments",
+			"createAt": 600,
+			"message": "Обсуждение настройки репликации данных"
+		},
+		{
+			"id": "reply-mixed-language",
+			"rootId": "thread-mixed-language",
+			"conversationId": "channel-payments",
+			"createAt": 601,
+			"message": "The replication service owns this process"
+		},
+		{
+			"id": "thread-old-relevant",
+			"conversationId": "channel-platform",
+			"createAt": 10,
+			"message": "deploy lock failure caused by stale lease; remediation is documented"
+		},
+		{
+			"id": "thread-new-irrelevant",
+			"conversationId": "channel-platform",
+			"createAt": 1000,
+			"message": "deploy lock failure was pasted here without investigation"
+		},
+		{
+			"id": "thread-multitopic",
+			"conversationId": "channel-platform",
+			"createAt": 700,
+			"message": "Weekly platform roundup: dashboards, hiring, and lunch"
+		},
+		{
+			"id": "reply-multitopic-signal",
+			"rootId": "thread-multitopic",
+			"conversationId": "channel-platform",
+			"createAt": 701,
+			"message": "Distinctive error E_QUEUE_42 comes from QueueSupervisor"
+		},
+		{
+			"id": "thread-noise-recent",
+			"conversationId": "channel-payments",
+			"createAt": 1100,
+			"message": "payment timeout mentioned in a status digest"
+		},
+		{
+			"id": "thread-probes",
+			"conversationId": "channel-payments",
+			"createAt": 800,
+			"message": "payment-api ownership and routing"
+		},
+		{
+			"id": "reply-probes",
+			"rootId": "thread-probes",
+			"conversationId": "channel-payments",
+			"createAt": 801,
+			"message": "scheduleRetry handles callback recovery"
+		},
+		{
+			"id": "thread-vague",
+			"conversationId": "channel-payments",
+			"createAt": 900,
+			"message": "The billing worker charged a customer twice after redelivery"
+		},
+		{
+			"id": "thread-callback-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1200,
+			"message": "Восстановление callback после понедельничного деплоя — давайте соберём здесь владельца, путь ретраев и всё, что могли упустить."
+		},
+		{
+			"id": "reply-callback-owner",
+			"rootId": "thread-callback-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1201,
+			"message": "Уточнила у Лены: payment-api остаётся на нашей команде. Gateway только прокидывает callback дальше."
+		},
+		{
+			"id": "reply-callback-retry",
+			"rootId": "thread-callback-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1202,
+			"message": "После первого 502 задача попадает в scheduleRetry. Ретраим не дольше пяти минут, потом автоматика останавливается."
+		},
+		{
+			"id": "reply-callback-dlq",
+			"rootId": "thread-callback-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1203,
+			"message": "После лимита сообщения уходят в dead letter queue. Я переиграла три примера, идентификаторы положила в тикет."
+		},
+		{
+			"id": "reply-callback-noise",
+			"rootId": "thread-callback-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1204,
+			"message": "Не по теме: в стейдже снова шумят алерты, вынесу это отдельно в тред observability."
+		},
+		{
+			"id": "thread-release-status",
+			"conversationId": "channel-payments",
+			"createAt": 2100,
+			"message": "Статус релиза на вторник: мобильное приложение зелёное, счета отстают на десять минут, откат пока не планируем."
+		},
+		{
+			"id": "reply-release-callback",
+			"rootId": "thread-release-status",
+			"conversationId": "channel-payments",
+			"createAt": 2101,
+			"message": "В чек-листе с прошлой недели осталось «восстановление callback». Уберите, пожалуйста, перед отправкой статуса."
+		},
+		{
+			"id": "reply-release-coffee",
+			"rootId": "thread-release-status",
+			"conversationId": "channel-payments",
+			"createAt": 2102,
+			"message": "И ещё: синк с поддержкой перенесли на 15:30, инвайт в календаре уже обновили."
+		},
+		{
+			"id": "thread-api-ownership-note",
+			"conversationId": "channel-payments",
+			"createAt": 2110,
+			"message": "Небольшая правка документации по payment-api: CODEOWNERS и страница дежурств сейчас противоречат друг другу."
+		},
+		{
+			"id": "reply-api-ownership-note",
+			"rootId": "thread-api-ownership-note",
+			"conversationId": "channel-payments",
+			"createAt": 2111,
+			"message": "Поведение сервиса не меняется, после обеда смержу только формулировки."
+		},
+		{
+			"id": "thread-retry-refactor-note",
+			"conversationId": "channel-payments",
+			"createAt": 2120,
+			"message": "Переименовываю scheduleRetry в тестовых хелперах, чтобы имя совпадало с продовым символом."
+		},
+		{
+			"id": "reply-retry-refactor-note",
+			"rootId": "thread-retry-refactor-note",
+			"conversationId": "channel-payments",
+			"createAt": 2121,
+			"message": "Изменение механическое, поведение callback и лимиты ретраев не трогаю."
+		},
+		{
+			"id": "thread-dlq-dashboard-note",
+			"conversationId": "channel-payments",
+			"createAt": 2130,
+			"message": "У панели dead letter callback после обновления Grafana неверный цвет порога."
+		},
+		{
+			"id": "reply-dlq-dashboard-note",
+			"rootId": "thread-dlq-dashboard-note",
+			"conversationId": "channel-payments",
+			"createAt": 2131,
+			"message": "Легенду поправил. Этот тред только про отображение, не про повторную обработку сообщений."
+		},
+		{
+			"id": "thread-planning-notes",
+			"conversationId": "channel-payments",
+			"createAt": 2140,
+			"message": "Заметки к планированию следующего спринта: отпуска, дежурства поддержки и мелкие задачи на уборку."
+		},
+		{
+			"id": "reply-planning-callback",
+			"rootId": "thread-planning-notes",
+			"conversationId": "channel-payments",
+			"createAt": 2141,
+			"message": "Добавила «восстановление callback» в парковку, чтобы потом вернуться к инструкции."
+		},
+		{
+			"id": "reply-planning-noise",
+			"rootId": "thread-planning-notes",
+			"conversationId": "channel-payments",
+			"createAt": 2142,
+			"message": "Пятничное демо необязательное, в переговорке всё равно только восемь мест."
+		},
+		{
+			"id": "thread-pool-investigation",
+			"conversationId": "channel-platform",
+			"createAt": 1300,
+			"message": "Connection pool exhausted в worker-runtime: расследование и план исправления."
+		},
+		{
+			"id": "reply-pool-symptoms",
+			"rootId": "thread-pool-investigation",
+			"conversationId": "channel-platform",
+			"createAt": 1301,
+			"message": "В 09:42 все checkout начали ждать. Активных соединений оставалось 40, а очередь выросла до 600."
+		},
+		{
+			"id": "reply-pool-cause",
+			"rootId": "thread-pool-investigation",
+			"conversationId": "channel-platform",
+			"createAt": 1302,
+			"message": "Причина — забытый release() в ветке отмены. Патч уже в dispatch.ts, нагрузочный тест зелёный."
+		},
+		{
+			"id": "reply-pool-followup",
+			"rootId": "thread-pool-investigation",
+			"conversationId": "channel-platform",
+			"createAt": 1303,
+			"message": "Добавила алерт на 50 ожидающих и регрессионный тест. После завтрашнего деплоя можно закрывать."
+		},
+		{
+			"id": "thread-weekly-platform-a",
+			"conversationId": "channel-platform",
+			"createAt": 2300,
+			"message": "Еженедельный platform-синк: найм, обновление Kubernetes и работы с офисной сетью."
+		},
+		{
+			"id": "reply-weekly-platform-a",
+			"rootId": "thread-weekly-platform-a",
+			"conversationId": "channel-platform",
+			"createAt": 2301,
+			"message": "Для слайда об инцидентах возьмите точный текст алерта «connection pool exhausted». Само расследование в старом треде."
+		},
+		{
+			"id": "reply-weekly-platform-a-noise",
+			"rootId": "thread-weekly-platform-a",
+			"conversationId": "channel-platform",
+			"createAt": 2302,
+			"message": "Окно обновления перенесли на четверг: в среду у финансов демо."
+		},
+		{
+			"id": "thread-support-digest",
+			"conversationId": "channel-platform",
+			"createAt": 2310,
+			"message": "Дайджест поддержки: три запроса на доступ, один медленный экспорт и две устаревшие ссылки в документации."
+		},
+		{
+			"id": "reply-support-pool",
+			"rootId": "thread-support-digest",
+			"conversationId": "channel-platform",
+			"createAt": 2311,
+			"message": "Один клиент прислал «connection pool exhausted», но это логи их собственного прокси. worker-runtime не затронут."
+		},
+		{
+			"id": "reply-support-noise",
+			"rootId": "thread-support-digest",
+			"conversationId": "channel-platform",
+			"createAt": 2312,
+			"message": "Доступы согласованы, вопрос по экспорту ждёт ответа продукта."
+		},
+		{
+			"id": "thread-alert-copy",
+			"conversationId": "channel-platform",
+			"createAt": 2320,
+			"message": "Правим формулировки алертов перед обновлением инструкции для дежурных."
+		},
+		{
+			"id": "reply-alert-copy",
+			"rootId": "thread-alert-copy",
+			"conversationId": "channel-platform",
+			"createAt": 2321,
+			"message": "Нужно ли писать «connection pool exhausted» с заглавной буквы в заголовке? Поведение в этом PR не меняется."
+		},
+		{
+			"id": "reply-alert-copy-noise",
+			"rootId": "thread-alert-copy",
+			"conversationId": "channel-platform",
+			"createAt": 2322,
+			"message": "Заодно удалил два старых скриншота и починил битый якорь."
+		},
+		{
+			"id": "thread-russian-payment-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1400,
+			"message": "Зависшие платежи после повторной доставки: собираем факты и решаем, как безопасно восстановить обработку."
+		},
+		{
+			"id": "reply-russian-payment-duplicates",
+			"rootId": "thread-russian-payment-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1401,
+			"message": "У двух заказов увидели повторные списания. Оба события пришли после красного деплоя, вручную ничего не запускали."
+		},
+		{
+			"id": "reply-russian-payment-retries",
+			"rootId": "thread-russian-payment-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1402,
+			"message": "Похоже, ретраи callback не проверяли idempotency key после таймаута. На одном заказе было три попытки."
+		},
+		{
+			"id": "reply-russian-payment-plan",
+			"rootId": "thread-russian-payment-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1403,
+			"message": "Сначала отключаем автоматический replay, затем сверяем ledger и возвращаем только подтверждённые дубли. Записала шаги в тикет."
+		},
+		{
+			"id": "reply-russian-payment-noise",
+			"rootId": "thread-russian-payment-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1404,
+			"message": "Отдельно: график в старом дашборде считает тестовых мерчантов, это не относится к инциденту."
+		},
+		{
+			"id": "thread-russian-ops-digest",
+			"conversationId": "channel-payments",
+			"createAt": 2400,
+			"message": "Утренний ops-дайджест: ночное окно прошло спокойно, два алерта закрылись сами, очередь в норме."
+		},
+		{
+			"id": "reply-russian-ops-digest",
+			"rootId": "thread-russian-ops-digest",
+			"conversationId": "channel-payments",
+			"createAt": 2401,
+			"message": "Фразу «зависшие платежи» оставили в шаблоне со вчера. Сегодня новых случаев нет."
+		},
+		{
+			"id": "thread-russian-refund-docs",
+			"conversationId": "channel-payments",
+			"createAt": 2410,
+			"message": "В инструкции возвратов термин «повторное списание» переведён по-разному на двух страницах."
+		},
+		{
+			"id": "reply-russian-refund-docs",
+			"rootId": "thread-russian-refund-docs",
+			"conversationId": "channel-payments",
+			"createAt": 2411,
+			"message": "Исправлю текст, код и реальные операции эта задача не затрагивает."
+		},
+		{
+			"id": "thread-russian-callback-chart",
+			"conversationId": "channel-payments",
+			"createAt": 2420,
+			"message": "На графике ретраи callback склеиваются с первыми попытками, из-за этого легенда выглядит странно."
+		},
+		{
+			"id": "reply-russian-callback-chart",
+			"rootId": "thread-russian-callback-chart",
+			"conversationId": "channel-payments",
+			"createAt": 2421,
+			"message": "Запрос к данным корректный, меняем только визуализацию и подпись серии."
+		},
+		{
+			"id": "thread-notification-morphology-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1500,
+			"message": "Почему уведомления клиентам опять не приходят после планового обновления? Собираю здесь затронутые профили и таймлайн."
+		},
+		{
+			"id": "reply-notification-morphology-scope",
+			"rootId": "thread-notification-morphology-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1501,
+			"message": "Нашли 27 профилей. Уведомления сформированы правильно, но задания на отправку остались в статусе scheduled."
+		},
+		{
+			"id": "reply-notification-morphology-cause",
+			"rootId": "thread-notification-morphology-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1502,
+			"message": "После обновления очереди воркер продолжал читать старый routing key. Поэтому события не доходили до нового consumer."
+		},
+		{
+			"id": "reply-notification-morphology-plan",
+			"rootId": "thread-notification-morphology-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1503,
+			"message": "Ключ поправили, очередь догоняем с ограничением 20 rps. Перед повторной отправкой сверяем идентификаторы, чтобы не сделать дублей."
+		},
+		{
+			"id": "reply-notification-morphology-noise",
+			"rootId": "thread-notification-morphology-deep",
+			"conversationId": "channel-payments",
+			"createAt": 1504,
+			"message": "Не относится к инциденту: в мобильном приложении счётчик пока обновляется только после перезапуска экрана."
+		},
+		{
+			"id": "thread-notification-wording",
+			"conversationId": "channel-payments",
+			"createAt": 2500,
+			"message": "В справке слово «уведомление» встречается в единственном и множественном числе без общей договорённости."
+		},
+		{
+			"id": "reply-notification-wording",
+			"rootId": "thread-notification-wording",
+			"conversationId": "channel-payments",
+			"createAt": 2501,
+			"message": "Это только редактура текста, поведение системы не меняем."
+		},
+		{
+			"id": "thread-client-template-wording",
+			"conversationId": "channel-payments",
+			"createAt": 2510,
+			"message": "В шаблоне поддержки осталось обращение «клиенту», хотя дальше весь текст написан во множественном числе."
+		},
+		{
+			"id": "reply-client-template-wording",
+			"rootId": "thread-client-template-wording",
+			"conversationId": "channel-payments",
+			"createAt": 2511,
+			"message": "Исправлю вместе с пунктуацией; к задержкам уведомлений эта задача отношения не имеет."
+		},
+		{
+			"id": "thread-duplicate-key-investigation",
+			"conversationId": "channel-platform",
+			"createAt": 1600,
+			"message": "duplicate key value violates unique constraint после миграции профилей — основное расследование."
+		},
+		{
+			"id": "reply-duplicate-key-impact",
+			"rootId": "thread-duplicate-key-investigation",
+			"conversationId": "channel-platform",
+			"createAt": 1601,
+			"message": "Ошибка началась в 11:07 и затронула создание новых профилей. Обновления существующих записей продолжали работать."
+		},
+		{
+			"id": "reply-duplicate-key-cause",
+			"rootId": "thread-duplicate-key-investigation",
+			"conversationId": "channel-platform",
+			"createAt": 1602,
+			"message": "Sequence отстала от максимального id после импорта из архива. Вторая реплика получила старое значение и начала конфликтовать."
+		},
+		{
+			"id": "reply-duplicate-key-fix",
+			"rootId": "thread-duplicate-key-investigation",
+			"conversationId": "channel-platform",
+			"createAt": 1603,
+			"message": "Sequence выровняли внутри транзакции, затем переиграли 43 безопасных запроса. Метрики вернулись к норме."
+		},
+		{
+			"id": "reply-duplicate-key-followup",
+			"rootId": "thread-duplicate-key-investigation",
+			"conversationId": "channel-platform",
+			"createAt": 1604,
+			"message": "Добавили проверку sequence перед импортом и алерт на первый конфликт. Follow-up с владельцем мигратора назначен на завтра."
+		},
+		{
+			"id": "thread-duplicate-key-support-digest",
+			"conversationId": "channel-platform",
+			"createAt": 2600,
+			"message": "duplicate key value violates unique constraint — копия строки для пятничного дайджеста поддержки."
+		},
+		{
+			"id": "reply-duplicate-key-support-digest",
+			"rootId": "thread-duplicate-key-support-digest",
+			"conversationId": "channel-platform",
+			"createAt": 2601,
+			"message": "Подробности не дублирую, ссылка на расследование уже есть в документе."
+		},
+		{
+			"id": "thread-duplicate-key-alert-copy",
+			"conversationId": "channel-platform",
+			"createAt": 2610,
+			"message": "duplicate key value violates unique constraint — выбираем короткий заголовок алерта."
+		},
+		{
+			"id": "reply-duplicate-key-alert-copy",
+			"rootId": "thread-duplicate-key-alert-copy",
+			"conversationId": "channel-platform",
+			"createAt": 2611,
+			"message": "Меняем только текст уведомления, запросы и обработчик остаются прежними."
+		},
+		{
+			"id": "thread-duplicate-key-staging",
+			"conversationId": "channel-platform",
+			"createAt": 2620,
+			"message": "duplicate key value violates unique constraint один раз появился в staging после сброса базы."
+		},
+		{
+			"id": "reply-duplicate-key-staging",
+			"rootId": "thread-duplicate-key-staging",
+			"conversationId": "channel-platform",
+			"createAt": 2621,
+			"message": "Для production это не воспроизводится; staging пересоздали, отдельного расследования не будет."
+		},
+		{
+			"id": "thread-duplicate-key-docs",
+			"conversationId": "channel-platform",
+			"createAt": 2630,
+			"message": "duplicate key value violates unique constraint нужно добавить в таблицу типовых ошибок runbook."
+		},
+		{
+			"id": "reply-duplicate-key-docs",
+			"rootId": "thread-duplicate-key-docs",
+			"conversationId": "channel-platform",
+			"createAt": 2631,
+			"message": "Возьму краткое описание и ссылку, технические выводы остаются в исходном треде."
+		},
+		{
+			"id": "thread-duplicate-key-agenda",
+			"conversationId": "channel-platform",
+			"createAt": 2640,
+			"message": "duplicate key value violates unique constraint добавили в повестку разбора инцидентов."
+		},
+		{
+			"id": "reply-duplicate-key-agenda",
+			"rootId": "thread-duplicate-key-agenda",
+			"conversationId": "channel-platform",
+			"createAt": 2641,
+			"message": "На встрече достаточно пяти минут: причина и исправление уже описаны в старом расследовании."
+		}
+	],
+	"ticketRelationships": [
+		{
+			"ticketKey": "PAY-1777",
+			"threadId": "thread-ticket",
+			"sourcePostId": "thread-ticket",
+			"origin": "explicit"
+		}
+	],
+	"cases": [
+		{
+			"id": "exact-ticket",
+			"queryClass": "exact_ticket_id",
+			"ticket": "PAY-1777",
+			"expectedThreads": [
+				{
+					"threadId": "thread-ticket",
+					"grade": 3
+				}
+			],
+			"notes": "Explicit ticket relationship and root identifier should dominate."
+		},
+		{
+			"id": "exact-phrase",
+			"queryClass": "exact_phrase",
+			"subject": "\"connection pool exhausted\"",
+			"expectedThreads": [
+				{
+					"threadId": "thread-phrase",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-pool-investigation",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-weekly-platform-a",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-support-digest",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-alert-copy",
+					"grade": 1
+				}
+			],
+			"notes": "Quoted operational error should retrieve the exact phrase."
+		},
+		{
+			"id": "terms-across-replies",
+			"queryClass": "distributed_terms",
+			"subject": "timeout retry consumer",
+			"expectedThreads": [
+				{
+					"threadId": "thread-distributed",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-noise-recent",
+					"grade": 1
+				}
+			],
+			"notes": "All terms exist in one thread but not in one post."
+		},
+		{
+			"id": "engineering-identifiers",
+			"queryClass": "repository_file_symbol",
+			"subject": "worker-runtime dispatch.ts scheduleRetry",
+			"repositories": ["worker-runtime"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-engineering",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-pool-investigation",
+					"grade": 2
+				},
+				{
+					"threadId": "thread-support-digest",
+					"grade": 1
+				}
+			],
+			"notes": "The repository, file, and function identifiers make thread-engineering the primary result. The pool investigation is substantially but partially relevant through worker-runtime and dispatch.ts; the support digest is only a weak worker-runtime mention."
+		},
+		{
+			"id": "russian-inflection",
+			"queryClass": "russian_inflection",
+			"subject": "зависший платеж",
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-russian-payment-deep",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-russian-ops-digest",
+					"grade": 1
+				}
+			],
+			"notes": "Inflected Russian forms should remain discoverable."
+		},
+		{
+			"id": "mixed-language",
+			"queryClass": "russian_english_terminology",
+			"subject": "репликация replication",
+			"expectedThreads": [
+				{
+					"threadId": "thread-mixed-language",
+					"grade": 3
+				}
+			],
+			"notes": "Russian and English terminology is distributed across a bilingual thread."
+		},
+		{
+			"id": "configured-domain-synonym",
+			"queryClass": "configured_russian_english_synonym",
+			"subject": "репликейшн",
+			"expectedThreads": [
+				{
+					"threadId": "thread-mixed-language",
+					"grade": 3
+				}
+			],
+			"notes": "Настроенный технический синоним связывает русскую транскрипцию «репликейшн» с английским replication; расширение должно быть ограниченным и явно отражаться в диагностике."
+		},
+		{
+			"id": "misspelled-identifier",
+			"queryClass": "misspelling_incomplete_identifier",
+			"subject": "worker-runtim scheduleRetry",
+			"expectedThreads": [
+				{
+					"threadId": "thread-engineering",
+					"grade": 2
+				},
+				{
+					"threadId": "thread-probes",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-callback-deep",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-retry-refactor-note",
+					"grade": 1
+				}
+			],
+			"notes": "A truncated repository name should not hide an exact symbol match."
+		},
+		{
+			"id": "vague-paraphrase",
+			"queryClass": "vague_paraphrase",
+			"subject": "customer billed twice when message retried",
+			"expectedThreads": [
+				{
+					"threadId": "thread-vague",
+					"grade": 2
+				}
+			],
+			"notes": "Captures a genuinely semantic baseline failure for later comparison."
+		},
+		{
+			"id": "old-over-new",
+			"queryClass": "old_relevant_vs_recent_irrelevant",
+			"subject": "deploy lock failure",
+			"expectedThreads": [
+				{
+					"threadId": "thread-old-relevant",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-new-irrelevant",
+					"grade": 1
+				}
+			],
+			"notes": "A complete old investigation should outrank a recent incidental mention."
+		},
+		{
+			"id": "multi-topic-thread",
+			"queryClass": "unrelated_subtopics",
+			"subject": "E_QUEUE_42 QueueSupervisor",
+			"expectedThreads": [
+				{
+					"threadId": "thread-multitopic",
+					"grade": 3
+				}
+			],
+			"notes": "A focused reply inside a broad thread should remain retrievable."
+		},
+		{
+			"id": "independent-probes",
+			"queryClass": "independent_repeated_queries",
+			"subject": "payment-api",
+			"queries": ["scheduleRetry", "callback recovery"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-probes",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-callback-deep",
+					"grade": 2
+				},
+				{
+					"threadId": "thread-api-ownership-note",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-retry-refactor-note",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-engineering",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-russian-callback-chart",
+					"grade": 1
+				}
+			],
+			"notes": "Repeated probes should contribute independently to the same thread."
+		},
+		{
+			"id": "probe-diversity-depth",
+			"queryClass": "multi_probe_thread_depth",
+			"subject": "восстановление callback",
+			"queries": ["payment-api", "scheduleRetry", "dead letter callback"],
+			"repositories": ["payment-api"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-callback-deep",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-probes",
+					"grade": 2
+				},
+				{
+					"threadId": "thread-release-status",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-api-ownership-note",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-retry-refactor-note",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-dlq-dashboard-note",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-planning-notes",
+					"grade": 1
+				}
+			],
+			"notes": "The deep thread answers all four independent probes across a realistic discussion. Newer threads are genuinely weakly relevant, but each is a status, docs, refactor, dashboard, or planning mention of only one probe."
+		},
+		{
+			"id": "root-phrase-vs-incidental-replies",
+			"queryClass": "root_phrase_vs_incidental_reply",
+			"subject": "connection pool exhausted",
+			"repositories": ["worker-runtime"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-pool-investigation",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-weekly-platform-a",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-support-digest",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-alert-copy",
+					"grade": 1
+				}
+			],
+			"notes": "Сильный тред выносит точную ошибку в корень и содержит симптомы, причину, исправление и follow-up. Более новые треды действительно слабо релевантны, но упоминают ошибку лишь в ответах про слайды, клиентские логи и редактуру."
+		},
+		{
+			"id": "russian-inflected-probe-depth",
+			"queryClass": "russian_inflected_multi_probe_depth",
+			"subject": "зависшие платежи",
+			"queries": ["повторное списание", "ретраи callback"],
+			"scopes": ["payments"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian-payment-deep",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-russian-ops-digest",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-russian-refund-docs",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-russian-callback-chart",
+					"grade": 1
+				}
+			],
+			"notes": "Основной тред связывает зависшие платежи, повторные списания и ретраи callback в одном расследовании, причём формы слов различаются между запросом и сообщениями. Более новые треды слабо релевантны и обсуждают только шаблон дайджеста, терминологию документации или график."
+		},
+		{
+			"id": "russian-prefix-suppressed-by-weak-exact",
+			"queryClass": "russian_inflection_prefix_suppression",
+			"subject": "уведомление клиенту не пришло",
+			"scopes": ["payments"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-notification-morphology-deep",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-notification-wording",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-client-template-wording",
+					"grade": 1
+				}
+			],
+			"notes": "Запрос в естественной форме описывает инцидентный тред, где те же понятия употреблены как «уведомления», «клиентам» и «не приходят». Два новых треда дают слабые точные совпадения только по словам «уведомление» и «клиенту» и обсуждают редактуру, поэтому не должны блокировать морфологический fallback."
+		},
+		{
+			"id": "old-deep-investigation-vs-shallow-exact",
+			"queryClass": "old_investigation_vs_recent_shallow_exact",
+			"subject": "duplicate key value violates unique constraint",
+			"repositories": ["worker-runtime"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-duplicate-key-investigation",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-duplicate-key-support-digest",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-duplicate-key-alert-copy",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-duplicate-key-staging",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-duplicate-key-docs",
+					"grade": 1
+				},
+				{
+					"threadId": "thread-duplicate-key-agenda",
+					"grade": 1
+				}
+			],
+			"notes": "Старый тред содержит влияние, причину, исправление и follow-up. Пять новых тредов действительно слабо релевантны, но используют ту же точную ошибку только для дайджеста, текста алерта, одноразового staging-события, runbook и повестки."
+		}
+	],
+	"synonyms": {
+		"репликейшн": ["replication"]
+	}
+}

@@ -36,6 +36,7 @@ describe("standalone security boundaries", () => {
 			expect(methods).not.toContain(forbidden);
 		}
 		expect(methods).toContain("getFileInfo");
+		expect(methods).toContain("searchTeamPosts");
 	});
 
 	test("stable errors redact resolved secrets from messages and details", () => {

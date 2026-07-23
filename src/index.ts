@@ -1,7 +1,6 @@
 export {
 	type AgentCandidate,
 	type AgentCommandResult,
-	type AgentEvidenceIssue,
 	type AgentFile,
 	type AgentOmission,
 	type AgentPost,
@@ -29,7 +28,10 @@ export {
 	type FreshnessEvidence,
 	getMattermostContext,
 	getMattermostThread,
+	type RemoteSearchEvidence,
 	type SearchContextResult,
+	type SearchFilterInput,
+	type SearchFilters,
 	type SearchInput,
 	searchMattermost,
 	type ThreadInput,
@@ -58,6 +60,11 @@ export {
 	whoamiResultV1Schema,
 } from "./contracts.ts";
 export {
+	type EngineeringEntity,
+	type EngineeringEntityKind,
+	extractEngineeringEntities,
+} from "./entities.ts";
+export {
 	AppError,
 	ConfigError,
 	DatabaseError,
@@ -68,6 +75,7 @@ export {
 	MattermostApiError,
 	MattermostClient,
 	type MattermostClientOptions,
+	type TeamPostSearchOptions,
 } from "./mattermost/client.ts";
 export type {
 	MattermostChannel,
@@ -88,27 +96,42 @@ export {
 	renderedPostUnits,
 } from "./packing.ts";
 export {
+	expandQueryTerms,
+	matchesQueryExpansion,
+	type QueryExpansion,
+	type QueryExpansionKind,
+} from "./query-expansion.ts";
+export {
 	type CommandResult,
 	SCHEMA_VERSION,
 	type StableError,
 	type Warning,
 } from "./results.ts";
 export {
+	type AgentProbeInput,
+	type AgentProbeKind,
 	classifySubject,
 	configuredConversations,
 	directCandidate,
+	type LexicalMatchEvidence,
 	type MattermostSubject,
+	type RankFusionContribution,
 	type RankingReason,
 	type RetrievalProbe,
 	type RoutedConversation,
 	type RoutingEvidenceType,
 	type RoutingResult,
+	RRF_RANK_CONSTANT,
+	reciprocalRankFusionScore,
+	remoteSearchCandidate,
 	resolveProbes,
 	routeConversations,
 	type SearchMatch,
 	type SearchResult,
+	type StructuredSearchMatch,
 	searchThreads,
 	type ThreadCandidate,
+	type ThreadRankingEvidence,
 	widenedRouting,
 } from "./retrieval.ts";
 export {
@@ -124,15 +147,22 @@ export {
 } from "./setup.ts";
 export {
 	buildFtsProbe,
+	buildFtsQuery,
 	type ConversationKind,
 	type ConversationRecord,
 	databaseFilePaths,
 	type IndexedFile,
 	type IndexedPost,
 	type IndexedUser,
+	type LexicalHit,
+	type LexicalRetrievalSource,
+	type LexicalSearchOptions,
 	MattermostStore,
 	type PageWrite,
+	type StructuredEntityHit,
+	type StructuredEntityRecord,
 	type SyncCheckpoint,
+	type ThreadSearchFilters,
 	type TicketThreadRelationship,
 } from "./storage.ts";
 export {

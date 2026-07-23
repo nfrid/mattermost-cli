@@ -105,3 +105,34 @@ export function containsNormalizedText(
 ): boolean {
 	return normalizeSearchText(message).includes(normalizeSearchText(value));
 }
+
+export function containsNormalizedExactText(
+	message: string,
+	value: string,
+): boolean {
+	const normalizedMessage = normalizeSearchText(message);
+	const normalizedValue = normalizeSearchText(value).trim();
+	if (!normalizedValue) return false;
+	let offset = normalizedMessage.indexOf(normalizedValue);
+	while (offset >= 0) {
+		const before = Array.from(normalizedMessage.slice(0, offset)).at(-1);
+		const after = Array.from(
+			normalizedMessage.slice(offset + normalizedValue.length),
+		)[0];
+		const valueCharacters = Array.from(normalizedValue);
+		const startsWithToken = isSearchTokenCharacter(valueCharacters[0]);
+		const endsWithToken = isSearchTokenCharacter(valueCharacters.at(-1));
+		if (
+			(!startsWithToken || !isSearchTokenCharacter(before)) &&
+			(!endsWithToken || !isSearchTokenCharacter(after))
+		) {
+			return true;
+		}
+		offset = normalizedMessage.indexOf(normalizedValue, offset + 1);
+	}
+	return false;
+}
+
+function isSearchTokenCharacter(value: string | undefined): boolean {
+	return value !== undefined && /[\p{L}\p{N}_]/u.test(value);
+}

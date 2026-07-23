@@ -49,8 +49,12 @@ describe("agent projection", () => {
 					kind: "channel",
 					url: `https://chat.example.test/_redirect/pl/${ROOT}`,
 					why: [
+						"subject_in_root",
 						"exact_phrase",
+						"exact_phrase_in_root",
+						"exact_phrase_in_reply",
 						"all_terms_in_thread",
+						"rank_fusion",
 						"routing_explicit_channel",
 					],
 					omitted: { posts: 0, attachments: 0 },
@@ -126,7 +130,7 @@ describe("agent projection", () => {
 		store.close();
 	});
 
-	test("projects compact search candidates and freshness anomalies", async () => {
+	test("projects compact search candidates without detailed freshness evidence", async () => {
 		const store = await seededStore({ stale: true, complete: false });
 		const search = await searchMattermost(
 			{ subject: "payment evidence", channels: ["payments"] },
@@ -152,8 +156,12 @@ describe("agent projection", () => {
 					url: `https://chat.example.test/_redirect/pl/${ROOT}`,
 					latestAt: "1970-01-01T00:00:00.020Z",
 					why: [
+						"subject_in_root",
 						"exact_phrase",
+						"exact_phrase_in_root",
+						"exact_phrase_in_reply",
 						"all_terms_in_thread",
+						"rank_fusion",
 						"routing_explicit_channel",
 					],
 					excerpts: [
@@ -162,17 +170,9 @@ describe("agent projection", () => {
 					],
 				},
 			],
-			evidenceIssues: [
-				{
-					conversation: "payments",
-					stale: true,
-					ageSeconds: 7200,
-					historyComplete: false,
-				},
-			],
 		});
 		expect(JSON.stringify(result)).not.toMatch(
-			/rootPostId|conversationId|priority|scoreVector|postId|probes|"complete"/,
+			/rootPostId|conversationId|priority|scoreVector|postId|probes|evidenceIssues|"complete"/,
 		);
 		store.close();
 	});

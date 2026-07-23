@@ -106,6 +106,37 @@ describe("schema version 1 command contracts", () => {
 				commandSuccess("context", context, context.warnings),
 			),
 		).toMatchSnapshot("populated context v1");
+		const remoteDocument = contextResultV1Schema.parse(
+			commandSuccess(
+				"context",
+				{
+					...context,
+					remoteSearch: {
+						requested: true,
+						performed: true,
+						reason: "explicit" as const,
+						queries: [
+							{
+								probe: "payment evidence",
+								returnedPosts: 2,
+								acceptedPosts: 1,
+							},
+						],
+						candidateThreads: 1,
+						failures: 0,
+					},
+					threads: context.threads.map((thread) => ({
+						...thread,
+						reasons: ["remote_search" as const, ...thread.reasons],
+					})),
+				},
+				context.warnings,
+			),
+		);
+		expect(remoteDocument.data.remoteSearch).toMatchObject({
+			performed: true,
+			reason: "explicit",
+		});
 		store.close();
 	});
 

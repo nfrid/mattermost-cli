@@ -90,6 +90,11 @@ test.skipIf(!enabled)(
 			};
 			const client = new MattermostClient(smokeConfig);
 			expect((await client.getCurrentUser()).id).toBeTruthy();
+			const nativeSearch = await client.searchTeamPosts(smokeConfig.teamId, {
+				terms: query,
+				perPage: 10,
+			});
+			expect(nativeSearch.order.length).toBeLessThanOrEqual(100);
 			expect((await client.getTeam(smokeConfig.teamId)).id).toBe(
 				smokeConfig.teamId,
 			);

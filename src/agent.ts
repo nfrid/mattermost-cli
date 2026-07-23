@@ -1,7 +1,6 @@
 import type {
 	ContextResult,
 	ContextThread,
-	FreshnessEvidence,
 	SearchContextResult,
 	ThreadResult,
 } from "./context.ts";
@@ -24,13 +23,6 @@ export interface AgentPost {
 	editedAt?: string;
 	deleted?: true;
 	files?: AgentFile[];
-}
-
-export interface AgentEvidenceIssue {
-	conversation: string;
-	stale: boolean;
-	ageSeconds?: number;
-	historyComplete: boolean;
 }
 
 export interface AgentStatus {
@@ -128,8 +120,10 @@ function projectContext(
 			data.searchCoverageComplete,
 			data.selectedThreadsComplete,
 		),
+		...(data.remoteSearch.performed || data.remoteSearch.requested
+			? { remoteSearch: data.remoteSearch }
+			: {}),
 		threads: data.threads.map(projectContextThread),
-		...issues(data.freshness),
 		warnings,
 	};
 }
@@ -154,7 +148,6 @@ function projectSearch(
 				excerpts: [...new Set(candidate.matches.map(({ excerpt }) => excerpt))],
 			}),
 		),
-		...issues(data.freshness),
 		warnings,
 	};
 }
@@ -174,7 +167,6 @@ function projectThread(
 			data.conversation.kind,
 			data.link,
 		),
-		...issues([data.freshness]),
 		warnings,
 	};
 }
@@ -244,22 +236,6 @@ function status(
 		searchComplete,
 		threadsComplete,
 	};
-}
-
-function issues(freshness: readonly FreshnessEvidence[]): {
-	evidenceIssues?: AgentEvidenceIssue[];
-} {
-	const evidenceIssues = freshness
-		.filter(({ stale, coverageComplete }) => stale || !coverageComplete)
-		.map(
-			(item): AgentEvidenceIssue => ({
-				conversation: item.alias,
-				stale: item.stale,
-				...(item.ageSeconds === null ? {} : { ageSeconds: item.ageSeconds }),
-				historyComplete: item.coverageComplete,
-			}),
-		);
-	return evidenceIssues.length ? { evidenceIssues } : {};
 }
 
 function meaningfulReasons(reasons: readonly RankingReason[]): RankingReason[] {

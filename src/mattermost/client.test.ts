@@ -53,6 +53,61 @@ describe("MattermostClient", () => {
 		);
 	});
 
+	test("performs only the named bounded team post search operation", async () => {
+		let capturedUrl = "";
+		let capturedInit: RequestInit | undefined;
+		const client = new MattermostClient(config, {
+			fetch: mockFetch((input, init) => {
+				capturedUrl = String(input);
+				capturedInit = init;
+				return jsonResponse({ order: [], posts: {}, matches: {} });
+			}),
+		});
+		await client.searchTeamPosts("team/id", {
+			terms: "payment timeout",
+			isOrSearch: false,
+			page: 0,
+			perPage: 20,
+		});
+		expect(capturedUrl).toBe(
+			"https://chat.example.test/api/v4/teams/team%2Fid/posts/search",
+		);
+		expect(capturedInit?.method).toBe("POST");
+		expect(new Headers(capturedInit?.headers).get("Content-Type")).toBe(
+			"application/json",
+		);
+		expect(JSON.parse(String(capturedInit?.body))).toEqual({
+			terms: "payment timeout",
+			is_or_search: false,
+			page: 0,
+			per_page: 20,
+		});
+	});
+
+	test("rejects unbounded team post search before a request", async () => {
+		let called = false;
+		const client = new MattermostClient(config, {
+			fetch: mockFetch(() => {
+				called = true;
+				return jsonResponse({});
+			}),
+		});
+		await expect(
+			client.searchTeamPosts("team", { terms: "x", perPage: 101 }),
+		).rejects.toBeDefined();
+		expect(called).toBe(false);
+	});
+
+	test("rejects oversized post-search result sets", async () => {
+		const order = Array.from({ length: 101 }, (_, index) => `post-${index}`);
+		const client = new MattermostClient(config, {
+			fetch: mockFetch(() => jsonResponse({ order, posts: {} })),
+		});
+		await expect(
+			client.searchTeamPosts("team", { terms: "payment" }),
+		).rejects.toMatchObject({ kind: "invalid_response" });
+	});
+
 	test("rejects mutually incompatible channel cursors before a request", async () => {
 		let called = false;
 		const client = new MattermostClient(config, {

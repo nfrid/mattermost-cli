@@ -4,6 +4,12 @@ import { ConfigError } from "./errors.ts";
 import { resolveLocalPaths } from "./paths.ts";
 
 const stringListSchema = z.array(z.string().trim().min(1)).default([]);
+const searchSynonymsSchema = z
+	.record(
+		z.string().trim().min(2).max(64),
+		z.array(z.string().trim().min(2).max(80)).max(8),
+	)
+	.default({});
 
 const routeMetadataSchema = z.object({
 	description: z.string().trim().min(1),
@@ -52,6 +58,7 @@ const localConfigSchema = z
 		reconciliationOverlapMs: z.number().int().nonnegative().default(30_000),
 		historyDays: z.number().int().positive().default(365),
 		pageSize: z.number().int().min(1).max(200).default(100),
+		synonyms: searchSynonymsSchema,
 		budgets: outputBudgetsSchema,
 		channels: z
 			.record(z.string().trim().min(1), configuredChannelSchema)
@@ -61,6 +68,13 @@ const localConfigSchema = z
 			.default({}),
 	})
 	.superRefine((config, context) => {
+		if (Object.keys(config.synonyms).length > 32) {
+			context.addIssue({
+				code: "custom",
+				message: "Search synonyms are limited to 32 configured groups.",
+				path: ["synonyms"],
+			});
+		}
 		for (const alias of Object.keys(config.channels)) {
 			if (alias in config.directMessages) {
 				context.addIssue({
@@ -79,7 +93,9 @@ export type ConfiguredDirectMessage = z.output<
 export type OutputBudgets = z.output<typeof outputBudgetsSchema>;
 export type LocalMattermostConfig = z.output<typeof localConfigSchema>;
 
-export interface MattermostConfig extends LocalMattermostConfig {
+export interface MattermostConfig
+	extends Omit<LocalMattermostConfig, "synonyms"> {
+	synonyms?: LocalMattermostConfig["synonyms"];
 	url: string;
 	configPath: string;
 	databasePath: string;

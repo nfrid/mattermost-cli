@@ -163,6 +163,18 @@ function formatContext(data: ContextResult): string {
 				)
 				.join(", ") || styles.hint("none"),
 		),
+		...(formatFilters(data.filters) ? [formatFilters(data.filters)] : []),
+		formatField(
+			"Remote search",
+			data.remoteSearch?.performed
+				? joinParts([
+						styles.accent(data.remoteSearch.reason ?? "fallback"),
+						`${styles.accent(String(data.remoteSearch.candidateThreads))} candidate thread(s)`,
+					])
+				: styles.hint(
+						data.remoteSearch?.requested ? "unavailable" : "not used",
+					),
+		),
 		joinParts([
 			formatField(
 				"Widened",
@@ -263,6 +275,7 @@ function formatSearch(data: SearchContextResult): string {
 			),
 			styles.hint("ranking signals, not required filters"),
 		]),
+		...(formatFilters(data.filters) ? [formatFilters(data.filters)] : []),
 		...data.candidates.map((candidate) =>
 			joinParts([
 				formatConversation(
@@ -276,6 +289,28 @@ function formatSearch(data: SearchContextResult): string {
 			]),
 		),
 	].join("\n");
+}
+
+function formatFilters(filters: {
+	from?: string;
+	after?: string;
+	before?: string;
+	hasFile?: boolean;
+	file?: string;
+}): string {
+	const values = [
+		filters.from ? `from=${filters.from}` : "",
+		filters.after ? `after=${filters.after}` : "",
+		filters.before ? `before=${filters.before}` : "",
+		filters.hasFile ? "has-file" : "",
+		filters.file ? `file=${filters.file}` : "",
+	].filter(Boolean);
+	return values.length
+		? formatField(
+				"Filters",
+				values.map((value) => styles.accent(value)).join(", "),
+			)
+		: "";
 }
 
 function compactThreadPosts(

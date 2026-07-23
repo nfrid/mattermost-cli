@@ -17,10 +17,28 @@ const subjectSchema = z.discriminatedUnion("kind", [
 	}),
 	z.object({ kind: z.literal("text"), text: z.string(), raw: z.string() }),
 ]);
+const agentProbeKindSchema = z.enum([
+	"ticket_title",
+	"ticket_description",
+	"repository",
+	"file_path",
+	"symbol",
+	"error_message",
+	"service",
+	"participant",
+]);
+const queryExpansionSchema = z.object({
+	sourceTerm: z.string(),
+	value: z.string(),
+	kind: z.enum(["russian_variant", "synonym", "transliteration"]),
+	match: z.enum(["exact", "prefix"]),
+});
 const probeSchema = z.object({
 	value: z.string(),
 	phrases: z.array(z.string()),
 	terms: z.array(z.string()),
+	kind: agentProbeKindSchema.optional(),
+	expansions: z.array(queryExpansionSchema).optional(),
 });
 const routingEvidenceSchema = z.object({
 	type: z.enum([
@@ -103,8 +121,17 @@ const rankingReasonSchema = z.enum([
 	"explicit_ticket_relationship",
 	"ticket_in_root",
 	"ticket_in_reply",
+	"structured_entity_match",
+	"remote_search",
+	"subject_in_root",
 	"exact_phrase",
+	"exact_phrase_in_root",
+	"exact_phrase_in_reply",
 	"all_terms_in_thread",
+	"all_expanded_terms_in_thread",
+	"query_expansion",
+	"multiple_probes_in_thread",
+	"rank_fusion",
 	"routing_explicit_channel",
 	"routing_scope",
 	"routing_repository",
@@ -114,10 +141,56 @@ const rankingReasonSchema = z.enum([
 	"conversation_priority",
 	"latest_activity",
 ]);
+const lexicalSourceSchema = z.enum([
+	"exact_phrase",
+	"strict_fts",
+	"broad_fts",
+	"term_fts",
+	"prefix_fts",
+	"trigram",
+]);
 const matchSchema = z.object({
 	postId: z.string(),
 	probe: z.string(),
+	probeKind: agentProbeKindSchema.optional(),
 	excerpt: z.string(),
+	lexicalSource: lexicalSourceSchema.optional(),
+	sourceQuery: z.string().optional(),
+	sourceRank: z.number().int().positive().optional(),
+	bm25: z.number().finite().optional(),
+	lexicalEvidence: z
+		.array(
+			z.object({
+				source: lexicalSourceSchema,
+				sourceQuery: z.string(),
+				rank: z.number().int().positive(),
+				bm25: z.number().finite(),
+			}),
+		)
+		.optional(),
+	remoteRank: z.number().int().positive().optional(),
+});
+const engineeringEntityKindSchema = z.enum([
+	"ticket",
+	"repository",
+	"pull_request",
+	"commit",
+	"url",
+	"permalink",
+	"file_path",
+	"package",
+	"symbol",
+	"error_code",
+	"username",
+	"service",
+	"attachment_filename",
+]);
+const searchFiltersSchema = z.object({
+	from: z.string().optional(),
+	after: z.string().datetime().optional(),
+	before: z.string().datetime().optional(),
+	hasFile: z.boolean().optional(),
+	file: z.string().optional(),
 });
 const candidateSchema = z.object({
 	threadId: z.string(),
@@ -131,6 +204,48 @@ const candidateSchema = z.object({
 	latestActivityAt: z.number().int().nonnegative(),
 	priority: z.number(),
 	scoreVector: z.array(z.number()),
+	rankingEvidence: z
+		.object({
+			subjectInRoot: z.boolean(),
+			subjectInReplies: z.boolean(),
+			exactPhraseInRootCount: z.number().int().nonnegative(),
+			exactPhraseInReplyCount: z.number().int().nonnegative(),
+			matchedProbeCount: z.number().int().nonnegative(),
+			fullyMatchedProbeCount: z.number().int().nonnegative(),
+			exactFullyMatchedProbeCount: z.number().int().nonnegative().optional(),
+			totalProbeCount: z.number().int().nonnegative(),
+			matchedTermCount: z.number().int().nonnegative(),
+			expandedMatchedTermCount: z.number().int().nonnegative().optional(),
+			expansionMatchCount: z.number().int().nonnegative().optional(),
+			totalTermCount: z.number().int().nonnegative(),
+			matchingPostCount: z.number().int().nonnegative(),
+			latestRelevantMatchAt: z.number().int().nonnegative().nullable(),
+		})
+		.optional(),
+	fusionScore: z.number().finite().nonnegative().optional(),
+	fusionContributions: z
+		.array(
+			z.object({
+				probe: z.string(),
+				probeKind: agentProbeKindSchema.optional(),
+				source: lexicalSourceSchema,
+				sourceQuery: z.string(),
+				rank: z.number().int().positive(),
+				score: z.number().finite().positive(),
+			}),
+		)
+		.optional(),
+	structuredMatches: z
+		.array(
+			z.object({
+				postId: z.string(),
+				probe: z.string(),
+				probeKind: agentProbeKindSchema.optional(),
+				kind: engineeringEntityKindSchema,
+				value: z.string(),
+			}),
+		)
+		.optional(),
 	link: z.string().url().optional(),
 });
 const routingSchema = z.object({
@@ -218,6 +333,7 @@ const syncDataSchema = z.object({
 const searchDataSchema = z.object({
 	subject: subjectSchema,
 	probes: z.array(probeSchema),
+	filters: searchFiltersSchema.optional(),
 	routing: routingSchema,
 	candidates: z.array(candidateSchema),
 	freshnessMode: z.literal("local"),
@@ -237,9 +353,28 @@ const contextThreadSchema = packedThreadSchema.extend({
 	latestActivityAt: z.number().int().nonnegative(),
 	link: z.string(),
 });
+const remoteSearchEvidenceSchema = z.object({
+	requested: z.boolean(),
+	performed: z.boolean(),
+	reason: z
+		.enum(["explicit", "incomplete_local_coverage", "stale_local_index"])
+		.nullable(),
+	queries: z.array(
+		z.object({
+			probe: z.string(),
+			probeKind: agentProbeKindSchema.optional(),
+			returnedPosts: z.number().int().nonnegative(),
+			acceptedPosts: z.number().int().nonnegative(),
+		}),
+	),
+	candidateThreads: z.number().int().nonnegative(),
+	failures: z.number().int().nonnegative(),
+});
 const contextDataSchema = z.object({
 	subject: subjectSchema,
 	probes: z.array(probeSchema),
+	filters: searchFiltersSchema.optional(),
+	remoteSearch: remoteSearchEvidenceSchema.optional(),
 	freshnessMode: z.enum(["local", "network", "forced"]),
 	complete: z.boolean(),
 	searchCoverageComplete: z.boolean().optional(),

@@ -133,6 +133,16 @@ describe("CLI output", () => {
 		expect(stderr.text).toBe("");
 	});
 
+	test("rejects remote search combined with local-only mode", async () => {
+		const stdout = capture();
+		const exitCode = await runCli(
+			["context", "payment", "--local", "--remote-search", "--json"],
+			{ stdout, stderr: capture(), env: {} },
+		);
+		expect(exitCode).toBe(1);
+		expect(JSON.parse(stdout.text)).toMatchObject({ success: false });
+	});
+
 	test("keeps sync progress off JSON stdout and honors restrictive channels", async () => {
 		const projectRoot = await projectWithConfig();
 		const stdout = capture();
@@ -198,11 +208,26 @@ describe("CLI output", () => {
 		store.writePage({
 			conversation: conversationFixture("payments", "channel-payments"),
 			users: [userFixture()],
+			files: [
+				{
+					id: "evidence-file",
+					user_id: "user-1",
+					post_id: rootId,
+					create_at: 1,
+					update_at: 1,
+					delete_at: 0,
+					name: "evidence.txt",
+					extension: "txt",
+					size: 10,
+					mime_type: "text/plain",
+				},
+			],
 			posts: [
 				postFixture({
 					id: rootId,
 					channel_id: "channel-payments",
 					message: "payment timeout exact evidence",
+					file_ids: ["evidence-file"],
 				}),
 			],
 			checkpoint: {
@@ -260,12 +285,45 @@ describe("CLI output", () => {
 			stderr: capture(),
 		});
 		expect(searchOutput.text).toContain(
-			`#payments · https://chat.example.test/_redirect/pl/${rootId} · exact_phrase, all_terms_in_thread, routing_explicit_channel`,
+			`#payments · https://chat.example.test/_redirect/pl/${rootId} · subject_in_root, exact_phrase, exact_phrase_in_root, all_terms_in_thread, rank_fusion, routing_explicit_channel, latest_activity`,
 		);
 		expect(searchOutput.text).toContain(
 			"ranking signals, not required filters",
 		);
 		expect(searchOutput.text).not.toContain("Alice Example");
+
+		const filteredOutput = capture();
+		await runCli(
+			[
+				"search",
+				"payment timeout",
+				"--channel",
+				"payments",
+				"--from",
+				"alice",
+				"--after",
+				"1970-01-01T00:00:00.000Z",
+				"--before",
+				"1970-01-01T00:00:01.000Z",
+				"--has-file",
+				"--file",
+				"evidence",
+				"--json",
+			],
+			{ projectRoot, env: {}, stdout: filteredOutput, stderr: capture() },
+		);
+		expect(JSON.parse(filteredOutput.text)).toMatchObject({
+			data: {
+				filters: {
+					from: "alice",
+					after: "1970-01-01T00:00:00.000Z",
+					before: "1970-01-01T00:00:01.000Z",
+					hasFile: true,
+					file: "evidence",
+				},
+				candidates: [{ threadId: rootId }],
+			},
+		});
 	});
 
 	test("formats the same whoami result for human output", async () => {

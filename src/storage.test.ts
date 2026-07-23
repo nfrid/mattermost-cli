@@ -37,10 +37,10 @@ describe("MattermostStore", () => {
 		const directory = await temporaryDirectory();
 		const path = join(directory, "index.sqlite3");
 		const first = await MattermostStore.open(path);
-		expect(first.migrationVersions()).toEqual([1, 2]);
+		expect(first.migrationVersions()).toEqual([1, 2, 3, 4]);
 		first.close();
 		const second = await MattermostStore.open(path);
-		expect(second.migrationVersions()).toEqual([1, 2]);
+		expect(second.migrationVersions()).toEqual([1, 2, 3, 4]);
 		second.close();
 	});
 
@@ -78,12 +78,52 @@ describe("MattermostStore", () => {
 		before.close();
 
 		const after = await MattermostStore.open(path);
-		expect(after.migrationVersions()).toEqual([1, 2]);
+		expect(after.migrationVersions()).toEqual([1, 2, 3, 4]);
 		expect(
 			after.search("ошибка api платеж подтвержден", [conversation.id]),
 		).toHaveLength(1);
 		expect(after.getPost("post-1")?.message).toBe(
 			"Ошибка ＡＰＩ: платёж подтверждён",
+		);
+		after.close();
+	});
+
+	test("migration 3 backfills structured entities and attachment filenames", async () => {
+		const directory = await temporaryDirectory();
+		const path = join(directory, "entity-upgrade.sqlite3");
+		const before = await MattermostStore.open(path);
+		before.writePage({
+			conversation,
+			files: [
+				{
+					...fileInfo(),
+					name: "migration-trace.json",
+				},
+			],
+			posts: [
+				post({
+					message: "Исправление в src/jobs/migrate.ts",
+					file_ids: ["file-1"],
+				}),
+			],
+		});
+		before.database.run("DELETE FROM schema_migrations WHERE version = 3");
+		before.database.run("DROP TABLE post_entities");
+		before.close();
+
+		const after = await MattermostStore.open(path);
+		expect(after.migrationVersions()).toEqual([1, 2, 3, 4]);
+		expect(after.listEntities("post-1")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "file_path",
+					value: "src/jobs/migrate.ts",
+				}),
+				expect.objectContaining({
+					kind: "attachment_filename",
+					value: "migration-trace.json",
+				}),
+			]),
 		);
 		after.close();
 	});
@@ -204,6 +244,184 @@ describe("MattermostStore", () => {
 			1,
 		);
 		expect(store.search("payment", ["other-channel"])).toEqual([]);
+		store.close();
+	});
+
+	test("returns ranked lexical evidence and match-centered snippets", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const longPrefix = Array.from(
+			{ length: 40 },
+			(_, index) => `prefix${index}`,
+		).join(" ");
+		store.writePage({
+			conversation,
+			posts: [
+				post({
+					id: "post-long",
+					message: `${longPrefix} distinctive needle appears near the end`,
+				}),
+				post({
+					id: "post-short",
+					create_at: 2,
+					update_at: 2,
+					message: "needle",
+				}),
+			],
+		});
+		const hits = store.search("needle", [conversation.id]);
+		expect(hits).toHaveLength(2);
+		expect(hits.map(({ rank }) => rank)).toEqual([1, 2]);
+		expect(hits.every(({ bm25 }) => Number.isFinite(bm25))).toBe(true);
+		expect(hits.every(({ source }) => source === "strict_fts")).toBe(true);
+		const longHit = hits.find(
+			({ post: indexedPost }) => indexedPost.id === "post-long",
+		);
+		expect(longHit?.snippet).toContain("needle");
+		expect(longHit?.snippet).toStartWith("…");
+		expect(longHit?.snippet).not.toContain("prefix0 ");
+		store.close();
+	});
+
+	test("indexes structured entities, attachment names, and thread filters", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const root = post({
+			id: "entity-root",
+			create_at: 10,
+			update_at: 10,
+			message:
+				"В repo payment-api файл src/jobs/dispatch.ts вызывает scheduleRetry() для E_QUEUE_42",
+			file_ids: ["entity-file"],
+		});
+		const reply = post({
+			id: "entity-reply",
+			root_id: root.id,
+			user_id: "user-2",
+			create_at: 20,
+			update_at: 20,
+			message: "Проверила результат после деплоя",
+		});
+		store.writePage({
+			conversation,
+			users: [user, { ...user, id: "user-2", username: "bob" }],
+			files: [
+				{
+					...fileInfo(),
+					id: "entity-file",
+					post_id: root.id,
+					name: "trace.json",
+				},
+			],
+			posts: [root, reply],
+		});
+		expect(store.listEntities(root.id)).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "repository", value: "payment-api" }),
+				expect.objectContaining({
+					kind: "file_path",
+					value: "src/jobs/dispatch.ts",
+				}),
+				expect.objectContaining({
+					kind: "attachment_filename",
+					value: "trace.json",
+				}),
+			]),
+		);
+		expect(
+			store.searchEntities("src/jobs/dispatch.ts", [conversation.id]),
+		).toEqual([
+			expect.objectContaining({ threadId: root.id, kind: "file_path" }),
+		]);
+		expect(
+			store.searchEntities("src/jobs/dispatch.ts", ["other-channel"]),
+		).toEqual([]);
+		expect(store.searchEntities("trace.json", [conversation.id])).toEqual([
+			expect.objectContaining({
+				threadId: root.id,
+				kind: "attachment_filename",
+			}),
+		]);
+		expect(
+			store.searchEntities("alice", [conversation.id], 100, {}, "username"),
+		).toHaveLength(1);
+		store.upsertUser({ ...user, username: "alice-renamed" });
+		expect(
+			store.searchEntities("alice", [conversation.id], 100, {}, "username"),
+		).toEqual([]);
+		expect(
+			store.searchEntities(
+				"alice-renamed",
+				[conversation.id],
+				100,
+				{},
+				"username",
+			),
+		).toHaveLength(1);
+		expect(store.threadMatchesFilters(root.id, { username: "bob" })).toBe(true);
+		expect(store.threadMatchesFilters(root.id, { after: 15, before: 25 })).toBe(
+			true,
+		);
+		expect(store.threadMatchesFilters(root.id, { after: 25 })).toBe(false);
+		expect(store.threadMatchesFilters(root.id, { hasFile: true })).toBe(true);
+		expect(store.threadMatchesFilters(root.id, { filePattern: "TRACE" })).toBe(
+			true,
+		);
+		expect(
+			store.threadMatchesFilters(root.id, { filePattern: "missing" }),
+		).toBe(false);
+		store.upsertFile({
+			...fileInfo(),
+			id: "entity-file",
+			post_id: root.id,
+			name: "trace.json",
+			update_at: 25,
+			delete_at: 25,
+		});
+		expect(store.searchEntities("trace.json", [conversation.id])).toEqual([]);
+		store.writePage({
+			conversation,
+			posts: [{ ...root, update_at: 30, message: "resolved", file_ids: [] }],
+		});
+		expect(
+			store.listEntities(root.id).filter(({ kind }) => kind !== "username"),
+		).toEqual([]);
+		store.close();
+	});
+
+	test("executes exact phrase, broad, and prefix searches independently", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.writePage({
+			conversation,
+			posts: [
+				post({ id: "post-exact", message: "payment timeout" }),
+				post({
+					id: "post-separated",
+					create_at: 2,
+					update_at: 2,
+					message: "payment severe timeout",
+				}),
+			],
+		});
+		expect(
+			store
+				.search("payment timeout", [conversation.id], 10, {
+					source: "exact_phrase",
+				})
+				.map(({ post: indexedPost }) => indexedPost.id),
+		).toEqual(["post-exact"]);
+		expect(
+			store.search("payment timeout", [conversation.id], 10, {
+				source: "broad_fts",
+			}),
+		).toHaveLength(2);
+		const prefixes = store.search("paym", [conversation.id], 10, {
+			source: "prefix_fts",
+		});
+		expect(prefixes).toHaveLength(2);
+		expect(prefixes[0]).toMatchObject({
+			source: "prefix_fts",
+			sourceQuery: "paym",
+			rank: 1,
+		});
 		store.close();
 	});
 });

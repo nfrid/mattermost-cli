@@ -18,6 +18,7 @@ describe("loadMattermostConfig", () => {
 			schemaVersion: 1,
 			url: "https://chat.example.test/",
 			teamId: "team-id",
+			synonyms: { репликация: ["replication", "data replication"] },
 			channels: {
 				payments: {
 					name: "payments",
@@ -45,7 +46,26 @@ describe("loadMattermostConfig", () => {
 		expect(Object.keys(config.channels)).toEqual(["payments"]);
 		expect(Object.keys(config.directMessages)).toEqual(["leads"]);
 		expect(config.channels.payments?.tags).toEqual([]);
+		expect(config.synonyms).toEqual({
+			репликация: ["replication", "data replication"],
+		});
 		expect(config.budgets.defaultMaxCharacters).toBe(16_000);
+	});
+
+	test("bounds configured search synonyms", async () => {
+		const projectRoot = await temporaryProject({
+			schemaVersion: 1,
+			url: "https://chat.example.test",
+			teamId: "team-id",
+			synonyms: {
+				репликация: Array.from({ length: 9 }, (_, index) => `alias-${index}`),
+			},
+			channels: {},
+			directMessages: {},
+		});
+		await expect(
+			loadMattermostConfig({ projectRoot, env: {} }),
+		).rejects.toMatchObject({ kind: "invalid_config" });
 	});
 
 	test("rejects aliases shared by channels and direct messages", async () => {

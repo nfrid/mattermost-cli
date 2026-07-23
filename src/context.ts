@@ -6,6 +6,7 @@ import { MattermostClient } from "./mattermost/client.ts";
 import type {
 	MattermostFileInfo,
 	MattermostPost,
+	MattermostPostList,
 	MattermostUser,
 } from "./mattermost/schemas.ts";
 import {
@@ -14,19 +15,25 @@ import {
 	type PackedThread,
 	packThread,
 } from "./packing.ts";
+import { matchesQueryExpansion } from "./query-expansion.ts";
 import type { Warning } from "./results.ts";
 import {
+	type AgentProbeInput,
 	classifySubject,
 	configuredConversations,
 	directCandidate,
+	evaluateThreadEvidence,
 	type MattermostSubject,
+	mergeThreadCandidates,
 	type RankingReason,
 	type RetrievalProbe,
 	type RoutedConversation,
 	type RoutingResult,
+	remoteSearchCandidate,
 	resolveProbes,
 	routeConversations,
 	type SearchResult,
+	type StructuredSearchMatch,
 	searchThreads,
 	type ThreadCandidate,
 	widenedRouting,
@@ -37,6 +44,7 @@ import {
 	type IndexedPost,
 	type IndexedUser,
 	MattermostStore,
+	type ThreadSearchFilters,
 } from "./storage.ts";
 import {
 	inspectFreshness,
@@ -44,12 +52,33 @@ import {
 	type SyncClient,
 	syncConfiguredConversations,
 } from "./sync.ts";
-import { containsNormalizedText } from "./text.ts";
+import { containsNormalizedExactText, containsNormalizedText } from "./text.ts";
 
-export interface ContextInput {
+const MAX_REMOTE_SEARCH_PROBES = 4;
+const MAX_REMOTE_POSTS_PER_PROBE = 20;
+const MAX_REMOTE_CANDIDATE_THREADS = 12;
+
+export interface SearchFilterInput {
+	from?: string;
+	after?: string;
+	before?: string;
+	hasFile?: boolean;
+	file?: string;
+}
+
+export interface SearchFilters {
+	from?: string;
+	after?: string;
+	before?: string;
+	hasFile?: boolean;
+	file?: string;
+}
+
+export interface ContextInput extends SearchFilterInput {
 	subject?: string;
 	ticket?: string;
 	queries?: readonly string[];
+	probes?: readonly AgentProbeInput[];
 	repositories?: readonly string[];
 	scopes?: readonly string[];
 	channels?: readonly string[];
@@ -57,6 +86,7 @@ export interface ContextInput {
 	local?: boolean;
 	more?: boolean;
 	noWiden?: boolean;
+	remoteSearch?: boolean;
 }
 
 export interface SearchInput
@@ -65,10 +95,16 @@ export interface SearchInput
 		| "subject"
 		| "ticket"
 		| "queries"
+		| "probes"
 		| "repositories"
 		| "scopes"
 		| "channels"
 		| "noWiden"
+		| "from"
+		| "after"
+		| "before"
+		| "hasFile"
+		| "file"
 	> {}
 
 export interface ThreadInput {
@@ -82,6 +118,7 @@ export interface ThreadInput {
 export interface ContextClient extends SyncClient {
 	getPost(postId: string): ReturnType<MattermostClient["getPost"]>;
 	getThread(postId: string): ReturnType<MattermostClient["getThread"]>;
+	searchTeamPosts?: MattermostClient["searchTeamPosts"];
 }
 
 export interface ContextDependencies {
@@ -112,9 +149,25 @@ export interface ContextThread extends PackedThread {
 	link: string;
 }
 
+export interface RemoteSearchEvidence {
+	requested: boolean;
+	performed: boolean;
+	reason: "explicit" | "incomplete_local_coverage" | "stale_local_index" | null;
+	queries: Array<{
+		probe: string;
+		probeKind?: AgentProbeInput["kind"];
+		returnedPosts: number;
+		acceptedPosts: number;
+	}>;
+	candidateThreads: number;
+	failures: number;
+}
+
 export interface ContextResult {
 	subject: MattermostSubject;
 	probes: RetrievalProbe[];
+	filters: SearchFilters;
+	remoteSearch: RemoteSearchEvidence;
 	freshnessMode: "local" | "network" | "forced";
 	complete: boolean;
 	searchCoverageComplete: boolean;
@@ -141,6 +194,7 @@ export interface ContextResult {
 }
 
 export interface SearchContextResult extends Omit<SearchResult, "candidates"> {
+	filters: SearchFilters;
 	candidates: Array<ThreadCandidate & { link: string }>;
 	freshnessMode: "local";
 	complete: boolean;
@@ -168,13 +222,31 @@ export async function getMattermostContext(
 ): Promise<ContextResult> {
 	return withResources(dependencies, async (config, store, providedClient) => {
 		const subject = classifySubject(
-			input.subject ?? input.queries?.[0],
+			input.subject ?? input.queries?.[0] ?? input.probes?.[0]?.value,
 			input.ticket,
 		);
-		const probes = resolveProbes(subject, input.queries);
+		const probes = resolveProbes(
+			subject,
+			input.queries,
+			config.synonyms,
+			input.probes,
+		);
+		const resolvedFilters = resolveSearchFilters(input);
 		const client = input.local
 			? undefined
 			: (providedClient ?? new MattermostClient(config));
+		if (input.local && input.remoteSearch) {
+			throw new ConfigError(
+				"Remote search cannot be combined with local-only mode.",
+				"invalid_remote_search_mode",
+			);
+		}
+		if (subject.kind === "post" && input.remoteSearch) {
+			throw new ConfigError(
+				"Remote search requires a textual or ticket subject.",
+				"invalid_remote_search_subject",
+			);
+		}
 		const all = client
 			? await resolveNetworkConversations(config, client, input.channels)
 			: configuredConversations(config, store);
@@ -189,9 +261,32 @@ export async function getMattermostContext(
 		let fallbackRouting: RoutingResult | undefined;
 		const searched = new Map<string, RoutedConversation>();
 		let candidates: ThreadCandidate[];
+		let remoteSearch: RemoteSearchEvidence = {
+			requested: Boolean(input.remoteSearch),
+			performed: false,
+			reason: null,
+			queries: [],
+			candidateThreads: 0,
+			failures: 0,
+		};
+		const remoteSearchWarnings: Warning[] = [];
+		const searchRoutedThreads = (currentRouting: RoutingResult) =>
+			searchThreads(
+				store,
+				subject,
+				probes,
+				currentRouting,
+				100,
+				resolvedFilters.storage,
+			);
 
 		if (subject.kind === "post") {
-			const direct = await resolveDirectTarget(subject.postId, store, client);
+			const direct = await resolveDirectTarget(
+				subject.postId,
+				store,
+				client,
+				new Set(all.map(({ id }) => id)),
+			);
 			const conversation = all.find(({ id }) => id === direct.conversationId);
 			if (!conversation) {
 				throw new ConfigError(
@@ -233,7 +328,12 @@ export async function getMattermostContext(
 			if (!directConversation) {
 				throw new ConfigError("Direct post routing failed.", "routing_failed");
 			}
-			candidates = [directCandidate(direct, directConversation)];
+			candidates = store.threadMatchesFilters(
+				direct.threadId,
+				resolvedFilters.storage,
+			)
+				? [directCandidate(direct, directConversation)]
+				: [];
 		} else {
 			fallbackRouting = routing.canWiden ? routing : undefined;
 			await freshen(
@@ -243,7 +343,7 @@ export async function getMattermostContext(
 				routing.conversations,
 				Boolean(input.fresh),
 			);
-			candidates = searchThreads(store, subject, probes, routing);
+			candidates = searchRoutedThreads(routing);
 			if (!candidates.length && routing.canWiden) {
 				const widened = widenedRouting(all, routing);
 				if (widened.conversations.length) {
@@ -255,7 +355,7 @@ export async function getMattermostContext(
 						widened.conversations,
 						Boolean(input.fresh),
 					);
-					candidates = searchThreads(store, subject, probes, widened);
+					candidates = searchRoutedThreads(widened);
 					for (const conversation of routing.conversations)
 						searched.set(conversation.id, conversation);
 					routing = widened;
@@ -264,6 +364,40 @@ export async function getMattermostContext(
 		}
 		for (const conversation of routing.conversations)
 			searched.set(conversation.id, conversation);
+
+		if (
+			input.remoteSearch &&
+			client?.searchTeamPosts &&
+			subject.kind !== "post"
+		) {
+			const result = await searchRemoteCandidates(
+				config.teamId,
+				client.searchTeamPosts.bind(client),
+				probes,
+				[...searched.values()],
+			);
+			remoteSearch = {
+				requested: true,
+				performed: true,
+				reason: "explicit",
+				queries: result.queries,
+				candidateThreads: result.candidates.length,
+				failures: result.failures,
+			};
+			if (result.failures) {
+				remoteSearchWarnings.push({
+					kind: "remote_search_failed",
+					message: `${result.failures} bounded Mattermost search request(s) failed; local evidence remains available.`,
+				});
+			}
+			candidates = mergeThreadCandidates(candidates, result.candidates);
+		} else if (input.remoteSearch && !client?.searchTeamPosts) {
+			remoteSearchWarnings.push({
+				kind: "remote_search_unavailable",
+				message:
+					"The configured context client does not support bounded Mattermost search.",
+			});
+		}
 
 		const budgets = input.more
 			? {
@@ -298,11 +432,19 @@ export async function getMattermostContext(
 				for (const value of matchingProbeValues(evidence, probes)) {
 					matchedProbeValues.add(value);
 				}
+				if (!evidenceMatchesFilters(evidence, resolvedFilters.storage))
+					continue;
 				const currentMatchingPostIds = currentMatches(
 					evidence,
 					probes,
 					candidate.matchingPostIds,
+					candidate.structuredMatches,
 				);
+				for (const structured of candidate.structuredMatches ?? []) {
+					if (currentMatchingPostIds.includes(structured.postId)) {
+						matchedProbeValues.add(structured.probe);
+					}
+				}
 				if (
 					subject.kind !== "post" &&
 					!currentMatchingPostIds.length &&
@@ -348,18 +490,70 @@ export async function getMattermostContext(
 				for (const conversation of widened.conversations) {
 					searched.set(conversation.id, conversation);
 				}
-				await hydrateCandidates(searchThreads(store, subject, probes, widened));
+				await hydrateCandidates(searchRoutedThreads(widened));
 			}
 		}
 
 		const searchedConversations = [...searched.values()];
+		const observedAt = dependencies.now?.() ?? Date.now();
+		const localFreshness = inspectFreshness(
+			config,
+			store,
+			searchedConversations,
+			observedAt,
+		);
+		const automaticRemoteReason = localFreshness.some(
+			({ coverageComplete }) => !coverageComplete,
+		)
+			? "incomplete_local_coverage"
+			: localFreshness.some(({ stale }) => stale)
+				? "stale_local_index"
+				: null;
+		const remoteReason = input.remoteSearch ? null : automaticRemoteReason;
+		if (
+			remoteReason &&
+			threads.length < budgets.maxThreads &&
+			remaining > 0 &&
+			client?.searchTeamPosts &&
+			subject.kind !== "post"
+		) {
+			const result = await searchRemoteCandidates(
+				config.teamId,
+				client.searchTeamPosts.bind(client),
+				probes,
+				searchedConversations,
+			);
+			remoteSearch = {
+				requested: false,
+				performed: true,
+				reason: remoteReason,
+				queries: result.queries,
+				candidateThreads: result.candidates.length,
+				failures: result.failures,
+			};
+			if (result.failures) {
+				remoteSearchWarnings.push({
+					kind: "remote_search_failed",
+					message: `${result.failures} bounded Mattermost search request(s) failed; local evidence remains available.`,
+				});
+			}
+			const selectedThreadIds = new Set(
+				threads.map(({ threadId }) => threadId),
+			);
+			await hydrateCandidates(
+				result.candidates.filter(
+					({ threadId }) => !selectedThreadIds.has(threadId),
+				),
+			);
+		}
+
 		const freshness = freshnessEvidence(
 			config,
 			store,
 			searchedConversations,
-			dependencies.now?.() ?? Date.now(),
+			observedAt,
 		);
-		const warnings: Warning[] = [];
+		const warnings: Warning[] = [...remoteSearchWarnings];
 		if (input.local && freshness.some(({ stale }) => stale)) {
 			warnings.push({
 				kind: "stale_local_index",
@@ -381,7 +575,7 @@ export async function getMattermostContext(
 			});
 		}
 		warnings.push(...routingHintWarnings(routing));
-		if (input.queries?.length) {
+		if (input.queries?.length || input.probes?.length) {
 			warnings.push(...probeWarnings(probes, matchedProbeValues));
 		}
 		const searchCoverageComplete = freshness.every(
@@ -396,6 +590,8 @@ export async function getMattermostContext(
 		return {
 			subject,
 			probes,
+			filters: resolvedFilters.output,
+			remoteSearch,
 			freshnessMode: input.local ? "local" : input.fresh ? "forced" : "network",
 			complete: searchCoverageComplete,
 			searchCoverageComplete,
@@ -432,10 +628,16 @@ export async function searchMattermost(
 ): Promise<SearchContextResult> {
 	return withResources(dependencies, async (config, store) => {
 		const subject = classifySubject(
-			input.subject ?? input.queries?.[0],
+			input.subject ?? input.queries?.[0] ?? input.probes?.[0]?.value,
 			input.ticket,
 		);
-		const probes = resolveProbes(subject, input.queries);
+		const probes = resolveProbes(
+			subject,
+			input.queries,
+			config.synonyms,
+			input.probes,
+		);
+		const resolvedFilters = resolveSearchFilters(input);
 		const all = configuredConversations(config, store);
 		let routing = routeConversations(config, store, all, {
 			channels: input.channels,
@@ -451,6 +653,15 @@ export async function searchMattermost(
 			]),
 		);
 		let candidates: ThreadCandidate[];
+		const searchRoutedThreads = (currentRouting: RoutingResult) =>
+			searchThreads(
+				store,
+				subject,
+				probes,
+				currentRouting,
+				100,
+				resolvedFilters.storage,
+			);
 		if (subject.kind === "post") {
 			const post = store.getPost(subject.postId);
 			const configuredConversation = post
@@ -463,9 +674,13 @@ export async function searchMattermost(
 				? restrictedConversation
 				: configuredConversation;
 			candidates =
-				post && conversation ? [directCandidate(post, conversation)] : [];
+				post &&
+				conversation &&
+				store.threadMatchesFilters(post.threadId, resolvedFilters.storage)
+					? [directCandidate(post, conversation)]
+					: [];
 		} else {
-			candidates = searchThreads(store, subject, probes, routing);
+			candidates = searchRoutedThreads(routing);
 		}
 		let widened = false;
 		if (!candidates.length && routing.canWiden) {
@@ -475,7 +690,7 @@ export async function searchMattermost(
 				for (const conversation of fallback.conversations) {
 					searched.set(conversation.id, conversation);
 				}
-				candidates = searchThreads(store, subject, probes, routing);
+				candidates = searchRoutedThreads(routing);
 				widened = true;
 			}
 		}
@@ -503,7 +718,7 @@ export async function searchMattermost(
 			});
 		}
 		warnings.push(...routingHintWarnings(routing));
-		if (input.queries?.length) {
+		if (input.queries?.length || input.probes?.length) {
 			warnings.push(
 				...probeWarnings(
 					probes,
@@ -521,6 +736,7 @@ export async function searchMattermost(
 		return {
 			subject,
 			probes,
+			filters: resolvedFilters.output,
 			routing,
 			candidates: candidates.map((candidate) => ({
 				...candidate,
@@ -560,7 +776,12 @@ export async function getMattermostThread(
 		const all = client
 			? await resolveNetworkConversations(config, client)
 			: configuredConversations(config, store);
-		const target = await resolveDirectTarget(subject.postId, store, client);
+		const target = await resolveDirectTarget(
+			subject.postId,
+			store,
+			client,
+			new Set(all.map(({ id }) => id)),
+		);
 		const conversation = all.find(({ id }) => id === target.conversationId);
 		if (!conversation) {
 			throw new ConfigError(
@@ -637,6 +858,100 @@ export async function getMattermostThread(
 	});
 }
 
+async function searchRemoteCandidates(
+	teamId: string,
+	searchTeamPosts: NonNullable<ContextClient["searchTeamPosts"]>,
+	probes: readonly RetrievalProbe[],
+	conversations: readonly RoutedConversation[],
+): Promise<{
+	candidates: ThreadCandidate[];
+	queries: RemoteSearchEvidence["queries"];
+	failures: number;
+}> {
+	const byConversationId = new Map(
+		conversations.map((conversation) => [conversation.id, conversation]),
+	);
+	const byThreadId = new Map<string, ThreadCandidate>();
+	const queries: RemoteSearchEvidence["queries"] = [];
+	let failures = 0;
+	for (const probe of probes.slice(0, MAX_REMOTE_SEARCH_PROBES)) {
+		let response: MattermostPostList;
+		try {
+			response = await searchTeamPosts(teamId, {
+				terms: probe.value,
+				isOrSearch: false,
+				page: 0,
+				perPage: MAX_REMOTE_POSTS_PER_PROBE,
+			});
+		} catch {
+			failures += 1;
+			queries.push({
+				probe: probe.value,
+				...(probe.kind ? { probeKind: probe.kind } : {}),
+				returnedPosts: 0,
+				acceptedPosts: 0,
+			});
+			continue;
+		}
+		let acceptedPosts = 0;
+		for (const [index, postId] of response.order
+			.slice(0, MAX_REMOTE_POSTS_PER_PROBE)
+			.entries()) {
+			const post = response.posts[postId];
+			if (!post || post.delete_at) continue;
+			const conversation = byConversationId.get(post.channel_id);
+			if (!conversation) continue;
+			const indexed = indexedPost(post);
+			const existing = byThreadId.get(indexed.threadId);
+			acceptedPosts += 1;
+			const candidate = remoteSearchCandidate(
+				indexed,
+				conversation,
+				probe.value,
+				index + 1,
+				probe.kind,
+			);
+			if (!existing) {
+				byThreadId.set(candidate.threadId, candidate);
+				continue;
+			}
+			existing.matchingPostIds = [
+				...new Set([...existing.matchingPostIds, ...candidate.matchingPostIds]),
+			].sort();
+			existing.matches = [...existing.matches, ...candidate.matches];
+			existing.latestActivityAt = Math.max(
+				existing.latestActivityAt,
+				candidate.latestActivityAt,
+			);
+			existing.fusionScore =
+				(existing.fusionScore ?? 0) + (candidate.fusionScore ?? 0);
+			existing.scoreVector[7] = new Set(
+				existing.matches.map(({ probe }) => probe),
+			).size;
+			existing.scoreVector[10] = existing.fusionScore;
+			existing.scoreVector[14] = Math.max(
+				existing.scoreVector[14] ?? 0,
+				candidate.latestActivityAt,
+			);
+			existing.scoreVector[15] = existing.latestActivityAt;
+		}
+		queries.push({
+			probe: probe.value,
+			...(probe.kind ? { probeKind: probe.kind } : {}),
+			returnedPosts: response.order.length,
+			acceptedPosts,
+		});
+	}
+	return {
+		candidates: mergeThreadCandidates([...byThreadId.values()]).slice(
+			0,
+			MAX_REMOTE_CANDIDATE_THREADS,
+		),
+		queries,
+		failures,
+	};
+}
+
 async function freshen(
 	config: MattermostConfig,
 	store: MattermostStore,
@@ -679,12 +994,23 @@ async function resolveDirectTarget(
 	postId: string,
 	store: MattermostStore,
 	client?: ContextClient,
+	allowedConversationIds?: ReadonlySet<string>,
 ): Promise<IndexedPost> {
+	const local = store.getPost(postId);
 	if (!client) {
-		const local = store.getPost(postId);
 		if (!local)
 			throw new ConfigError(`Post ${postId} is not indexed.`, "post_not_found");
 		return local;
+	}
+	if (
+		local &&
+		allowedConversationIds &&
+		!allowedConversationIds.has(local.conversationId)
+	) {
+		throw new ConfigError(
+			"The post is outside configured conversations.",
+			"conversation_not_allowed",
+		);
 	}
 	return indexedPost(await client.getPost(postId));
 }
@@ -849,12 +1175,14 @@ function reevaluateCandidate(
 ): { reasons: RankingReason[]; latestActivityAt: number } {
 	const reasons: RankingReason[] = [];
 	if (candidate.reasons.includes("direct_post")) reasons.push("direct_post");
+	if (candidate.reasons.includes("remote_search"))
+		reasons.push("remote_search");
 	if (candidate.reasons.includes("explicit_ticket_relationship")) {
 		reasons.push("explicit_ticket_relationship");
 	}
 	const root = posts.find(({ id }) => id === candidate.rootPostId);
 	const ticketKey = subject.kind === "ticket" ? subject.ticketKey : undefined;
-	if (ticketKey && root && containsText(root.message, ticketKey)) {
+	if (ticketKey && root && containsExactText(root.message, ticketKey)) {
 		reasons.push("ticket_in_root");
 	}
 	if (
@@ -862,32 +1190,61 @@ function reevaluateCandidate(
 		posts.some(
 			(post) =>
 				post.id !== candidate.rootPostId &&
-				containsText(post.message, ticketKey),
+				containsExactText(post.message, ticketKey),
 		)
 	) {
 		reasons.push("ticket_in_reply");
 	}
 	if (
-		probes.some((probe) => {
-			const phrases = probe.phrases.length ? probe.phrases : [probe.value];
-			return phrases.some((phrase) =>
-				posts.some((post) => containsText(post.message, phrase)),
+		candidate.structuredMatches?.some((structured) => {
+			const post = posts.find(({ id }) => id === structured.postId);
+			return Boolean(
+				post &&
+					(containsText(post.message, structured.value) ||
+						post.attachments.some(
+							({ name, deleteAt }) =>
+								!deleteAt && containsText(name, structured.value),
+						)),
 			);
 		})
 	) {
+		reasons.push("structured_entity_match");
+	}
+	const rankingEvidence = evaluateThreadEvidence(
+		posts,
+		candidate.rootPostId,
+		subject,
+		probes,
+	);
+	if (rankingEvidence.subjectInRoot) reasons.push("subject_in_root");
+	if (
+		rankingEvidence.exactPhraseInRootCount > 0 ||
+		rankingEvidence.exactPhraseInReplyCount > 0
+	) {
 		reasons.push("exact_phrase");
 	}
-	if (
-		probes.some(
-			(probe) =>
-				probe.terms.length > 0 &&
-				probe.terms.every((term) =>
-					posts.some((post) => containsText(post.message, term)),
-				),
-		)
-	) {
+	if (rankingEvidence.exactPhraseInRootCount > 0) {
+		reasons.push("exact_phrase_in_root");
+	}
+	if (rankingEvidence.exactPhraseInReplyCount > 0) {
+		reasons.push("exact_phrase_in_reply");
+	}
+	if ((rankingEvidence.exactFullyMatchedProbeCount ?? 0) > 0) {
 		reasons.push("all_terms_in_thread");
 	}
+	if (
+		rankingEvidence.fullyMatchedProbeCount >
+		(rankingEvidence.exactFullyMatchedProbeCount ?? 0)
+	) {
+		reasons.push("all_expanded_terms_in_thread");
+	}
+	if ((rankingEvidence.expansionMatchCount ?? 0) > 0) {
+		reasons.push("query_expansion");
+	}
+	if (rankingEvidence.matchedProbeCount > 1) {
+		reasons.push("multiple_probes_in_thread");
+	}
+	if (candidate.fusionScore) reasons.push("rank_fusion");
 	const routingReason = candidate.reasons.find((reason) =>
 		reason.startsWith("routing_"),
 	);
@@ -904,6 +1261,21 @@ function reevaluateCandidate(
 	};
 }
 
+function postMatchesProbeTerm(
+	message: string,
+	probe: RetrievalProbe,
+	term: string,
+): boolean {
+	return (
+		containsExactText(message, term) ||
+		(probe.expansions ?? []).some(
+			(expansion) =>
+				expansion.sourceTerm === term &&
+				matchesQueryExpansion(message, expansion),
+		)
+	);
+}
+
 function matchingProbeValues(
 	posts: readonly EvidencePost[],
 	probes: readonly RetrievalProbe[],
@@ -913,9 +1285,11 @@ function matchingProbeValues(
 		.filter((probe) =>
 			probe.terms.length
 				? probe.terms.every((term) =>
-						live.some((post) => containsText(post.message, term)),
+						live.some((post) =>
+							postMatchesProbeTerm(post.message, probe, term),
+						),
 					)
-				: live.some((post) => containsText(post.message, probe.value)),
+				: live.some((post) => containsExactText(post.message, probe.value)),
 		)
 		.map(({ value }) => value);
 }
@@ -924,29 +1298,131 @@ function currentMatches(
 	posts: readonly EvidencePost[],
 	probes: readonly RetrievalProbe[],
 	originalMatches: readonly string[],
+	structuredMatches: readonly StructuredSearchMatch[] = [],
 ): string[] {
-	if (!probes.length) return [...originalMatches];
+	if (!probes.length && !structuredMatches.length) return [...originalMatches];
 	const live = posts.filter(({ deleteAt }) => !deleteAt);
 	const matches = new Set<string>();
 	for (const probe of probes) {
 		if (probe.terms.length) {
 			const qualifies = probe.terms.every((term) =>
-				live.some((post) => containsText(post.message, term)),
+				live.some((post) => postMatchesProbeTerm(post.message, probe, term)),
 			);
 			if (qualifies) {
 				for (const post of live) {
-					if (probe.terms.some((term) => containsText(post.message, term))) {
+					if (
+						probe.terms.some((term) =>
+							postMatchesProbeTerm(post.message, probe, term),
+						)
+					) {
 						matches.add(post.id);
 					}
 				}
 			}
 		} else {
 			for (const post of live) {
-				if (containsText(post.message, probe.value)) matches.add(post.id);
+				if (containsExactText(post.message, probe.value)) matches.add(post.id);
 			}
 		}
 	}
+	for (const structured of structuredMatches) {
+		const post = live.find(({ id }) => id === structured.postId);
+		if (
+			post &&
+			(containsText(post.message, structured.value) ||
+				post.attachments.some(({ name, deleteAt }) =>
+					!deleteAt ? containsText(name, structured.value) : false,
+				))
+		) {
+			matches.add(post.id);
+		}
+	}
 	return [...matches].sort();
+}
+
+function resolveSearchFilters(input: SearchFilterInput): {
+	output: SearchFilters;
+	storage: ThreadSearchFilters;
+} {
+	const from = input.from?.trim().replace(/^@/, "") || undefined;
+	const after = parseFilterDate(input.after, "after");
+	const before = parseFilterDate(input.before, "before");
+	if (after !== undefined && before !== undefined && after >= before) {
+		throw new ConfigError(
+			"--after must be earlier than --before.",
+			"invalid_search_filter",
+		);
+	}
+	const file = input.file?.trim() || undefined;
+	const hasFile = Boolean(input.hasFile || file);
+	return {
+		output: {
+			...(from ? { from } : {}),
+			...(after !== undefined ? { after: new Date(after).toISOString() } : {}),
+			...(before !== undefined
+				? { before: new Date(before).toISOString() }
+				: {}),
+			...(hasFile ? { hasFile: true } : {}),
+			...(file ? { file } : {}),
+		},
+		storage: {
+			...(from ? { username: from } : {}),
+			...(after !== undefined ? { after } : {}),
+			...(before !== undefined ? { before } : {}),
+			...(hasFile ? { hasFile: true } : {}),
+			...(file ? { filePattern: file } : {}),
+		},
+	};
+}
+
+function parseFilterDate(
+	value: string | undefined,
+	name: "after" | "before",
+): number | undefined {
+	if (!value) return undefined;
+	const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
+	const offsetDateTime =
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i;
+	if (!dateOnly.test(value) && !offsetDateTime.test(value)) {
+		throw new ConfigError(
+			`Invalid --${name} date: ${value}. Use YYYY-MM-DD or an ISO date-time with Z or an explicit UTC offset.`,
+			"invalid_search_filter",
+		);
+	}
+	const normalized = dateOnly.test(value) ? `${value}T00:00:00Z` : value;
+	const timestamp = Date.parse(normalized);
+	if (!Number.isFinite(timestamp)) {
+		throw new ConfigError(
+			`Invalid --${name} date: ${value}.`,
+			"invalid_search_filter",
+		);
+	}
+	return timestamp;
+}
+
+function evidenceMatchesFilters(
+	posts: readonly EvidencePost[],
+	filters: ThreadSearchFilters,
+): boolean {
+	const postMatches = posts.some(
+		(post) =>
+			!post.deleteAt &&
+			(!filters.username ||
+				post.authorUsername.toLowerCase() ===
+					filters.username.replace(/^@/, "").toLowerCase()) &&
+			(filters.after === undefined || post.createAt >= filters.after) &&
+			(filters.before === undefined || post.createAt < filters.before),
+	);
+	if (!postMatches) return false;
+	if (!filters.hasFile && !filters.filePattern) return true;
+	return posts.some((post) =>
+		post.attachments.some(
+			(attachment) =>
+				!attachment.deleteAt &&
+				(!filters.filePattern ||
+					containsText(attachment.name, filters.filePattern)),
+		),
+	);
 }
 
 function routingHintWarnings(routing: RoutingResult): Warning[] {
@@ -1003,6 +1479,10 @@ function freshnessEvidence(
 
 function containsText(message: string, value: string): boolean {
 	return containsNormalizedText(message, value);
+}
+
+function containsExactText(message: string, value: string): boolean {
+	return containsNormalizedExactText(message, value);
 }
 
 function displayName(user: MattermostUser | undefined): string {

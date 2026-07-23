@@ -6,6 +6,9 @@
 	"reconciliationOverlapMs": 30000,
 	"historyDays": 365,
 	"pageSize": 100,
+	"synonyms": {
+		"репликация": ["replication", "data replication"]
+	},
 	"channels": {
 		"engineering": {
 			"name": "engineering",
