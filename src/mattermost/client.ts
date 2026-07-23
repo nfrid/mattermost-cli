@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { mapWithConcurrency } from "../concurrency.ts";
-import type { MattermostConfig } from "../config.ts";
-import { requireMattermostToken } from "../config.ts";
-import { AppError } from "../errors.ts";
+import type { MattermostConfig } from "../config/config.ts";
+import { requireMattermostToken } from "../config/config.ts";
+import { mapWithConcurrency } from "../shared/concurrency.ts";
+import { AppError } from "../shared/errors.ts";
 import {
 	type MattermostChannel,
 	type MattermostFileInfo,

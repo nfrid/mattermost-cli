@@ -10,19 +10,19 @@
 		".": "./src/index.ts"
 	},
 	"bin": {
-		"mm": "./src/bin.ts"
+		"mm": "./src/cli/bin.ts"
 	},
 	"scripts": {
-		"start": "bun run src/bin.ts",
-		"dev": "bun --watch src/bin.ts",
+		"start": "bun run src/cli/bin.ts",
+		"dev": "bun --watch src/cli/bin.ts",
 		"typecheck": "tsc --noEmit",
 		"lint": "biome lint .",
 		"lint:fix": "biome lint --write .",
 		"format": "biome format .",
 		"format:fix": "biome format --write .",
 		"test": "bun test",
-		"benchmark": "bun run src/benchmark-cli.ts benchmarks/retrieval.v1.json",
-		"benchmark:compare": "bun run src/benchmark-compare-cli.ts",
+		"benchmark": "bun run src/benchmark/benchmark-cli.ts benchmarks/retrieval.v1.json",
+		"benchmark:compare": "bun run src/benchmark/benchmark-compare-cli.ts",
 		"smoke": "MATTERMOST_INTEGRATION=1 bun test src/mattermost/integration.test.ts",
 		"check": "bun run typecheck && biome check . && bun test",
 		"check:release": "bun run check && bun run smoke",

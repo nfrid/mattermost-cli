@@ -1,6 +1,6 @@
-import type { MattermostConfig } from "./config.ts";
+import type { MattermostConfig } from "./config/config.ts";
 import type { MattermostPost, MattermostUser } from "./mattermost/schemas.ts";
-import type { ConversationRecord } from "./storage.ts";
+import type { ConversationRecord } from "./store/index.ts";
 
 export function configFixture(
 	overrides: Partial<MattermostConfig> = {},

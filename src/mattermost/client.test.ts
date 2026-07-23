@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { MattermostConfig } from "../config.ts";
+import type { MattermostConfig } from "../config/config.ts";
 import { MattermostApiError, MattermostClient } from "./client.ts";
 
 const config = {

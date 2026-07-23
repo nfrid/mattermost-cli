@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { AppError } from "./errors.ts";
 import { MattermostClient } from "./mattermost/client.ts";
-import { stableError } from "./results.ts";
+import { stableError } from "./shared/command-result.ts";
+import { AppError } from "./shared/errors.ts";
 
 describe("standalone security boundaries", () => {
 	test("Git ignores local credentials, databases, journals, and downloads", async () => {

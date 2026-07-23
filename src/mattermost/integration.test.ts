@@ -2,17 +2,17 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadMattermostConfig } from "../config.ts";
+import { loadMattermostConfig } from "../config/config.ts";
 import {
 	getMattermostContext,
 	getMattermostThread,
 	searchMattermost,
-} from "../context.ts";
-import { contextResultV1Schema } from "../contracts.ts";
-import { commandSuccess } from "../results.ts";
-import { validateConfiguredConversations } from "../setup.ts";
-import { MattermostStore } from "../storage.ts";
-import { syncConfiguredConversations } from "../sync.ts";
+} from "../context/index.ts";
+import { contextResultV1Schema } from "../contracts/contracts.ts";
+import { commandSuccess } from "../shared/command-result.ts";
+import { MattermostStore } from "../store/index.ts";
+import { validateConfiguredConversations } from "../sync/setup.ts";
+import { syncConfiguredConversations } from "../sync/sync.ts";
 import { MattermostClient } from "./client.ts";
 
 const enabled = Bun.env.MATTERMOST_INTEGRATION === "1";

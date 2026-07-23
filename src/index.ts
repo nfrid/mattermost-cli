@@ -1,21 +1,4 @@
 export {
-	type AgentAnchor,
-	type AgentAnchorKind,
-	type AgentCandidate,
-	type AgentCluster,
-	type AgentCommandResult,
-	type AgentFile,
-	type AgentMessage,
-	type AgentMessageGroup,
-	type AgentOmission,
-	type AgentRelatedTicket,
-	type AgentSkip,
-	type AgentStatus,
-	type AgentThread,
-	type AgentTimelineItem,
-	projectAgentResult,
-} from "./agent.ts";
-export {
 	type ConfiguredChannel,
 	type ConfiguredDirectMessage,
 	type LoadConfigOptions,
@@ -25,7 +8,7 @@ export {
 	normalizeMattermostUrl,
 	type OutputBudgets,
 	requireMattermostToken,
-} from "./config.ts";
+} from "./config/config.ts";
 export {
 	type ContextClient,
 	type ContextDependencies,
@@ -45,7 +28,7 @@ export {
 	searchMattermost,
 	type ThreadInput,
 	type ThreadResult,
-} from "./context.ts";
+} from "./context/index.ts";
 export {
 	type ChannelsResultV1,
 	type ChannelsValidateResultV1,
@@ -69,13 +52,7 @@ export {
 	threadResultV1Schema,
 	type WhoamiResultV1,
 	whoamiResultV1Schema,
-} from "./contracts.ts";
-export {
-	AppError,
-	ConfigError,
-	DatabaseError,
-	type ErrorSource,
-} from "./errors.ts";
+} from "./contracts/contracts.ts";
 export {
 	type ChannelPostOptions,
 	MattermostApiError,
@@ -92,8 +69,31 @@ export type {
 	MattermostUser,
 } from "./mattermost/schemas.ts";
 export {
+	type AgentAnchor,
+	type AgentAnchorKind,
+	type AgentCandidate,
+	type AgentCluster,
+	type AgentCommandResult,
+	type AgentFile,
+	type AgentMessage,
+	type AgentMessageGroup,
+	type AgentOmission,
+	type AgentRelatedTicket,
+	type AgentSkip,
+	type AgentStatus,
+	type AgentThread,
+	type AgentTimelineItem,
+	projectAgentResult,
+} from "./output/agent-view.ts";
+export {
 	type CommandResult,
 	SCHEMA_VERSION,
 	type StableError,
 	type Warning,
-} from "./results.ts";
+} from "./shared/command-result.ts";
+export {
+	AppError,
+	ConfigError,
+	DatabaseError,
+	type ErrorSource,
+} from "./shared/errors.ts";
