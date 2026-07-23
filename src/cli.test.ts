@@ -285,7 +285,7 @@ describe("CLI output", () => {
 			stderr: capture(),
 		});
 		expect(searchOutput.text).toContain(
-			`#payments · https://chat.example.test/_redirect/pl/${rootId} · subject_in_root, exact_phrase, exact_phrase_in_root, all_terms_in_thread, rank_fusion, routing_explicit_channel, latest_activity`,
+			`#payments · https://chat.example.test/_redirect/pl/${rootId} · subject_in_root, exact_phrase, exact_phrase_in_root, all_terms_in_thread, exact_terms_near, rank_fusion, routing_explicit_channel, latest_activity`,
 		);
 		expect(searchOutput.text).toContain(
 			"ranking signals, not required filters",

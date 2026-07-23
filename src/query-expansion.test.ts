@@ -2,30 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { expandQueryTerms, matchesQueryExpansion } from "./query-expansion.ts";
 
 describe("bounded query expansion", () => {
-	test("generates conservative Russian stems and irregular variants", () => {
+	test("keeps irregular variants separate from morphology", () => {
 		const expansions = expandQueryTerms(["уведомление", "клиенту", "пришло"]);
-		expect(expansions).toEqual(
-			expect.arrayContaining([
-				{
-					sourceTerm: "уведомление",
-					value: "уведомлен",
-					kind: "russian_variant",
-					match: "prefix",
-				},
-				{
-					sourceTerm: "клиенту",
-					value: "клиент",
-					kind: "russian_variant",
-					match: "prefix",
-				},
-				{
-					sourceTerm: "пришло",
-					value: "приходят",
-					kind: "synonym",
-					match: "exact",
-				},
-			]),
-		);
+		expect(expansions).toContainEqual({
+			sourceTerm: "пришло",
+			value: "приходят",
+			kind: "synonym",
+			match: "exact",
+		});
+		expect(
+			expansions.some(({ sourceTerm }) =>
+				["уведомление", "клиенту"].includes(sourceTerm),
+			),
+		).toBe(false);
 		expect(expansions.length).toBeLessThanOrEqual(24);
 		expect(
 			expansions.some((expansion) =>
@@ -48,13 +37,65 @@ describe("bounded query expansion", () => {
 		});
 	});
 
-	test("transliterates only bounded mixed-script technical tokens", () => {
+	test("keeps mixed-script correction separate from transliteration", () => {
 		expect(expandQueryTerms(["пэймент-api"])).toContainEqual({
 			sourceTerm: "пэймент-api",
 			value: "peyment-api",
-			kind: "transliteration",
+			kind: "mixed_script",
 			match: "exact",
 		});
-		expect(expandQueryTerms(["дом"])).toEqual([]);
+		expect(expandQueryTerms(["paymеnt"])).toContainEqual({
+			sourceTerm: "paymеnt",
+			value: "payment",
+			kind: "mixed_script",
+			match: "exact",
+		});
+	});
+
+	test("corrects bounded keyboard-layout tokens including Russian punctuation keys", () => {
+		const expansions = expandQueryTerms(
+			["pfdbckb", "gkfnt", "b"],
+			{},
+			{
+				rawText: "pfdbckb gkfnt;b",
+			},
+		);
+		expect(expansions).toContainEqual({
+			sourceTerm: "pfdbckb",
+			value: "зависли",
+			kind: "keyboard_layout",
+			match: "morph",
+		});
+		expect(expansions).toContainEqual({
+			sourceTerm: "gkfnt;b",
+			value: "платежи",
+			kind: "keyboard_layout",
+			match: "morph",
+		});
+		expect(
+			expandQueryTerms(["payment", "callback"]).filter(
+				({ kind }) => kind !== "synonym",
+			),
+		).toEqual([]);
+	});
+
+	test("transliterates bounded Latin spellings without expanding ordinary English", () => {
+		const expansions = expandQueryTerms(["replikaciya", "dannyh"]);
+		expect(expansions).toContainEqual({
+			sourceTerm: "replikaciya",
+			value: "репликация",
+			kind: "transliteration",
+			match: "morph",
+		});
+		expect(expansions).toContainEqual({
+			sourceTerm: "dannyh",
+			value: "данных",
+			kind: "transliteration",
+			match: "morph",
+		});
+		expect(expandQueryTerms(["domain", "payment"])).toEqual([]);
+		expect(
+			expandQueryTerms(["replikaciya"], {}, { enableScriptVariants: false }),
+		).toEqual([]);
 	});
 });

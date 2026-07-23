@@ -9,6 +9,13 @@
 	"synonyms": {
 		"репликация": ["replication", "data replication"]
 	},
+	"concepts": {
+		"duplicate-charge": [
+			"повторное списание",
+			"списали дважды",
+			"duplicate charge"
+		]
+	},
 	"channels": {
 		"engineering": {
 			"name": "engineering",

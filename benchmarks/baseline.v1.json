@@ -1,0 +1,2026 @@
+{
+	"schemaVersion": 1,
+	"fixture": "russian-search-baseline-v2",
+	"runs": 5,
+	"cases": [
+		{
+			"id": "exact-ticket",
+			"queryClass": "exact_ticket_id",
+			"query": "PAY-1777",
+			"expectedThreadIds": ["thread-ticket"],
+			"rankedThreadIds": ["thread-ticket"],
+			"rankingReasons": {
+				"thread-ticket": [
+					"explicit_ticket_relationship",
+					"ticket_in_root",
+					"structured_entity_match",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_ticket_relationship",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 0,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.885,
+			"retrievalRequestsPerProbe": 1,
+			"stable": true
+		},
+		{
+			"id": "exact-phrase",
+			"queryClass": "exact_phrase",
+			"query": "\"connection pool exhausted\"",
+			"expectedThreadIds": [
+				"thread-phrase",
+				"thread-pool-investigation",
+				"thread-weekly-platform-a",
+				"thread-support-digest",
+				"thread-alert-copy"
+			],
+			"rankedThreadIds": [
+				"thread-phrase",
+				"thread-pool-investigation",
+				"thread-support-digest",
+				"thread-weekly-platform-a",
+				"thread-alert-copy"
+			],
+			"rankingReasons": {
+				"thread-phrase": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-pool-investigation": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-support-digest": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-weekly-platform-a": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-alert-copy": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 0,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.956,
+			"retrievalRequestsPerProbe": 6,
+			"stable": true
+		},
+		{
+			"id": "terms-across-replies",
+			"queryClass": "distributed_terms",
+			"query": "timeout retry consumer",
+			"expectedThreadIds": ["thread-distributed", "thread-noise-recent"],
+			"rankedThreadIds": [
+				"thread-distributed",
+				"thread-noise-recent",
+				"thread-russian-agreement",
+				"thread-notification-morphology-deep",
+				"thread-russian-anglicism",
+				"thread-russian-layout"
+			],
+			"rankingReasons": {
+				"thread-distributed": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-noise-recent": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-agreement": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-notification-morphology-deep": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-anglicism": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-layout": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 3,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 1.044,
+			"retrievalRequestsPerProbe": 11,
+			"stable": true
+		},
+		{
+			"id": "engineering-identifiers",
+			"queryClass": "repository_file_symbol",
+			"query": "worker-runtime dispatch.ts scheduleRetry",
+			"expectedThreadIds": [
+				"thread-engineering",
+				"thread-pool-investigation",
+				"thread-support-digest"
+			],
+			"rankedThreadIds": [
+				"thread-engineering",
+				"thread-pool-investigation",
+				"thread-support-digest"
+			],
+			"rankingReasons": {
+				"thread-engineering": [
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-pool-investigation": [
+					"structured_entity_match",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-support-digest": [
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 0,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.523,
+			"retrievalRequestsPerProbe": 7,
+			"stable": true
+		},
+		{
+			"id": "russian-inflection",
+			"queryClass": "russian_inflection",
+			"query": "зависший платеж",
+			"expectedThreadIds": [
+				"thread-russian",
+				"thread-russian-payment-deep",
+				"thread-russian-ops-digest"
+			],
+			"rankedThreadIds": [
+				"thread-russian-participle",
+				"thread-russian",
+				"thread-russian-ops-digest",
+				"thread-russian-payment-deep",
+				"thread-russian-perfective-participle",
+				"thread-russian-typo",
+				"thread-russian-negative-prefix"
+			],
+			"rankingReasons": {
+				"thread-russian-participle": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-ops-digest": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-payment-deep": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-perfective-participle": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-typo": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-negative-prefix": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 0.5,
+			"ndcgAt5": 0.6655677987614051,
+			"ndcgAt10": 0.6655677987614051,
+			"irrelevantThreadsInTop5": 2,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.605,
+			"retrievalRequestsPerProbe": 7,
+			"stable": true
+		},
+		{
+			"id": "mixed-language",
+			"queryClass": "russian_english_terminology",
+			"query": "репликация replication",
+			"expectedThreadIds": ["thread-mixed-language"],
+			"rankedThreadIds": [
+				"thread-mixed-language",
+				"thread-duplicate-key-investigation"
+			],
+			"rankingReasons": {
+				"thread-mixed-language": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-duplicate-key-investigation": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 1,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.977,
+			"retrievalRequestsPerProbe": 9,
+			"stable": true
+		},
+		{
+			"id": "configured-domain-synonym",
+			"queryClass": "configured_russian_english_synonym",
+			"query": "репликейшн",
+			"expectedThreadIds": ["thread-mixed-language"],
+			"rankedThreadIds": [
+				"thread-mixed-language",
+				"thread-duplicate-key-investigation"
+			],
+			"rankingReasons": {
+				"thread-mixed-language": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-duplicate-key-investigation": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 1,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.506,
+			"retrievalRequestsPerProbe": 4,
+			"stable": true
+		},
+		{
+			"id": "misspelled-identifier",
+			"queryClass": "misspelling_incomplete_identifier",
+			"query": "worker-runtim scheduleRetry",
+			"expectedThreadIds": [
+				"thread-engineering",
+				"thread-probes",
+				"thread-callback-deep",
+				"thread-retry-refactor-note"
+			],
+			"rankedThreadIds": [
+				"thread-engineering",
+				"thread-probes",
+				"thread-retry-refactor-note",
+				"thread-callback-deep",
+				"thread-pool-investigation",
+				"thread-support-digest"
+			],
+			"rankingReasons": {
+				"thread-engineering": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-probes": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-retry-refactor-note": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-callback-deep": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-pool-investigation": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-support-digest": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 1,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.489,
+			"retrievalRequestsPerProbe": 6,
+			"stable": true
+		},
+		{
+			"id": "vague-paraphrase",
+			"queryClass": "vague_paraphrase",
+			"query": "customer billed twice when message retried",
+			"expectedThreadIds": ["thread-vague"],
+			"rankedThreadIds": ["thread-vague", "thread-distributed"],
+			"rankingReasons": {
+				"thread-vague": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-distributed": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 1,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 1.06,
+			"retrievalRequestsPerProbe": 17,
+			"stable": true
+		},
+		{
+			"id": "old-over-new",
+			"queryClass": "old_relevant_vs_recent_irrelevant",
+			"query": "deploy lock failure",
+			"expectedThreadIds": ["thread-old-relevant", "thread-new-irrelevant"],
+			"rankedThreadIds": [
+				"thread-new-irrelevant",
+				"thread-old-relevant",
+				"thread-russian-rollback"
+			],
+			"rankingReasons": {
+				"thread-new-irrelevant": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-old-relevant": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-rollback": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 0.7098097413968655,
+			"ndcgAt10": 0.7098097413968655,
+			"irrelevantThreadsInTop5": 1,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.453,
+			"retrievalRequestsPerProbe": 8,
+			"stable": true
+		},
+		{
+			"id": "multi-topic-thread",
+			"queryClass": "unrelated_subtopics",
+			"query": "E_QUEUE_42 QueueSupervisor",
+			"expectedThreadIds": ["thread-multitopic"],
+			"rankedThreadIds": ["thread-multitopic"],
+			"rankingReasons": {
+				"thread-multitopic": [
+					"structured_entity_match",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 0,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.301,
+			"retrievalRequestsPerProbe": 5,
+			"stable": true
+		},
+		{
+			"id": "independent-probes",
+			"queryClass": "independent_repeated_queries",
+			"query": "payment-api | scheduleRetry | callback recovery",
+			"expectedThreadIds": [
+				"thread-probes",
+				"thread-callback-deep",
+				"thread-api-ownership-note",
+				"thread-retry-refactor-note",
+				"thread-engineering",
+				"thread-russian-callback-chart"
+			],
+			"rankedThreadIds": [
+				"thread-probes",
+				"thread-api-ownership-note",
+				"thread-retry-refactor-note",
+				"thread-engineering",
+				"thread-callback-deep",
+				"thread-ticket",
+				"thread-russian-anglicism",
+				"thread-russian-layout",
+				"thread-planning-notes",
+				"thread-dlq-dashboard-note",
+				"thread-russian-callback-chart",
+				"thread-release-status",
+				"thread-russian-payment-deep"
+			],
+			"rankingReasons": {
+				"thread-probes": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-api-ownership-note": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-retry-refactor-note": [
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-engineering": [
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-callback-deep": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-ticket": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-anglicism": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-layout": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-planning-notes": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-dlq-dashboard-note": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-callback-chart": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-release-status": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-payment-deep": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 0.8333333333333334,
+			"recallAt10": 0.8333333333333334,
+			"reciprocalRank": 1,
+			"ndcgAt5": 0.9521901411157033,
+			"ndcgAt10": 0.9200909461904099,
+			"irrelevantThreadsInTop5": 0,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 1.148,
+			"retrievalRequestsPerProbe": 2.667,
+			"stable": true
+		},
+		{
+			"id": "probe-diversity-depth",
+			"queryClass": "multi_probe_thread_depth",
+			"query": "восстановление callback | payment-api | scheduleRetry | dead letter callback",
+			"expectedThreadIds": [
+				"thread-callback-deep",
+				"thread-probes",
+				"thread-release-status",
+				"thread-api-ownership-note",
+				"thread-retry-refactor-note",
+				"thread-dlq-dashboard-note",
+				"thread-planning-notes"
+			],
+			"rankedThreadIds": [
+				"thread-callback-deep",
+				"thread-probes",
+				"thread-retry-refactor-note",
+				"thread-dlq-dashboard-note",
+				"thread-api-ownership-note",
+				"thread-planning-notes",
+				"thread-release-status",
+				"thread-ticket",
+				"thread-russian-anglicism",
+				"thread-russian-layout",
+				"thread-russian-callback-chart",
+				"thread-russian-payment-deep"
+			],
+			"rankingReasons": {
+				"thread-callback-deep": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"query_expansion",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-probes": [
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-retry-refactor-note": [
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-dlq-dashboard-note": [
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-api-ownership-note": [
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-planning-notes": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"query_expansion",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-release-status": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"query_expansion",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-ticket": [
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-anglicism": [
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-layout": [
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-callback-chart": [
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-payment-deep": [
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 0.7142857142857143,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 0,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 1.739,
+			"retrievalRequestsPerProbe": 4,
+			"stable": true
+		},
+		{
+			"id": "root-phrase-vs-incidental-replies",
+			"queryClass": "root_phrase_vs_incidental_reply",
+			"query": "connection pool exhausted",
+			"expectedThreadIds": [
+				"thread-pool-investigation",
+				"thread-weekly-platform-a",
+				"thread-support-digest",
+				"thread-alert-copy"
+			],
+			"rankedThreadIds": [
+				"thread-pool-investigation",
+				"thread-support-digest",
+				"thread-weekly-platform-a",
+				"thread-alert-copy"
+			],
+			"rankingReasons": {
+				"thread-pool-investigation": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-support-digest": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-weekly-platform-a": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-alert-copy": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 0,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.524,
+			"retrievalRequestsPerProbe": 6,
+			"stable": true
+		},
+		{
+			"id": "russian-inflected-probe-depth",
+			"queryClass": "russian_inflected_multi_probe_depth",
+			"query": "зависшие платежи | повторное списание | ретраи callback",
+			"expectedThreadIds": [
+				"thread-russian-payment-deep",
+				"thread-russian-ops-digest",
+				"thread-russian-refund-docs",
+				"thread-russian-callback-chart"
+			],
+			"rankedThreadIds": [
+				"thread-russian-payment-deep",
+				"thread-russian-refund-docs",
+				"thread-russian-callback-chart",
+				"thread-russian",
+				"thread-russian-ops-digest",
+				"thread-russian-anglicism",
+				"thread-retry-refactor-note",
+				"thread-russian-layout",
+				"thread-callback-deep",
+				"thread-dlq-dashboard-note",
+				"thread-probes",
+				"thread-ticket",
+				"thread-planning-notes",
+				"thread-release-status",
+				"thread-russian-agreement",
+				"thread-russian-typo",
+				"thread-russian-negative-prefix",
+				"thread-notification-morphology-deep"
+			],
+			"rankingReasons": {
+				"thread-russian-payment-deep": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-refund-docs": [
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-callback-chart": [
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-ops-digest": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-anglicism": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-retry-refactor-note": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-layout": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-callback-deep": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-dlq-dashboard-note": [
+					"query_expansion",
+					"multiple_probes_in_thread",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-probes": [
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-ticket": [
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-planning-notes": [
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-release-status": [
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-agreement": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-typo": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-negative-prefix": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-notification-morphology-deep": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 0.9948813634680624,
+			"ndcgAt10": 0.9948813634680624,
+			"irrelevantThreadsInTop5": 1,
+			"irrelevantThreadsHydrated": 1,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 2.325,
+			"retrievalRequestsPerProbe": 7,
+			"stable": true
+		},
+		{
+			"id": "russian-prefix-suppressed-by-weak-exact",
+			"queryClass": "russian_inflection_prefix_suppression",
+			"query": "уведомление клиенту не пришло",
+			"expectedThreadIds": [
+				"thread-notification-morphology-deep",
+				"thread-notification-wording",
+				"thread-client-template-wording"
+			],
+			"rankedThreadIds": [
+				"thread-notification-morphology-deep",
+				"thread-client-template-wording",
+				"thread-russian-typo",
+				"thread-notification-wording",
+				"thread-russian-agreement",
+				"thread-russian-payment-deep"
+			],
+			"rankingReasons": {
+				"thread-notification-morphology-deep": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-client-template-wording": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-typo": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-notification-wording": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-agreement": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-payment-deep": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_scope",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 0.9914741064026341,
+			"ndcgAt10": 0.9914741064026341,
+			"irrelevantThreadsInTop5": 2,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 1.316,
+			"retrievalRequestsPerProbe": 18,
+			"stable": true
+		},
+		{
+			"id": "old-deep-investigation-vs-shallow-exact",
+			"queryClass": "old_investigation_vs_recent_shallow_exact",
+			"query": "duplicate key value violates unique constraint",
+			"expectedThreadIds": [
+				"thread-duplicate-key-investigation",
+				"thread-duplicate-key-support-digest",
+				"thread-duplicate-key-alert-copy",
+				"thread-duplicate-key-staging",
+				"thread-duplicate-key-docs",
+				"thread-duplicate-key-agenda"
+			],
+			"rankedThreadIds": [
+				"thread-duplicate-key-alert-copy",
+				"thread-duplicate-key-agenda",
+				"thread-duplicate-key-investigation",
+				"thread-duplicate-key-support-digest",
+				"thread-duplicate-key-docs",
+				"thread-duplicate-key-staging"
+			],
+			"rankingReasons": {
+				"thread-duplicate-key-alert-copy": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-duplicate-key-agenda": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-duplicate-key-investigation": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-duplicate-key-support-digest": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-duplicate-key-docs": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-duplicate-key-staging": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_repository",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 0.8333333333333334,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 0.6647467502342808,
+			"ndcgAt10": 0.6775811295812354,
+			"irrelevantThreadsInTop5": 0,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 1.183,
+			"retrievalRequestsPerProbe": 9,
+			"stable": true
+		},
+		{
+			"id": "russian-verb-forms",
+			"queryClass": "russian_verb_forms",
+			"query": "задача приходит",
+			"expectedThreadIds": ["thread-russian-verbs"],
+			"rankedThreadIds": [
+				"thread-russian-verbs",
+				"thread-russian-verb-prefix-noise",
+				"thread-russian-refund-docs",
+				"thread-client-template-wording",
+				"thread-callback-deep",
+				"thread-notification-morphology-deep",
+				"thread-russian-payment-deep",
+				"thread-russian-perfective-participle",
+				"thread-planning-notes"
+			],
+			"rankingReasons": {
+				"thread-russian-verbs": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-verb-prefix-noise": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-refund-docs": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-client-template-wording": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-callback-deep": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-notification-morphology-deep": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-payment-deep": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-perfective-participle": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-planning-notes": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 4,
+			"irrelevantThreadsHydrated": 1,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 1.342,
+			"retrievalRequestsPerProbe": 15,
+			"stable": true
+		},
+		{
+			"id": "russian-participles",
+			"queryClass": "russian_participles",
+			"query": "зависший воркер",
+			"expectedThreadIds": ["thread-russian-participle"],
+			"rankedThreadIds": [
+				"thread-russian-participle",
+				"thread-russian-perfective-participle",
+				"thread-notification-morphology-deep",
+				"thread-russian",
+				"thread-distributed",
+				"thread-vague",
+				"thread-pool-investigation",
+				"thread-russian-ops-digest",
+				"thread-engineering",
+				"thread-russian-payment-deep",
+				"thread-support-digest"
+			],
+			"rankingReasons": {
+				"thread-russian-participle": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-perfective-participle": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-notification-morphology-deep": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-distributed": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-vague": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-pool-investigation": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-ops-digest": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-engineering": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-payment-deep": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-support-digest": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 4,
+			"irrelevantThreadsHydrated": 1,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.767,
+			"retrievalRequestsPerProbe": 7,
+			"stable": true
+		},
+		{
+			"id": "russian-irregular-rollback",
+			"queryClass": "russian_irregular_forms",
+			"query": "откатили релиз",
+			"expectedThreadIds": ["thread-russian-rollback"],
+			"rankedThreadIds": ["thread-russian-rollback", "thread-release-status"],
+			"rankingReasons": {
+				"thread-russian-rollback": [
+					"all_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-release-status": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 1,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.366,
+			"retrievalRequestsPerProbe": 6,
+			"stable": true
+		},
+		{
+			"id": "russian-technical-anglicisms",
+			"queryClass": "russian_technical_anglicisms",
+			"query": "ретрай callback",
+			"expectedThreadIds": [
+				"thread-russian-anglicism",
+				"thread-russian-layout"
+			],
+			"rankedThreadIds": [
+				"thread-russian-layout",
+				"thread-russian-anglicism",
+				"thread-probes",
+				"thread-ticket",
+				"thread-retry-refactor-note",
+				"thread-planning-notes",
+				"thread-dlq-dashboard-note",
+				"thread-russian-callback-chart",
+				"thread-release-status",
+				"thread-callback-deep",
+				"thread-russian-payment-deep"
+			],
+			"rankingReasons": {
+				"thread-russian-layout": [
+					"subject_in_root",
+					"exact_phrase",
+					"exact_phrase_in_root",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-anglicism": [
+					"exact_phrase",
+					"exact_phrase_in_reply",
+					"all_terms_in_thread",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-probes": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-ticket": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-retry-refactor-note": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-planning-notes": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-dlq-dashboard-note": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-callback-chart": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-release-status": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-callback-deep": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-payment-deep": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 0.8339912323981488,
+			"ndcgAt10": 0.8339912323981488,
+			"irrelevantThreadsInTop5": 3,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.836,
+			"retrievalRequestsPerProbe": 7,
+			"stable": true
+		},
+		{
+			"id": "russian-adjective-agreement",
+			"queryClass": "russian_adjective_agreement",
+			"query": "плановое обновление клиенту",
+			"expectedThreadIds": [
+				"thread-russian-agreement",
+				"thread-notification-morphology-deep"
+			],
+			"rankedThreadIds": [
+				"thread-russian-agreement",
+				"thread-notification-morphology-deep",
+				"thread-client-template-wording",
+				"thread-weekly-platform-a",
+				"thread-alert-copy",
+				"thread-dlq-dashboard-note",
+				"thread-support-digest",
+				"thread-duplicate-key-investigation"
+			],
+			"rankingReasons": {
+				"thread-russian-agreement": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-notification-morphology-deep": [
+					"all_expanded_terms_in_thread",
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-client-template-wording": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-weekly-platform-a": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-alert-copy": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-dlq-dashboard-note": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-support-digest": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-duplicate-key-investigation": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 3,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.997,
+			"retrievalRequestsPerProbe": 9,
+			"stable": true
+		},
+		{
+			"id": "wrong-keyboard-layout-baseline",
+			"queryClass": "wrong_keyboard_layout",
+			"query": "htnhfq callback",
+			"expectedThreadIds": ["thread-russian-layout"],
+			"rankedThreadIds": [
+				"thread-probes",
+				"thread-ticket",
+				"thread-russian-anglicism",
+				"thread-retry-refactor-note",
+				"thread-russian-layout",
+				"thread-planning-notes",
+				"thread-dlq-dashboard-note",
+				"thread-russian-callback-chart",
+				"thread-release-status",
+				"thread-callback-deep",
+				"thread-russian-payment-deep"
+			],
+			"rankingReasons": {
+				"thread-probes": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-ticket": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-anglicism": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-retry-refactor-note": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-layout": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-planning-notes": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-dlq-dashboard-note": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-callback-chart": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-release-status": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-callback-deep": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-payment-deep": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 0.2,
+			"ndcgAt5": 0.38685280723454163,
+			"ndcgAt10": 0.38685280723454163,
+			"irrelevantThreadsInTop5": 4,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.903,
+			"retrievalRequestsPerProbe": 8,
+			"stable": true
+		},
+		{
+			"id": "russian-natural-word-typo",
+			"queryClass": "russian_word_typo",
+			"query": "уведомленеи платеж",
+			"expectedThreadIds": ["thread-russian-typo"],
+			"rankedThreadIds": [
+				"thread-russian-typo",
+				"thread-russian",
+				"thread-duplicate-key-alert-copy",
+				"thread-client-template-wording",
+				"thread-notification-wording",
+				"thread-russian-negative-prefix",
+				"thread-russian-ops-digest",
+				"thread-russian-agreement",
+				"thread-russian-payment-deep",
+				"thread-notification-morphology-deep"
+			],
+			"rankingReasons": {
+				"thread-russian-typo": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-duplicate-key-alert-copy": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-client-template-wording": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-notification-wording": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-negative-prefix": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-ops-digest": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-agreement": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-payment-deep": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-notification-morphology-deep": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 4,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 1.187,
+			"retrievalRequestsPerProbe": 9,
+			"stable": true
+		},
+		{
+			"id": "russian-prefix-negative",
+			"queryClass": "russian_prefix_negative",
+			"query": "зависший платеж",
+			"expectedThreadIds": ["thread-russian", "thread-russian-payment-deep"],
+			"rankedThreadIds": [
+				"thread-russian-participle",
+				"thread-russian",
+				"thread-russian-ops-digest",
+				"thread-russian-payment-deep",
+				"thread-russian-perfective-participle",
+				"thread-russian-typo",
+				"thread-russian-negative-prefix"
+			],
+			"rankingReasons": {
+				"thread-russian-participle": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-ops-digest": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-payment-deep": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-perfective-participle": [
+					"query_expansion",
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-typo": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				],
+				"thread-russian-negative-prefix": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 0.5,
+			"ndcgAt5": 0.6509209298071325,
+			"ndcgAt10": 0.6509209298071325,
+			"irrelevantThreadsInTop5": 3,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.537,
+			"retrievalRequestsPerProbe": 7,
+			"stable": true
+		},
+		{
+			"id": "russian-perfective-participle",
+			"queryClass": "russian_perfective_participle",
+			"query": "бросивший",
+			"expectedThreadIds": ["thread-russian-perfective-participle"],
+			"rankedThreadIds": ["thread-russian-perfective-participle"],
+			"rankingReasons": {
+				"thread-russian-perfective-participle": [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity"
+				]
+			},
+			"recallAt5": 1,
+			"recallAt10": 1,
+			"reciprocalRank": 1,
+			"ndcgAt5": 1,
+			"ndcgAt10": 1,
+			"irrelevantThreadsInTop5": 0,
+			"irrelevantThreadsHydrated": 0,
+			"contextBudgetBeforeFirstRelevant": 0,
+			"meanQueryDurationMs": 0.395,
+			"retrievalRequestsPerProbe": 4,
+			"stable": true
+		}
+	],
+	"summary": {
+		"caseCount": 26,
+		"meanRecallAt5": 0.9761904761904762,
+		"meanRecallAt10": 0.9935897435897437,
+		"meanReciprocalRank": 0.9307692307692308,
+		"meanNdcgAt5": 0.9173244181084143,
+		"meanNdcgAt10": 0.9165834636630935,
+		"irrelevantThreadsInTop5": 39,
+		"irrelevantThreadsHydrated": 3,
+		"meanContextBudgetBeforeFirstRelevant": 0,
+		"meanQueryDurationMs": 0.899,
+		"meanRetrievalRequestsPerProbe": 7.68,
+		"indexSizeBytes": 225280,
+		"stable": true
+	}
+}

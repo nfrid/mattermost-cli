@@ -1,10 +1,20 @@
-import type { MattermostConfig } from "./config.ts";
+import type { MattermostConfig, SearchConcepts } from "./config.ts";
 import { ConfigError } from "./errors.ts";
 import {
 	expandQueryTerms,
 	matchesQueryExpansion,
 	type QueryExpansion,
 } from "./query-expansion.ts";
+import {
+	type ConceptQueryMatch,
+	conceptQueryMatches,
+	conceptToken,
+} from "./search-concepts.ts";
+import {
+	analyzeSearchToken,
+	morphSearchTerms,
+	normalizeMorphText,
+} from "./search-token-normalization.ts";
 import type {
 	ConversationRecord,
 	IndexedPost,
@@ -14,6 +24,7 @@ import type {
 	ThreadSearchFilters,
 	TicketThreadRelationship,
 } from "./storage.ts";
+import { trigramSearchPolicy } from "./storage.ts";
 import {
 	containsNormalizedExactText,
 	normalizeSearchText,
@@ -23,9 +34,48 @@ import {
 const POST_ID_PATTERN = /^[a-z0-9]{26}$/;
 const TICKET_PATTERN = /^[A-Z][A-Z0-9]+-\d+$/i;
 const PERMALINK_PATTERN = /\/pl\/([a-z0-9]{26})(?:[/?#]|$)/i;
-const MAX_TERM_SEARCHES_PER_PROBE = 8;
+const MAX_TERMS_PER_PROBE = 8;
+const MAX_MORPH_TERMS_PER_PROBE = 8;
+const MAX_CONCEPT_MATCHES_PER_PROBE = 8;
+const MAX_FUZZY_REQUESTS_PER_PROBE = 8;
+const MAX_CANDIDATES_PER_SOURCE = 100;
 const MIN_PREFIX_LENGTH = 4;
+const MAX_PROXIMITY_TERMS_PER_PROBE = 8;
+const MAX_PROXIMITY_TOKENS_PER_POST = 512;
+const MIN_SUBSTANTIVE_POST_TOKENS = 6;
+const MIN_SUBSTANTIVE_THREAD_POSTS = 3;
+const MAX_SUBSTANTIVE_THREAD_DEPTH = 5;
+const NEAR_TOKEN_WINDOW = 8;
 export const RRF_RANK_CONSTANT = 60;
+
+export type RankFusionSource =
+	| LexicalRetrievalSource
+	| "synonym"
+	| "keyboard_layout"
+	| "transliteration"
+	| "mixed_script";
+
+export type TypoFallbackKind =
+	| "identifier"
+	| "latin_technical_term"
+	| "russian_word";
+
+export const RETRIEVAL_SOURCE_WEIGHTS: Readonly<
+	Record<RankFusionSource, number>
+> = Object.freeze({
+	exact_phrase: 1,
+	strict_fts: 0.9,
+	term_fts: 0.75,
+	broad_fts: 0.55,
+	morph_fts: 0.45,
+	concept_fts: 0.35,
+	synonym: 0.35,
+	keyboard_layout: 0.25,
+	transliteration: 0.25,
+	mixed_script: 0.25,
+	prefix_fts: 0.2,
+	trigram: 0.15,
+});
 
 export type MattermostSubject =
 	| { kind: "ticket"; ticketKey: string; raw: string }
@@ -51,6 +101,8 @@ export interface RetrievalProbe {
 	value: string;
 	phrases: string[];
 	terms: string[];
+	morphTerms?: string[];
+	conceptMatches?: ConceptQueryMatch[];
 	kind?: AgentProbeKind;
 	expansions?: QueryExpansion[];
 }
@@ -114,8 +166,22 @@ export type RankingReason =
 	| "exact_phrase_in_reply"
 	| "all_terms_in_thread"
 	| "all_expanded_terms_in_thread"
+	| "exact_terms_near"
+	| "morph_terms_near"
+	| "exact_terms_same_post"
+	| "morph_terms_same_post"
+	| "expanded_terms_same_post"
+	| "terms_across_thread"
+	| "morphology_match"
+	| "concept_match"
+	| "keyboard_layout_match"
+	| "transliteration_match"
+	| "mixed_script_match"
+	| "prefix_match"
+	| "typo_match"
 	| "query_expansion"
 	| "multiple_probes_in_thread"
+	| "substantive_thread_depth"
 	| "rank_fusion"
 	| "routing_explicit_channel"
 	| "routing_scope"
@@ -125,6 +191,14 @@ export type RankingReason =
 	| "routing_widened"
 	| "conversation_priority"
 	| "latest_activity";
+
+export type ProximityKind =
+	| "exact_terms_near"
+	| "morph_terms_near"
+	| "exact_terms_same_post"
+	| "morph_terms_same_post"
+	| "expanded_terms_same_post"
+	| "terms_across_thread";
 
 export interface ThreadRankingEvidence {
 	subjectInRoot: boolean;
@@ -136,10 +210,24 @@ export interface ThreadRankingEvidence {
 	exactFullyMatchedProbeCount?: number;
 	totalProbeCount: number;
 	matchedTermCount: number;
+	morphMatchedTermCount?: number;
 	expandedMatchedTermCount?: number;
+	fallbackMatchedTermCount?: number;
 	expansionMatchCount?: number;
+	exactTermsInSamePost?: number;
+	morphTermsInSamePost?: number;
+	matchedTermsInSamePost?: number;
+	minimumTokenWindow?: number | null;
+	matchedTermsAcrossThread?: number;
+	matchedTermsInRoot?: number;
+	matchedTermsInReplies?: number;
+	distinctProbeCoverage?: number;
+	proximityKind?: ProximityKind;
 	totalTermCount: number;
 	matchingPostCount: number;
+	threadPostCount?: number;
+	substantivePostCount?: number;
+	threadDepthScore?: number;
 	latestRelevantMatchAt: number | null;
 }
 
@@ -154,13 +242,22 @@ export interface StructuredSearchMatch {
 export interface RankFusionContribution {
 	probe: string;
 	probeKind?: AgentProbeKind;
-	source: LexicalRetrievalSource;
+	source: RankFusionSource;
 	sourceQuery: string;
 	rank: number;
+	weight: number;
 	score: number;
+	conceptId?: string;
+	sourcePhrase?: string;
+	fallbackKind?: TypoFallbackKind;
+	minimumSimilarity?: number;
+	maximumEditDistance?: number;
 }
 
 type ScoreVector = [
+	number,
+	number,
+	number,
 	number,
 	number,
 	number,
@@ -186,10 +283,13 @@ interface CandidateRank {
 	ticketInReply: number;
 	subjectInRoot: number;
 	exactPhraseInRoot: number;
+	proximityTier: number;
+	proximityWindow: number;
 	fullProbeCoverage: number;
 	matchedProbeCount: number;
 	structuredMatchCount: number;
 	routing: number;
+	threadDepth: number;
 	fusion: number;
 	matchedTermCount: number;
 	exactPhraseInReply: number;
@@ -275,6 +375,7 @@ export function resolveProbes(
 		| Readonly<Record<string, readonly string[]>>
 		| undefined = {},
 	agentProbes: readonly AgentProbeInput[] = [],
+	configuredConcepts: Readonly<SearchConcepts> | undefined = {},
 ): RetrievalProbe[] {
 	const subjectValues =
 		subject.kind === "ticket"
@@ -325,12 +426,30 @@ export function resolveProbes(
 						.map(normalizeSearchText)
 						.filter((term) => term.length > 1 && !STOP_WORDS.has(term)),
 				),
-			];
-			const expansions = expandQueryTerms(terms, configuredSynonyms ?? {});
+			].slice(0, MAX_TERMS_PER_PROBE);
+			const expansions = expandQueryTerms(terms, configuredSynonyms ?? {}, {
+				rawText: value,
+				enableScriptVariants:
+					(!kind ||
+						!["repository", "file_path", "symbol", "error_message"].includes(
+							kind,
+						)) &&
+					!/(?:https?:\/\/|[/\\])/iu.test(value),
+			});
+			const morphTerms = morphSearchTerms(terms).slice(
+				0,
+				MAX_MORPH_TERMS_PER_PROBE,
+			);
+			const conceptMatches = conceptQueryMatches(
+				value,
+				configuredConcepts ?? {},
+			).slice(0, MAX_CONCEPT_MATCHES_PER_PROBE);
 			return {
 				value,
 				phrases,
 				terms,
+				...(morphTerms.length ? { morphTerms } : {}),
+				...(conceptMatches.length ? { conceptMatches } : {}),
 				...(kind ? { kind } : {}),
 				...(expansions.length ? { expansions } : {}),
 			};
@@ -541,51 +660,127 @@ export function searchThreads(
 	);
 	const grouped = new Map<string, CandidateGroup>();
 	const conversationIds = [...conversations.keys()];
+	const sourceLimit = Math.min(limit, MAX_CANDIDATES_PER_SOURCE);
 	for (const probe of probes) {
-		const requests = deduplicateLexicalRequests(strongLexicalRequests(probe));
-		for (const request of requests) {
-			const hits = store.search(request.value, conversationIds, limit, {
-				source: request.source,
+		const requestCache = new Map<
+			string,
+			ReturnType<MattermostStore["search"]>
+		>();
+		const retrieve = (
+			source: LexicalRetrievalSource,
+			value: string,
+			fusionSource: RankFusionSource = source,
+			fusionMetadata: Pick<
+				RankFusionContribution,
+				| "conceptId"
+				| "sourcePhrase"
+				| "fallbackKind"
+				| "minimumSimilarity"
+				| "maximumEditDistance"
+			> = {},
+		): ReturnType<MattermostStore["search"]> => {
+			const key = `${source}\0${normalizeSearchText(value)}`;
+			const cached = requestCache.get(key);
+			if (cached) {
+				addLexicalHits(grouped, probe, cached, fusionSource, fusionMetadata);
+				return cached;
+			}
+			const hits = store.search(value, conversationIds, sourceLimit, {
+				source,
 				filters,
 			});
-			addLexicalHits(grouped, probe, hits);
+			requestCache.set(key, hits);
+			addLexicalHits(grouped, probe, hits, fusionSource, fusionMetadata);
+			return hits;
+		};
+		const coveredTerms = new Set<string>();
+		const requests = deduplicateLexicalRequests(strongLexicalRequests(probe));
+		for (const request of requests) {
+			const hits = retrieve(request.source, request.value);
+			if (!hits.length) continue;
+			if (request.source === "term_fts") {
+				coveredTerms.add(normalizeSearchText(request.value));
+			} else if (
+				request.source === "exact_phrase" ||
+				request.source === "strict_fts"
+			) {
+				for (const term of probe.terms) coveredTerms.add(term);
+			}
+		}
+		const morphEntries = probe.terms
+			.map((term) => ({ term, morph: morphSearchTerms([term])[0] }))
+			.filter(
+				(entry): entry is { term: string; morph: string } =>
+					entry.morph !== undefined,
+			)
+			.slice(0, MAX_MORPH_TERMS_PER_PROBE);
+		if (morphEntries.length > 1) {
+			const hits = retrieve(
+				"morph_fts",
+				morphEntries.map(({ morph }) => morph).join(" "),
+			);
+			if (hits.length) {
+				for (const { term } of morphEntries) coveredTerms.add(term);
+			}
+		}
+		for (const morph of new Set(morphEntries.map((entry) => entry.morph))) {
+			const hits = retrieve("morph_fts", morph);
+			if (!hits.length) continue;
+			for (const entry of morphEntries) {
+				if (entry.morph === morph) coveredTerms.add(entry.term);
+			}
+		}
+		for (const concept of probe.conceptMatches ?? []) {
+			retrieve("concept_fts", conceptToken(concept.conceptId), "concept_fts", {
+				conceptId: concept.conceptId,
+				sourcePhrase: concept.sourcePhrase,
+			});
+		}
+		for (const expansion of probe.expansions ?? []) {
+			const source =
+				expansion.match === "morph"
+					? "morph_fts"
+					: expansion.match === "prefix"
+						? "prefix_fts"
+						: expansion.value.includes(" ")
+							? "exact_phrase"
+							: "term_fts";
+			const value =
+				expansion.match === "morph"
+					? normalizeMorphText(expansion.value)
+					: expansion.value;
+			if (value) retrieve(source, value, expansion.kind);
+		}
+		let fuzzyRequestCount = 0;
+		for (const term of probe.terms) {
 			if (
-				request.source !== "term_fts" ||
-				hits.length > 0 ||
-				request.value.length < MIN_PREFIX_LENGTH
+				coveredTerms.has(term) ||
+				fuzzyRequestCount >= MAX_FUZZY_REQUESTS_PER_PROBE
 			) {
 				continue;
 			}
-			const prefixHits = store.search(request.value, conversationIds, limit, {
-				source: "prefix_fts",
-				filters,
-			});
-			addLexicalHits(grouped, probe, prefixHits);
-			if (!prefixHits.length) {
-				addLexicalHits(
-					grouped,
-					probe,
-					store.search(request.value, conversationIds, limit, {
-						source: "trigram",
-						filters,
-					}),
-				);
+			const fallback = typoFallbackPolicy(probe, term);
+			if (!fallback) continue;
+			if (probe.conceptMatches?.length && fallback.kind === "russian_word") {
+				continue;
 			}
-		}
-		for (const expansion of probe.expansions ?? []) {
-			addLexicalHits(
-				grouped,
-				probe,
-				store.search(expansion.value, conversationIds, limit, {
-					source:
-						expansion.match === "prefix"
-							? "prefix_fts"
-							: expansion.value.includes(" ")
-								? "exact_phrase"
-								: "term_fts",
-					filters,
-				}),
-			);
+			if (fallback.allowPrefix && term.length >= MIN_PREFIX_LENGTH) {
+				fuzzyRequestCount += 1;
+				const prefixHits = retrieve("prefix_fts", term, "prefix_fts", {
+					fallbackKind: fallback.kind,
+				});
+				if (prefixHits.length) continue;
+			}
+			const trigram = trigramSearchPolicy(term);
+			if (!trigram || fuzzyRequestCount >= MAX_FUZZY_REQUESTS_PER_PROBE) {
+				continue;
+			}
+			fuzzyRequestCount += 1;
+			retrieve("trigram", term, "trigram", {
+				fallbackKind: fallback.kind,
+				minimumSimilarity: trigram.minimumSimilarity,
+				maximumEditDistance: trigram.maximumEditDistance,
+			});
 		}
 		addStructuredHits(
 			grouped,
@@ -594,7 +789,7 @@ export function searchThreads(
 			store.searchEntities(
 				probe.value,
 				conversationIds,
-				limit,
+				sourceLimit,
 				filters,
 				probe.kind === "participant" ? "username" : undefined,
 			),
@@ -640,8 +835,11 @@ function scoreVector(rank: Partial<CandidateRank>): ScoreVector {
 		rank.exactPhraseInRoot ?? 0,
 		rank.fullProbeCoverage ?? 0,
 		rank.matchedProbeCount ?? 0,
+		rank.proximityTier ?? 0,
+		rank.proximityWindow ?? 0,
 		rank.structuredMatchCount ?? 0,
 		rank.routing ?? 0,
+		rank.threadDepth ?? 0,
 		rank.fusion ?? 0,
 		rank.matchedTermCount ?? 0,
 		rank.exactPhraseInReply ?? 0,
@@ -732,6 +930,32 @@ export function directCandidate(
 	};
 }
 
+function typoFallbackPolicy(
+	probe: RetrievalProbe,
+	term: string,
+): { kind: TypoFallbackKind; allowPrefix: boolean } | null {
+	const rawToken = (probe.value.match(/[\p{L}\p{N}_-]+/gu) ?? []).find(
+		(value) => normalizeSearchText(value) === term,
+	);
+	const explicitIdentifier =
+		probe.kind !== undefined &&
+		["repository", "file_path", "symbol", "service"].includes(probe.kind);
+	const identifierShape =
+		/[-_\d]/u.test(rawToken ?? term) ||
+		/[a-z][A-Z]/u.test(rawToken ?? "") ||
+		/[A-Z][a-z]+[A-Z]/u.test(rawToken ?? "");
+	if (explicitIdentifier || identifierShape) {
+		return { kind: "identifier", allowPrefix: true };
+	}
+	if (/^[\p{Script=Cyrillic}]+$/u.test(term)) {
+		return { kind: "russian_word", allowPrefix: false };
+	}
+	if (/^[a-z]+$/u.test(term) && term.length >= 5) {
+		return { kind: "latin_technical_term", allowPrefix: false };
+	}
+	return null;
+}
+
 function strongLexicalRequests(
 	probe: RetrievalProbe,
 ): Array<{ source: LexicalRetrievalSource; value: string }> {
@@ -751,7 +975,7 @@ function strongLexicalRequests(
 			{ source: "broad_fts", value: allTerms },
 		);
 	}
-	for (const term of probe.terms.slice(0, MAX_TERM_SEARCHES_PER_PROBE)) {
+	for (const term of probe.terms.slice(0, MAX_TERMS_PER_PROBE)) {
 		requests.push({ source: "term_fts", value: term });
 	}
 	if (!requests.length) {
@@ -776,6 +1000,15 @@ function addLexicalHits(
 	grouped: Map<string, CandidateGroup>,
 	probe: RetrievalProbe,
 	hits: ReturnType<MattermostStore["search"]>,
+	fusionSource: RankFusionSource,
+	fusionMetadata: Pick<
+		RankFusionContribution,
+		| "conceptId"
+		| "sourcePhrase"
+		| "fallbackKind"
+		| "minimumSimilarity"
+		| "maximumEditDistance"
+	> = {},
 ): void {
 	const rankedThreads = new Map<string, number>();
 	for (const hit of hits) {
@@ -795,15 +1028,22 @@ function addLexicalHits(
 		});
 		const rank = rankedThreads.get(hit.post.threadId);
 		if (rank !== undefined) {
-			const key = `${probe.kind ?? ""}\0${probe.value}\0${hit.source}\0${hit.sourceQuery}`;
-			group.fusionContributions.set(key, {
+			const key = `${probe.kind ?? ""}\0${probe.value}\0${fusionSource}`;
+			const weight = RETRIEVAL_SOURCE_WEIGHTS[fusionSource];
+			const contribution: RankFusionContribution = {
 				probe: probe.value,
 				...(probe.kind ? { probeKind: probe.kind } : {}),
-				source: hit.source,
+				source: fusionSource,
 				sourceQuery: hit.sourceQuery,
 				rank,
-				score: reciprocalRankFusionScore(rank),
-			});
+				weight,
+				score: weightedReciprocalRankFusionScore(fusionSource, rank),
+				...fusionMetadata,
+			};
+			const current = group.fusionContributions.get(key);
+			if (!current || isStrongerFusionContribution(contribution, current)) {
+				group.fusionContributions.set(key, contribution);
+			}
 		}
 		grouped.set(hit.post.threadId, group);
 	}
@@ -862,6 +1102,30 @@ export function reciprocalRankFusionScore(
 	return 1 / (rankConstant + rank);
 }
 
+export function weightedReciprocalRankFusionScore(
+	source: RankFusionSource,
+	rank: number,
+	rankConstant = RRF_RANK_CONSTANT,
+): number {
+	return (
+		RETRIEVAL_SOURCE_WEIGHTS[source] *
+		reciprocalRankFusionScore(rank, rankConstant)
+	);
+}
+
+function isStrongerFusionContribution(
+	candidate: RankFusionContribution,
+	current: RankFusionContribution,
+): boolean {
+	return (
+		candidate.score > current.score ||
+		(candidate.score === current.score &&
+			(candidate.rank < current.rank ||
+				(candidate.rank === current.rank &&
+					candidate.sourceQuery.localeCompare(current.sourceQuery) < 0)))
+	);
+}
+
 function candidateFromGroup(
 	store: MattermostStore,
 	threadId: string,
@@ -895,6 +1159,7 @@ function candidateFromGroup(
 		root.id,
 		subject,
 		probes,
+		group.matches,
 	);
 	const exactPhrase =
 		rankingEvidence.exactPhraseInRootCount > 0 ||
@@ -917,6 +1182,18 @@ function candidateFromGroup(
 		(total, contribution) => total + contribution.score,
 		0,
 	);
+	if (
+		!(rankingEvidence.threadDepthScore ?? 0) &&
+		(rankingEvidence.substantivePostCount ?? 0) >=
+			MIN_SUBSTANTIVE_THREAD_POSTS &&
+		fusionContributions.some(
+			({ source, sourcePhrase }) =>
+				source === "concept_fts" && Boolean(sourcePhrase?.trim().includes(" ")),
+		)
+	) {
+		rankingEvidence.threadDepthScore =
+			rankingEvidence.substantivePostCount ?? 0;
+	}
 	const latestActivityAt = Math.max(
 		...thread.map((post) =>
 			Math.max(post.createAt, post.updateAt, post.deleteAt),
@@ -937,11 +1214,38 @@ function candidateFromGroup(
 	}
 	if (allTerms) reasons.push("all_terms_in_thread");
 	if (allExpandedTerms) reasons.push("all_expanded_terms_in_thread");
+	if (rankingEvidence.proximityKind) {
+		reasons.push(rankingEvidence.proximityKind);
+	}
+	if ((rankingEvidence.morphMatchedTermCount ?? 0) > 0) {
+		reasons.push("morphology_match");
+	}
+	if (fusionContributions.some(({ source }) => source === "concept_fts")) {
+		reasons.push("concept_match");
+	}
+	if (fusionContributions.some(({ source }) => source === "keyboard_layout")) {
+		reasons.push("keyboard_layout_match");
+	}
+	if (fusionContributions.some(({ source }) => source === "transliteration")) {
+		reasons.push("transliteration_match");
+	}
+	if (fusionContributions.some(({ source }) => source === "mixed_script")) {
+		reasons.push("mixed_script_match");
+	}
+	if (fusionContributions.some(({ source }) => source === "prefix_fts")) {
+		reasons.push("prefix_match");
+	}
+	if (fusionContributions.some(({ source }) => source === "trigram")) {
+		reasons.push("typo_match");
+	}
 	if ((rankingEvidence.expansionMatchCount ?? 0) > 0) {
 		reasons.push("query_expansion");
 	}
 	if (rankingEvidence.matchedProbeCount > 1) {
 		reasons.push("multiple_probes_in_thread");
+	}
+	if ((rankingEvidence.threadDepthScore ?? 0) > 0) {
+		reasons.push("substantive_thread_depth");
 	}
 	if (fusionScore) reasons.push("rank_fusion");
 	reasons.push(routeReason(conversation));
@@ -969,6 +1273,8 @@ function candidateFromGroup(
 			ticketInReply: replyHasTicket ? 1 : 0,
 			subjectInRoot: rankingEvidence.subjectInRoot ? 1 : 0,
 			exactPhraseInRoot: rankingEvidence.exactPhraseInRootCount,
+			proximityTier: proximityTier(rankingEvidence.proximityKind),
+			proximityWindow: proximityWindowRank(rankingEvidence),
 			fullProbeCoverage:
 				(rankingEvidence.exactFullyMatchedProbeCount ?? 0) * 2 +
 				(rankingEvidence.fullyMatchedProbeCount -
@@ -976,6 +1282,7 @@ function candidateFromGroup(
 			matchedProbeCount: rankingEvidence.matchedProbeCount,
 			structuredMatchCount: structuredMatches.length,
 			routing: routeWeight(conversation),
+			threadDepth: rankingEvidence.threadDepthScore ?? 0,
 			fusion: fusionScore,
 			matchedTermCount: rankingEvidence.matchedTermCount,
 			exactPhraseInReply: rankingEvidence.exactPhraseInReplyCount,
@@ -1011,6 +1318,7 @@ export function evaluateThreadEvidence(
 	rootPostId: string,
 	subject: MattermostSubject,
 	probes: readonly RetrievalProbe[],
+	matches: readonly SearchMatch[] = [],
 ): ThreadRankingEvidence {
 	const root = thread.find(({ id }) => id === rootPostId);
 	const replies = thread.filter(({ id }) => id !== rootPostId);
@@ -1025,22 +1333,57 @@ export function evaluateThreadEvidence(
 		const exactMatchedTerms = probe.terms.filter((term) =>
 			thread.some((post) => contains(post.message, term)),
 		);
+		const morphMatchedTerms = probe.terms.filter((term) => {
+			if (exactMatchedTerms.includes(term)) return false;
+			const [morphTerm] = morphSearchTerms([term]);
+			return Boolean(
+				morphTerm &&
+					thread.some((post) =>
+						containsNormalizedExactText(
+							normalizeMorphText(post.message),
+							morphTerm,
+						),
+					),
+			);
+		});
 		const matchingExpansions = (probe.expansions ?? []).filter((expansion) =>
 			thread.some((post) => matchesQueryExpansion(post.message, expansion)),
 		);
 		const expandedMatchedTerms = probe.terms.filter(
 			(term) =>
 				!exactMatchedTerms.includes(term) &&
+				!morphMatchedTerms.includes(term) &&
 				matchingExpansions.some(({ sourceTerm }) => sourceTerm === term),
 		);
+		const fallbackMatchedTerms =
+			probe.conceptMatches?.length || probe.expansions?.length
+				? []
+				: probe.terms.filter(
+						(term) =>
+							!exactMatchedTerms.includes(term) &&
+							!morphMatchedTerms.includes(term) &&
+							!expandedMatchedTerms.includes(term) &&
+							matches.some(
+								(match) =>
+									match.probe === probe.value &&
+									(match.lexicalSource === "prefix_fts" ||
+										match.lexicalSource === "trigram") &&
+									normalizeSearchText(match.sourceQuery ?? "") === term,
+							),
+					);
 		const matchedTermCount =
-			exactMatchedTerms.length + expandedMatchedTerms.length;
+			exactMatchedTerms.length +
+			morphMatchedTerms.length +
+			expandedMatchedTerms.length +
+			fallbackMatchedTerms.length;
 		return {
 			phraseInRoot,
 			phraseInReplies,
 			matchedTermCount,
 			exactMatchedTermCount: exactMatchedTerms.length,
+			morphMatchedTermCount: morphMatchedTerms.length,
 			expandedMatchedTermCount: expandedMatchedTerms.length,
+			fallbackMatchedTermCount: fallbackMatchedTerms.length,
 			expansionMatchCount: matchingExpansions.length,
 			matched: phraseInRoot || phraseInReplies || matchedTermCount > 0,
 			exactFullyMatched:
@@ -1054,18 +1397,38 @@ export function evaluateThreadEvidence(
 				(probe.terms.length > 0 && matchedTermCount === probe.terms.length),
 		};
 	});
+	const proximity = evaluateProximityEvidence(thread, rootPostId, probes);
 	const relevantPosts = thread.filter((post) =>
 		probes.some((probe) => {
 			const phrases = probe.phrases.length ? probe.phrases : [probe.value];
 			return (
 				phrases.some((phrase) => contains(post.message, phrase)) ||
 				probe.terms.some((term) => contains(post.message, term)) ||
+				(probe.morphTerms ?? []).some((term) =>
+					containsNormalizedExactText(normalizeMorphText(post.message), term),
+				) ||
 				(probe.expansions ?? []).some((expansion) =>
 					matchesQueryExpansion(post.message, expansion),
+				) ||
+				matches.some(
+					(match) =>
+						match.postId === post.id &&
+						match.probe === probe.value &&
+						(match.lexicalSource === "prefix_fts" ||
+							match.lexicalSource === "trigram"),
 				)
 			);
 		}),
 	);
+	const exactPhraseInRootCount = probeEvidence.filter(
+		({ phraseInRoot }) => phraseInRoot,
+	).length;
+	const substantivePostCount = boundedSubstantivePostCount(thread);
+	const threadDepthScore =
+		exactPhraseInRootCount > 0 &&
+		substantivePostCount >= MIN_SUBSTANTIVE_THREAD_POSTS
+			? substantivePostCount
+			: 0;
 	const subjectPhrases =
 		subject.kind === "text"
 			? probes[0]?.phrases.length
@@ -1079,9 +1442,7 @@ export function evaluateThreadEvidence(
 		subjectInReplies: subjectPhrases.some((phrase) =>
 			replies.some((post) => contains(post.message, phrase)),
 		),
-		exactPhraseInRootCount: probeEvidence.filter(
-			({ phraseInRoot }) => phraseInRoot,
-		).length,
+		exactPhraseInRootCount,
 		exactPhraseInReplyCount: probeEvidence.filter(
 			({ phraseInReplies }) => phraseInReplies,
 		).length,
@@ -1097,19 +1458,31 @@ export function evaluateThreadEvidence(
 			(total, evidence) => total + evidence.matchedTermCount,
 			0,
 		),
+		morphMatchedTermCount: probeEvidence.reduce(
+			(total, evidence) => total + evidence.morphMatchedTermCount,
+			0,
+		),
 		expandedMatchedTermCount: probeEvidence.reduce(
 			(total, evidence) => total + evidence.expandedMatchedTermCount,
+			0,
+		),
+		fallbackMatchedTermCount: probeEvidence.reduce(
+			(total, evidence) => total + evidence.fallbackMatchedTermCount,
 			0,
 		),
 		expansionMatchCount: probeEvidence.reduce(
 			(total, evidence) => total + evidence.expansionMatchCount,
 			0,
 		),
+		...proximity,
 		totalTermCount: probes.reduce(
 			(total, probe) => total + probe.terms.length,
 			0,
 		),
 		matchingPostCount: relevantPosts.length,
+		threadPostCount: thread.length,
+		substantivePostCount,
+		threadDepthScore,
 		latestRelevantMatchAt: relevantPosts.length
 			? Math.max(
 					...relevantPosts.map((post) =>
@@ -1118,6 +1491,373 @@ export function evaluateThreadEvidence(
 				)
 			: null,
 	};
+}
+
+function boundedSubstantivePostCount(
+	thread: readonly Pick<IndexedPost, "message">[],
+): number {
+	let count = 0;
+	for (const { message } of thread) {
+		const tokenCount = (message.match(/[\p{L}\p{N}]+/gu) ?? []).length;
+		if (tokenCount < MIN_SUBSTANTIVE_POST_TOKENS) continue;
+		count += 1;
+		if (count === MAX_SUBSTANTIVE_THREAD_DEPTH) break;
+	}
+	return count;
+}
+
+interface ProximityToken {
+	exact: string;
+	morph: string;
+}
+
+interface TermPositions {
+	exact: number[];
+	morph: number[];
+	matched: number[];
+}
+
+interface ProximityTermMatcher {
+	exactValues: ReadonlySet<string>;
+	morphValues: ReadonlySet<string>;
+	expandedExactValues: ReadonlySet<string>;
+	expandedMorphValues: ReadonlySet<string>;
+	expandedPrefixes: readonly string[];
+}
+
+interface PostProbeProximity {
+	exactCount: number;
+	morphCount: number;
+	matchedCount: number;
+	exactWindow: number | null;
+	morphWindow: number | null;
+	matchedWindow: number | null;
+	matchedTermIndexes: Set<number>;
+}
+
+function evaluateProximityEvidence(
+	thread: readonly Pick<IndexedPost, "id" | "message">[],
+	rootPostId: string,
+	probes: readonly RetrievalProbe[],
+): Pick<
+	ThreadRankingEvidence,
+	| "exactTermsInSamePost"
+	| "morphTermsInSamePost"
+	| "matchedTermsInSamePost"
+	| "minimumTokenWindow"
+	| "matchedTermsAcrossThread"
+	| "matchedTermsInRoot"
+	| "matchedTermsInReplies"
+	| "distinctProbeCoverage"
+	| "proximityKind"
+> {
+	let exactTermsInSamePost = 0;
+	let morphTermsInSamePost = 0;
+	let matchedTermsInSamePost = 0;
+	let matchedTermsAcrossThread = 0;
+	let matchedTermsInRoot = 0;
+	let matchedTermsInReplies = 0;
+	let distinctProbeCoverage = 0;
+	let minimumTokenWindow: number | null = null;
+	let bestKind: ProximityKind | undefined;
+	if (probes.length === 1 && (probes[0]?.terms.length ?? 0) < 2) return {};
+	const tokenizedPosts = thread.map((post) => ({
+		post,
+		tokens: proximityTokens(post.message),
+	}));
+
+	for (const probe of probes) {
+		const terms = probe.terms.slice(0, MAX_PROXIMITY_TERMS_PER_PROBE);
+		if (!terms.length) continue;
+		const matchers = terms.map((term) => proximityTermMatcher(probe, term));
+		const postEvidence = tokenizedPosts.map(({ post, tokens }) => ({
+			post,
+			evidence: postProbeProximity(tokens, matchers),
+		}));
+		exactTermsInSamePost += Math.max(
+			0,
+			...postEvidence.map(({ evidence }) => evidence.exactCount),
+		);
+		morphTermsInSamePost += Math.max(
+			0,
+			...postEvidence.map(({ evidence }) => evidence.morphCount),
+		);
+		matchedTermsInSamePost += Math.max(
+			0,
+			...postEvidence.map(({ evidence }) => evidence.matchedCount),
+		);
+
+		const across = unionTermIndexes(
+			postEvidence.map(({ evidence }) => evidence),
+		);
+		const inRoot = unionTermIndexes(
+			postEvidence
+				.filter(({ post }) => post.id === rootPostId)
+				.map(({ evidence }) => evidence),
+		);
+		const inReplies = unionTermIndexes(
+			postEvidence
+				.filter(({ post }) => post.id !== rootPostId)
+				.map(({ evidence }) => evidence),
+		);
+		matchedTermsAcrossThread += across.size;
+		matchedTermsInRoot += inRoot.size;
+		matchedTermsInReplies += inReplies.size;
+		if (across.size) distinctProbeCoverage += 1;
+
+		for (const { evidence } of postEvidence) {
+			if (
+				evidence.matchedWindow !== null &&
+				(minimumTokenWindow === null ||
+					evidence.matchedWindow < minimumTokenWindow)
+			) {
+				minimumTokenWindow = evidence.matchedWindow;
+			}
+		}
+		if (
+			terms.length < 2 ||
+			probe.terms.length > MAX_PROXIMITY_TERMS_PER_PROBE
+		) {
+			continue;
+		}
+		const probeKind = proximityKindForProbe(postEvidence, terms.length, across);
+		if (proximityTier(probeKind) > proximityTier(bestKind))
+			bestKind = probeKind;
+	}
+
+	return {
+		exactTermsInSamePost,
+		morphTermsInSamePost,
+		matchedTermsInSamePost,
+		minimumTokenWindow,
+		matchedTermsAcrossThread,
+		matchedTermsInRoot,
+		matchedTermsInReplies,
+		distinctProbeCoverage,
+		...(bestKind ? { proximityKind: bestKind } : {}),
+	};
+}
+
+function postProbeProximity(
+	tokens: readonly ProximityToken[],
+	matchers: readonly ProximityTermMatcher[],
+): PostProbeProximity {
+	const positions = matchers.map((matcher) => termPositions(tokens, matcher));
+	const exactCount = positions.filter(({ exact }) => exact.length).length;
+	const morphCount = positions.filter(({ morph }) => morph.length).length;
+	const matchedCount = positions.filter(({ matched }) => matched.length).length;
+	return {
+		exactCount,
+		morphCount,
+		matchedCount,
+		exactWindow:
+			exactCount === matchers.length
+				? minimumCoveringWindow(positions.map(({ exact }) => exact))
+				: null,
+		morphWindow:
+			morphCount === matchers.length
+				? minimumCoveringWindow(positions.map(({ morph }) => morph))
+				: null,
+		matchedWindow:
+			matchedCount === matchers.length
+				? minimumCoveringWindow(positions.map(({ matched }) => matched))
+				: null,
+		matchedTermIndexes: new Set(
+			positions.flatMap(({ matched }, index) =>
+				matched.length ? [index] : [],
+			),
+		),
+	};
+}
+
+function proximityTokens(message: string): ProximityToken[] {
+	return (message.match(/[\p{L}\p{N}]+/gu) ?? [])
+		.slice(0, MAX_PROXIMITY_TOKENS_PER_POST)
+		.map((token) => {
+			const analysis = analyzeSearchToken(token);
+			return {
+				exact: analysis.normalized,
+				morph: analysis.stem ?? analysis.normalized,
+			};
+		});
+}
+
+function proximityTermMatcher(
+	probe: RetrievalProbe,
+	term: string,
+): ProximityTermMatcher {
+	const expandedExactValues = new Set<string>();
+	const expandedMorphValues = new Set<string>();
+	const expandedPrefixes: string[] = [];
+	for (const expansion of probe.expansions ?? []) {
+		if (expansion.sourceTerm !== term) continue;
+		const values = normalizeSearchText(expansion.value).match(
+			/[\p{L}\p{N}_-]+/gu,
+		);
+		if (values?.length !== 1 || !values[0]) continue;
+		if (expansion.match === "morph") {
+			const morph = morphSearchTerms([values[0]])[0];
+			if (morph) expandedMorphValues.add(morph);
+		} else if (expansion.match === "prefix") {
+			expandedPrefixes.push(values[0]);
+		} else {
+			expandedExactValues.add(values[0]);
+		}
+	}
+	return {
+		exactValues: new Set([normalizeSearchText(term)]),
+		morphValues: new Set(morphSearchTerms([term])),
+		expandedExactValues,
+		expandedMorphValues,
+		expandedPrefixes,
+	};
+}
+
+function termPositions(
+	tokens: readonly ProximityToken[],
+	matcher: ProximityTermMatcher,
+): TermPositions {
+	const exact: number[] = [];
+	const morph: number[] = [];
+	const matched: number[] = [];
+	for (const [index, token] of tokens.entries()) {
+		const exactMatch = matcher.exactValues.has(token.exact);
+		const morphMatch = exactMatch || matcher.morphValues.has(token.morph);
+		const expandedMatch =
+			matcher.expandedExactValues.has(token.exact) ||
+			matcher.expandedMorphValues.has(token.morph) ||
+			matcher.expandedPrefixes.some((prefix) => token.exact.startsWith(prefix));
+		if (exactMatch) exact.push(index);
+		if (morphMatch) morph.push(index);
+		if (morphMatch || expandedMatch) matched.push(index);
+	}
+	return { exact, morph, matched };
+}
+
+function minimumCoveringWindow(
+	positionGroups: readonly number[][],
+): number | null {
+	if (
+		!positionGroups.length ||
+		positionGroups.some((positions) => !positions.length)
+	) {
+		return null;
+	}
+	const occurrences = positionGroups
+		.flatMap((positions, termIndex) =>
+			positions.map((position) => ({ position, termIndex })),
+		)
+		.sort((left, right) => left.position - right.position);
+	const counts = new Map<number, number>();
+	let covered = 0;
+	let left = 0;
+	let minimum = Number.POSITIVE_INFINITY;
+	for (let right = 0; right < occurrences.length; right += 1) {
+		const rightOccurrence = occurrences[right];
+		if (!rightOccurrence) continue;
+		const count = counts.get(rightOccurrence.termIndex) ?? 0;
+		if (!count) covered += 1;
+		counts.set(rightOccurrence.termIndex, count + 1);
+		while (covered === positionGroups.length && left <= right) {
+			const leftOccurrence = occurrences[left];
+			if (!leftOccurrence) break;
+			minimum = Math.min(
+				minimum,
+				rightOccurrence.position - leftOccurrence.position + 1,
+			);
+			const leftCount = counts.get(leftOccurrence.termIndex) ?? 0;
+			if (leftCount <= 1) {
+				counts.delete(leftOccurrence.termIndex);
+				covered -= 1;
+			} else {
+				counts.set(leftOccurrence.termIndex, leftCount - 1);
+			}
+			left += 1;
+		}
+	}
+	return Number.isFinite(minimum) ? minimum : null;
+}
+
+function unionTermIndexes(
+	evidence: readonly PostProbeProximity[],
+): Set<number> {
+	return new Set(
+		evidence.flatMap(({ matchedTermIndexes }) => [...matchedTermIndexes]),
+	);
+}
+
+function proximityKindForProbe(
+	postEvidence: readonly { evidence: PostProbeProximity }[],
+	termCount: number,
+	across: ReadonlySet<number>,
+): ProximityKind | undefined {
+	if (
+		postEvidence.some(
+			({ evidence }) =>
+				evidence.exactCount === termCount &&
+				evidence.exactWindow !== null &&
+				evidence.exactWindow <= NEAR_TOKEN_WINDOW,
+		)
+	) {
+		return "exact_terms_near";
+	}
+	if (
+		postEvidence.some(
+			({ evidence }) =>
+				evidence.morphCount === termCount &&
+				evidence.morphWindow !== null &&
+				evidence.morphWindow <= NEAR_TOKEN_WINDOW,
+		)
+	) {
+		return "morph_terms_near";
+	}
+	if (postEvidence.some(({ evidence }) => evidence.exactCount === termCount)) {
+		return "exact_terms_same_post";
+	}
+	if (postEvidence.some(({ evidence }) => evidence.morphCount === termCount)) {
+		return "morph_terms_same_post";
+	}
+	if (
+		postEvidence.some(({ evidence }) => evidence.matchedCount === termCount)
+	) {
+		return "expanded_terms_same_post";
+	}
+	if (across.size === termCount) return "terms_across_thread";
+	return undefined;
+}
+
+function proximityTier(kind: ProximityKind | undefined): number {
+	switch (kind) {
+		case "exact_terms_near":
+			return 6;
+		case "morph_terms_near":
+			return 5;
+		case "exact_terms_same_post":
+			return 4;
+		case "morph_terms_same_post":
+			return 3;
+		case "expanded_terms_same_post":
+		case "terms_across_thread":
+			return 1;
+		default:
+			return 0;
+	}
+}
+
+function proximityWindowRank(evidence: ThreadRankingEvidence): number {
+	if (
+		!evidence.minimumTokenWindow ||
+		!evidence.proximityKind ||
+		![
+			"exact_terms_near",
+			"morph_terms_near",
+			"exact_terms_same_post",
+			"morph_terms_same_post",
+		].includes(evidence.proximityKind)
+	) {
+		return 0;
+	}
+	return MAX_PROXIMITY_TOKENS_PER_POST + 1 - evidence.minimumTokenWindow;
 }
 
 export function mergeThreadCandidates(
@@ -1313,10 +2053,12 @@ function deduplicateMatches(matches: readonly SearchMatch[]): SearchMatch[] {
 
 function compareMatchEvidence(left: SearchMatch, right: SearchMatch): number {
 	const priority: Record<LexicalRetrievalSource, number> = {
-		exact_phrase: 5,
-		strict_fts: 4,
-		broad_fts: 3,
-		term_fts: 2,
+		exact_phrase: 7,
+		strict_fts: 6,
+		term_fts: 5,
+		broad_fts: 4,
+		morph_fts: 3,
+		concept_fts: 2,
 		prefix_fts: 1,
 		trigram: 0,
 	};

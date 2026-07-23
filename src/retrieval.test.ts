@@ -2,10 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
 	classifySubject,
 	configuredConversations,
+	evaluateThreadEvidence,
+	RETRIEVAL_SOURCE_WEIGHTS,
 	reciprocalRankFusionScore,
 	resolveProbes,
 	routeConversations,
 	searchThreads,
+	weightedReciprocalRankFusionScore,
 	widenedRouting,
 } from "./retrieval.ts";
 import { MattermostStore } from "./storage.ts";
@@ -44,9 +47,17 @@ describe("subject and probe resolution", () => {
 		});
 	});
 
-	test("computes reciprocal rank contributions deterministically", () => {
+	test("computes weighted reciprocal rank contributions deterministically", () => {
 		expect(reciprocalRankFusionScore(1)).toBe(1 / 61);
 		expect(reciprocalRankFusionScore(5, 10)).toBe(1 / 15);
+		expect(weightedReciprocalRankFusionScore("exact_phrase", 1)).toBe(1 / 61);
+		expect(weightedReciprocalRankFusionScore("morph_fts", 1)).toBe(0.45 / 61);
+		expect(RETRIEVAL_SOURCE_WEIGHTS.term_fts).toBeGreaterThan(
+			RETRIEVAL_SOURCE_WEIGHTS.morph_fts,
+		);
+		expect(RETRIEVAL_SOURCE_WEIGHTS.morph_fts).toBeGreaterThan(
+			RETRIEVAL_SOURCE_WEIGHTS.prefix_fts,
+		);
 		expect(() => reciprocalRankFusionScore(0)).toThrow();
 	});
 
@@ -137,6 +148,56 @@ describe("subject and probe resolution", () => {
 		]);
 	});
 
+	test("bounds probe terms and proximity analysis for oversized input", () => {
+		const subject = classifySubject(
+			"one two three four five six seven eight nine",
+		);
+		const probes = resolveProbes(subject);
+		expect(probes[0]?.terms).toHaveLength(8);
+		expect(probes[0]?.terms).not.toContain("nine");
+		const evidence = evaluateThreadEvidence(
+			[
+				{
+					id: "root",
+					message: `${"filler ".repeat(513)} one two three four five six seven eight nine`,
+					createAt: 1,
+					updateAt: 0,
+					deleteAt: 0,
+				},
+			],
+			"root",
+			subject,
+			probes,
+		);
+		expect(evidence).toMatchObject({
+			exactTermsInSamePost: 0,
+			morphTermsInSamePost: 0,
+			matchedTermsInSamePost: 0,
+			minimumTokenWindow: null,
+		});
+		expect(evidence.proximityKind).toBeUndefined();
+	});
+
+	test("bounds concept matches per probe deterministically", () => {
+		const concepts = Object.fromEntries(
+			Array.from({ length: 10 }, (_, index) => [
+				`concept-${index}`,
+				[`phrase ${index}`, `alternate ${index}`],
+			]),
+		);
+		const subject = classifySubject(
+			Array.from({ length: 10 }, (_, index) => `phrase ${index}`).join(" "),
+		);
+		expect(
+			resolveProbes(subject, [], {}, [], concepts)[0]?.conceptMatches,
+		).toEqual(
+			Array.from({ length: 8 }, (_, index) => ({
+				conceptId: `concept-${index}`,
+				sourcePhrase: `phrase ${index}`,
+			})),
+		);
+	});
+
 	test("filters Russian stop words and normalizes Cyrillic case and ё", () => {
 		const subject = classifySubject("Что это за платёж и почему он не прошёл");
 		expect(resolveProbes(subject)).toEqual([
@@ -144,6 +205,7 @@ describe("subject and probe resolution", () => {
 				value: "Что это за платёж и почему он не прошёл",
 				phrases: [],
 				terms: ["платеж", "прошел"],
+				morphTerms: ["платеж", "прошел"],
 			},
 		]);
 	});
@@ -355,7 +417,18 @@ describe("routing and ranking", () => {
 			threadId: "distributed-root",
 			matchingPostIds: ["distributed-payment", "distributed-timeout"],
 		});
-		expect(candidates[0]?.reasons).toContain("all_terms_in_thread");
+		expect(candidates[0]?.reasons).toEqual(
+			expect.arrayContaining(["all_terms_in_thread", "terms_across_thread"]),
+		);
+		expect(candidates[0]?.rankingEvidence).toMatchObject({
+			exactTermsInSamePost: 1,
+			matchedTermsAcrossThread: 2,
+			matchedTermsInRoot: 0,
+			matchedTermsInReplies: 2,
+			distinctProbeCoverage: 1,
+			proximityKind: "terms_across_thread",
+			minimumTokenWindow: null,
+		});
 		expect(
 			new Set(
 				candidates[0]?.matches.flatMap(
@@ -449,6 +522,62 @@ describe("routing and ranking", () => {
 		store.close();
 	});
 
+	test("prefers a bounded same-post token window over a newer glossary list", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const platform = conversationFixture("platform", "channel-platform");
+		store.writePage({
+			conversation: platform,
+			posts: [
+				postFixture({
+					id: "proximity-investigation",
+					channel_id: platform.id,
+					message:
+						"В цепочке timeout callback и повторное списание появились вместе",
+					create_at: 10,
+				}),
+				postFixture({
+					id: "proximity-glossary",
+					channel_id: platform.id,
+					message:
+						"timeout в отчёте callback в документации повторное списание в словаре",
+					create_at: 20,
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject("timeout callback повторное списание");
+		const candidates = searchThreads(
+			store,
+			subject,
+			resolveProbes(subject),
+			routing,
+		);
+		expect(candidates.map(({ threadId }) => threadId)).toEqual([
+			"proximity-investigation",
+			"proximity-glossary",
+		]);
+		expect(candidates[0]?.reasons).toContain("exact_terms_near");
+		expect(candidates[0]?.rankingEvidence).toMatchObject({
+			exactTermsInSamePost: 4,
+			morphTermsInSamePost: 4,
+			matchedTermsInSamePost: 4,
+			minimumTokenWindow: 5,
+			matchedTermsAcrossThread: 4,
+			matchedTermsInRoot: 4,
+			matchedTermsInReplies: 0,
+			distinctProbeCoverage: 1,
+			proximityKind: "exact_terms_near",
+		});
+		expect(candidates[1]?.rankingEvidence?.minimumTokenWindow).toBe(8);
+		store.close();
+	});
+
 	test("fuses independent source-local thread ranks before weak recency", async () => {
 		const store = await MattermostStore.open(":memory:");
 		const platform = conversationFixture("platform", "channel-platform");
@@ -513,12 +642,100 @@ describe("routing and ranking", () => {
 		expect(first[0]?.fusionScore).toBeGreaterThan(
 			first[1]?.fusionScore ?? Number.POSITIVE_INFINITY,
 		);
-		expect(first[0]?.fusionContributions).toHaveLength(5);
-		expect(first[1]?.fusionContributions).toHaveLength(3);
+		expect(first[0]?.fusionContributions).toHaveLength(4);
+		expect(first[1]?.fusionContributions).toHaveLength(2);
+		expect(first[0]?.fusionContributions?.map(({ source }) => source)).toEqual([
+			"broad_fts",
+			"exact_phrase",
+			"strict_fts",
+			"term_fts",
+		]);
+		expect(
+			first[0]?.fusionContributions?.find(
+				({ source }) => source === "term_fts",
+			),
+		).toMatchObject({ weight: 0.75, rank: 2, score: 0.75 / 62 });
 		expect(first[0]?.reasons).toContain("rank_fusion");
 		expect(second.map(({ fusionScore }) => fusionScore)).toEqual(
 			first.map(({ fusionScore }) => fusionScore),
 		);
+		store.close();
+	});
+
+	test("uses bounded substantive thread depth after equivalent lexical evidence", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const platform = conversationFixture("platform", "channel-platform");
+		store.writePage({
+			conversation: platform,
+			posts: [
+				postFixture({
+					id: "deep-investigation",
+					channel_id: platform.id,
+					message:
+						"duplicate key value violates unique constraint расследование",
+					create_at: 10,
+				}),
+				...[
+					"Подтвердили влияние на создание новых профилей после импорта архива",
+					"Сверили sequence с максимальным идентификатором на основной реплике",
+					"Исправление выполнили внутри транзакции и проверили конкурентную запись",
+					"Добавили защитную проверку и наблюдаем метрики после выкладки",
+				].map((message, index) =>
+					postFixture({
+						id: `deep-investigation-${index}`,
+						root_id: "deep-investigation",
+						channel_id: platform.id,
+						message,
+						create_at: 11 + index,
+					}),
+				),
+				postFixture({
+					id: "shallow-alert-copy",
+					channel_id: platform.id,
+					message:
+						"duplicate key value violates unique constraint расследование",
+					create_at: 100,
+				}),
+				postFixture({
+					id: "shallow-alert-copy-reply",
+					root_id: "shallow-alert-copy",
+					channel_id: platform.id,
+					message: "Меняем только заголовок алерта без изменения обработчика",
+					create_at: 101,
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject(
+			"duplicate key value violates unique constraint расследование",
+		);
+		const candidates = searchThreads(
+			store,
+			subject,
+			resolveProbes(subject),
+			routing,
+		);
+		expect(candidates.map(({ threadId }) => threadId)).toEqual([
+			"deep-investigation",
+			"shallow-alert-copy",
+		]);
+		expect(candidates[0]?.reasons).toContain("substantive_thread_depth");
+		expect(candidates[0]?.rankingEvidence).toMatchObject({
+			threadPostCount: 5,
+			substantivePostCount: 5,
+			threadDepthScore: 5,
+		});
+		expect(candidates[1]?.rankingEvidence).toMatchObject({
+			threadPostCount: 2,
+			substantivePostCount: 2,
+			threadDepthScore: 0,
+		});
 		store.close();
 	});
 
@@ -571,6 +788,57 @@ describe("routing and ranking", () => {
 		store.close();
 	});
 
+	test("keeps an exact Russian term above a morphology-only match", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture("payments", "channel-payments");
+		store.writePage({
+			conversation: payments,
+			posts: [
+				postFixture({
+					id: "exact-inflection",
+					channel_id: payments.id,
+					message: "Зависшими платежами уже занимается команда",
+					create_at: 10,
+				}),
+				postFixture({
+					id: "morphology-only",
+					channel_id: payments.id,
+					message: "Зависший платеж уже проверяет команда",
+					create_at: 20,
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject("зависшими платежами");
+		const candidates = searchThreads(
+			store,
+			subject,
+			resolveProbes(subject),
+			routing,
+		);
+		expect(candidates.map(({ threadId }) => threadId)).toEqual([
+			"exact-inflection",
+			"morphology-only",
+		]);
+		expect(
+			candidates[0]?.fusionContributions?.find(
+				({ source }) => source === "strict_fts",
+			),
+		).toMatchObject({ weight: 0.9 });
+		expect(
+			candidates[1]?.fusionContributions?.find(
+				({ source }) => source === "morph_fts",
+			),
+		).toMatchObject({ weight: 0.45 });
+		store.close();
+	});
+
 	test("ranks complete Russian inflection evidence above shallow exact wording", async () => {
 		const store = await MattermostStore.open(":memory:");
 		const payments = conversationFixture("payments", "channel-payments");
@@ -600,12 +868,9 @@ describe("routing and ranking", () => {
 			{ channels: ["payments"] },
 		);
 		const subject = classifySubject("уведомление клиенту не пришло");
-		const candidates = searchThreads(
-			store,
-			subject,
-			resolveProbes(subject),
-			routing,
-		);
+		const probes = resolveProbes(subject);
+		expect(probes[0]?.morphTerms).toEqual(["уведомлен", "клиент", "пришл"]);
+		const candidates = searchThreads(store, subject, probes, routing);
 		expect(candidates.map(({ threadId }) => threadId)).toEqual([
 			"russian-morphology-deep",
 			"russian-wording-shallow",
@@ -613,13 +878,225 @@ describe("routing and ranking", () => {
 		expect(candidates[0]).toMatchObject({
 			reasons: expect.arrayContaining([
 				"all_expanded_terms_in_thread",
+				"morphology_match",
 				"query_expansion",
 			]),
 			rankingEvidence: {
 				exactFullyMatchedProbeCount: 0,
 				fullyMatchedProbeCount: 1,
-				expandedMatchedTermCount: 3,
+				morphMatchedTermCount: 2,
+				expandedMatchedTermCount: 1,
 			},
+		});
+		expect(
+			candidates[0]?.fusionContributions?.filter(
+				({ source }) => source === "morph_fts",
+			),
+		).toEqual([
+			expect.objectContaining({
+				source: "morph_fts",
+				weight: 0.45,
+				score: 0.45 / 61,
+			}),
+		]);
+		expect(
+			candidates[0]?.fusionContributions?.some(
+				({ source, sourceQuery }) =>
+					source === "morph_fts" && sourceQuery === "пришл",
+			),
+		).toBe(false);
+		expect(
+			candidates[0]?.fusionContributions?.find(
+				({ source }) => source === "synonym",
+			),
+		).toMatchObject({ weight: 0.35 });
+		store.close();
+	});
+
+	test("retrieves layout, transliteration, and mixed-script corrections as separate weak channels", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture("payments", "channel-payments");
+		store.writePage({
+			conversation: payments,
+			posts: [
+				postFixture({
+					id: "layout-target",
+					channel_id: payments.id,
+					message: "Нужен ретрай callback после таймаута",
+				}),
+				postFixture({
+					id: "transliteration-target",
+					channel_id: payments.id,
+					message: "Проверили репликацию данных",
+				}),
+				postFixture({
+					id: "mixed-script-target",
+					channel_id: payments.id,
+					message: "payment callback завершился",
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		for (const [query, threadId, source, reason] of [
+			[
+				"htnhfq callback",
+				"layout-target",
+				"keyboard_layout",
+				"keyboard_layout_match",
+			],
+			[
+				"replikaciya dannyh",
+				"transliteration-target",
+				"transliteration",
+				"transliteration_match",
+			],
+			[
+				"paymеnt callback",
+				"mixed-script-target",
+				"mixed_script",
+				"mixed_script_match",
+			],
+		] as const) {
+			const subject = classifySubject(query);
+			const probes = resolveProbes(subject);
+			const candidates = searchThreads(store, subject, probes, routing);
+			const candidate = candidates.find((item) => item.threadId === threadId);
+			expect(candidate?.reasons).toContain(reason);
+			expect(candidate?.fusionContributions).toContainEqual(
+				expect.objectContaining({ source, weight: 0.25 }),
+			);
+		}
+		store.close();
+	});
+
+	test("keeps literal wrong-layout text above its corrected fallback", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture("payments", "channel-payments");
+		store.writePage({
+			conversation: payments,
+			posts: [
+				postFixture({
+					id: "literal-layout",
+					channel_id: payments.id,
+					message: "Диагностика htnhfq в пользовательском вводе",
+				}),
+				postFixture({
+					id: "corrected-layout",
+					channel_id: payments.id,
+					message: "Настроили ретрай обработки",
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject("htnhfq");
+		const candidates = searchThreads(
+			store,
+			subject,
+			resolveProbes(subject),
+			routing,
+		);
+		expect(candidates.map(({ threadId }) => threadId)).toEqual([
+			"literal-layout",
+			"corrected-layout",
+		]);
+		expect(candidates[1]?.reasons).toContain("keyboard_layout_match");
+		store.close();
+	});
+
+	test("retrieves configured domain concepts as a bounded weak channel", async () => {
+		const concepts = {
+			"duplicate-charge": [
+				"повторное списание",
+				"списали дважды",
+				"duplicate charge",
+			],
+		};
+		const store = await MattermostStore.open(":memory:", { concepts });
+		const payments = conversationFixture("payments", "channel-payments");
+		store.writePage({
+			conversation: payments,
+			posts: [
+				postFixture({
+					id: "concept-target",
+					channel_id: payments.id,
+					message:
+						"После автоматического ретрая обнаружили повторное списание одного заказа",
+				}),
+				postFixture({
+					id: "concept-target-cause",
+					root_id: "concept-target",
+					channel_id: payments.id,
+					message:
+						"Проверили журнал доставки и нашли повторную обработку одного события",
+				}),
+				postFixture({
+					id: "concept-target-fix",
+					root_id: "concept-target",
+					channel_id: payments.id,
+					message:
+						"Добавили idempotency guard и подтвердили результат на затронутых заказах",
+				}),
+			],
+		});
+		const config = configFixture({ concepts });
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject("деньги списали дважды");
+		const probes = resolveProbes(subject, [], {}, [], concepts);
+		expect(probes[0]?.conceptMatches).toEqual([
+			{
+				conceptId: "duplicate-charge",
+				sourcePhrase: "списали дважды",
+			},
+		]);
+		const searchSources: string[] = [];
+		const originalSearch = store.search.bind(store);
+		store.search = ((...args: Parameters<typeof store.search>) => {
+			searchSources.push(args[3]?.source ?? "strict_fts");
+			return originalSearch(...args);
+		}) as typeof store.search;
+		const candidates = searchThreads(store, subject, probes, routing);
+		expect(searchSources).not.toContain("prefix_fts");
+		expect(searchSources).not.toContain("trigram");
+		expect(candidates).toHaveLength(1);
+		expect(candidates[0]).toMatchObject({
+			threadId: "concept-target",
+			reasons: expect.arrayContaining([
+				"concept_match",
+				"substantive_thread_depth",
+				"rank_fusion",
+			]),
+			rankingEvidence: {
+				substantivePostCount: 3,
+				threadDepthScore: 3,
+			},
+		});
+		expect(
+			candidates[0]?.fusionContributions?.find(
+				({ source }) => source === "concept_fts",
+			),
+		).toMatchObject({
+			source: "concept_fts",
+			conceptId: "duplicate-charge",
+			sourcePhrase: "списали дважды",
+			weight: 0.35,
+			score: 0.35 / 61,
 		});
 		store.close();
 	});
@@ -680,23 +1157,23 @@ describe("routing and ranking", () => {
 		store.close();
 	});
 
-	test("uses bounded prefix fallback only when stronger sources have no hits", async () => {
+	test("uses Russian morphology before bounded typo fallback", async () => {
 		const store = await MattermostStore.open(":memory:");
 		const payments = conversationFixture("payments", "channel-payments");
 		store.writePage({
 			conversation: payments,
 			posts: [
 				postFixture({
-					id: "russian-prefix-root",
+					id: "russian-morph-root",
 					channel_id: payments.id,
-					message: "Разбираемся с зависшими платежами",
+					message: "Уведомление о платеже не отправилось",
 				}),
 			],
 		});
 		const config = configFixture();
 		const all = configuredConversations(config, store);
 		const routing = routeConversations(config, store, all, {});
-		const subject = classifySubject("завис платеж");
+		const subject = classifySubject("уведомленеи платеж");
 		const candidates = searchThreads(
 			store,
 			subject,
@@ -704,20 +1181,80 @@ describe("routing and ranking", () => {
 			routing,
 		);
 		expect(candidates).toHaveLength(1);
-		expect(candidates[0]?.threadId).toBe("russian-prefix-root");
+		expect(candidates[0]?.threadId).toBe("russian-morph-root");
+		expect(candidates[0]?.fusionContributions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ source: "morph_fts" }),
+			]),
+		);
+		expect(candidates[0]?.rankingEvidence?.morphMatchedTermCount).toBe(2);
 		expect(
-			candidates[0]?.matches.every(
-				({ lexicalSource }) => lexicalSource === "prefix_fts",
+			candidates[0]?.fusionContributions?.some(({ source }) =>
+				["prefix_fts", "trigram"].includes(source),
 			),
-		).toBe(true);
+		).toBe(false);
+		store.close();
+	});
+
+	test("keeps original morphology independent from configured synonyms", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture("payments", "channel-payments");
+		store.writePage({
+			conversation: payments,
+			posts: [
+				postFixture({
+					id: "synonym-morph-root",
+					channel_id: payments.id,
+					message: "Разобрались с зависшими платежами",
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject("платеж");
+		const candidates = searchThreads(
+			store,
+			subject,
+			resolveProbes(subject, [], { платеж: ["payment"] }),
+			routing,
+		);
+		expect(candidates[0]?.threadId).toBe("synonym-morph-root");
+		expect(candidates[0]?.fusionContributions).toContainEqual(
+			expect.objectContaining({ source: "morph_fts" }),
+		);
+		store.close();
+	});
+
+	test("caps candidates returned by any lexical source", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture("payments", "channel-payments");
+		store.writePage({
+			conversation: payments,
+			posts: Array.from({ length: 105 }, (_, index) =>
+				postFixture({
+					id: `bounded-candidate-${String(index).padStart(3, "0")}`,
+					channel_id: payments.id,
+					message: "bounded common phrase",
+					create_at: index + 1,
+				}),
+			),
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject("bounded common phrase");
 		expect(
-			new Set(
-				candidates[0]?.matches.flatMap(
-					({ lexicalEvidence }) =>
-						lexicalEvidence?.map(({ sourceQuery }) => sourceQuery) ?? [],
-				),
-			),
-		).toEqual(new Set(["завис", "платеж"]));
+			searchThreads(store, subject, resolveProbes(subject), routing, 200),
+		).toHaveLength(100);
 		store.close();
 	});
 
@@ -834,7 +1371,7 @@ describe("routing and ranking", () => {
 				postFixture({
 					id: "fallback-prefix-root",
 					channel_id: payments.id,
-					message: "зависшими операциями занимаемся",
+					message: "worker-runtime operations are healthy",
 				}),
 				postFixture({
 					id: "fallback-trigram-root",
@@ -850,15 +1387,28 @@ describe("routing and ranking", () => {
 			configuredConversations(config, store),
 			{},
 		);
-		const prefixSubject = classifySubject("payment завис");
+		const prefixSubject = classifySubject("payment worker-runtim");
+		const prefix = searchThreads(
+			store,
+			prefixSubject,
+			resolveProbes(prefixSubject),
+			routing,
+		);
 		expect(
-			searchThreads(
-				store,
-				prefixSubject,
-				resolveProbes(prefixSubject),
-				routing,
-			).some(({ threadId }) => threadId === "fallback-prefix-root"),
+			prefix.some(({ threadId }) => threadId === "fallback-prefix-root"),
 		).toBe(true);
+		expect(
+			prefix.find(({ threadId }) => threadId === "fallback-prefix-root")
+				?.fusionContributions,
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					source: "prefix_fts",
+					sourceQuery: "worker-runtim",
+					fallbackKind: "identifier",
+				}),
+			]),
+		);
 		const typoSubject = classifySubject("scheduelRetry");
 		const typo = searchThreads(
 			store,
@@ -868,6 +1418,139 @@ describe("routing and ranking", () => {
 		);
 		expect(typo[0]?.threadId).toBe("fallback-trigram-root");
 		expect(typo[0]?.matches[0]?.lexicalSource).toBe("trigram");
+		expect(typo[0]?.reasons).toContain("typo_match");
+		expect(typo[0]?.fusionContributions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					source: "trigram",
+					fallbackKind: "identifier",
+					minimumSimilarity: 0.6,
+					maximumEditDistance: 2,
+				}),
+			]),
+		);
+		const truncatedSubject = classifySubject("scheduleRetri");
+		const truncated = searchThreads(
+			store,
+			truncatedSubject,
+			resolveProbes(truncatedSubject),
+			routing,
+		);
+		expect(truncated[0]?.threadId).toBe("fallback-trigram-root");
+		expect(truncated[0]?.reasons).toContain("typo_match");
+		store.close();
+	});
+
+	test("bounds Russian typo matching by length, morphology, and edit distance", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture("payments", "channel-payments");
+		store.writePage({
+			conversation: payments,
+			posts: [
+				postFixture({
+					id: "bounded-typo-relevant",
+					channel_id: payments.id,
+					message: "Платежи зависли после доставки",
+				}),
+				postFixture({
+					id: "bounded-typo-noise",
+					channel_id: payments.id,
+					message: "Платёжный календарь команды",
+				}),
+				postFixture({
+					id: "bounded-long-typo",
+					channel_id: payments.id,
+					message: "Настройка репликации данных",
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const typoSubject = classifySubject("платж");
+		const typo = searchThreads(
+			store,
+			typoSubject,
+			resolveProbes(typoSubject),
+			routing,
+		);
+		expect(typo.map(({ threadId }) => threadId)).toEqual([
+			"bounded-typo-relevant",
+		]);
+		expect(typo[0]?.fusionContributions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					source: "trigram",
+					fallbackKind: "russian_word",
+					minimumSimilarity: 0.5,
+					maximumEditDistance: 1,
+				}),
+			]),
+		);
+		const longTypoSubject = classifySubject("реплкация");
+		const longTypo = searchThreads(
+			store,
+			longTypoSubject,
+			resolveProbes(longTypoSubject),
+			routing,
+		);
+		expect(longTypo[0]?.threadId).toBe("bounded-long-typo");
+		expect(longTypo[0]?.fusionContributions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					fallbackKind: "russian_word",
+					minimumSimilarity: 0.5,
+					maximumEditDistance: 1,
+				}),
+			]),
+		);
+		const shortSubject = classifySubject("плт");
+		expect(
+			searchThreads(store, shortSubject, resolveProbes(shortSubject), routing),
+		).toEqual([]);
+		store.close();
+	});
+
+	test("does not add typo evidence when the same term has an exact hit", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture("payments", "channel-payments");
+		store.writePage({
+			conversation: payments,
+			posts: [
+				postFixture({
+					id: "exact-symbol-root",
+					channel_id: payments.id,
+					message: "scheduleRetry exhausted",
+				}),
+				postFixture({
+					id: "near-symbol-root",
+					channel_id: payments.id,
+					message: "scheduelRetry exhausted",
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject("scheduleRetry");
+		const candidates = searchThreads(
+			store,
+			subject,
+			resolveProbes(subject),
+			routing,
+		);
+		expect(candidates.map(({ threadId }) => threadId)).toEqual([
+			"exact-symbol-root",
+		]);
+		expect(candidates[0]?.reasons).not.toContain("typo_match");
 		store.close();
 	});
 

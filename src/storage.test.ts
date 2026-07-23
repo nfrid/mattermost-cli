@@ -7,7 +7,12 @@ import type {
 	MattermostPost,
 	MattermostUser,
 } from "./mattermost/schemas.ts";
-import { databaseFilePaths, MattermostStore } from "./storage.ts";
+import { conceptToken } from "./search-concepts.ts";
+import {
+	databaseFilePaths,
+	MattermostStore,
+	trigramSearchPolicy,
+} from "./storage.ts";
 
 const temporaryDirectories: string[] = [];
 const conversation = {
@@ -37,10 +42,10 @@ describe("MattermostStore", () => {
 		const directory = await temporaryDirectory();
 		const path = join(directory, "index.sqlite3");
 		const first = await MattermostStore.open(path);
-		expect(first.migrationVersions()).toEqual([1, 2, 3, 4]);
+		expect(first.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
 		first.close();
 		const second = await MattermostStore.open(path);
-		expect(second.migrationVersions()).toEqual([1, 2, 3, 4]);
+		expect(second.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
 		second.close();
 	});
 
@@ -78,7 +83,7 @@ describe("MattermostStore", () => {
 		before.close();
 
 		const after = await MattermostStore.open(path);
-		expect(after.migrationVersions()).toEqual([1, 2, 3, 4]);
+		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
 		expect(
 			after.search("ошибка api платеж подтвержден", [conversation.id]),
 		).toHaveLength(1);
@@ -112,7 +117,7 @@ describe("MattermostStore", () => {
 		before.close();
 
 		const after = await MattermostStore.open(path);
-		expect(after.migrationVersions()).toEqual([1, 2, 3, 4]);
+		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
 		expect(after.listEntities("post-1")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
@@ -126,6 +131,74 @@ describe("MattermostStore", () => {
 			]),
 		);
 		after.close();
+	});
+
+	test("migration 5 builds a separate Russian morphology index", async () => {
+		const directory = await temporaryDirectory();
+		const path = join(directory, "morph-upgrade.sqlite3");
+		const before = await MattermostStore.open(path);
+		before.writePage({
+			conversation,
+			posts: [post({ message: "Разобрались с зависшими платежами" })],
+		});
+		before.database.run("DELETE FROM schema_migrations WHERE version = 5");
+		before.database.run("DROP TABLE posts_morph_fts");
+		before.close();
+
+		const after = await MattermostStore.open(path);
+		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(
+			after.search("зависш платеж", [conversation.id], 10, {
+				source: "morph_fts",
+			}),
+		).toHaveLength(1);
+		expect(after.getPost("post-1")?.message).toBe(
+			"Разобрались с зависшими платежами",
+		);
+		after.close();
+	});
+
+	test("migration 6 backfills concepts and rebuilds them when config changes", async () => {
+		const directory = await temporaryDirectory();
+		const path = join(directory, "concept-upgrade.sqlite3");
+		const before = await MattermostStore.open(path);
+		before.writePage({
+			conversation,
+			posts: [
+				post({ message: "После ретрая получили повторное списание" }),
+				post({ id: "post-2", message: "Investigating a duplicate charge" }),
+			],
+		});
+		before.database.run("DELETE FROM schema_migrations WHERE version = 6");
+		before.database.run("DROP TABLE posts_concept_fts");
+		before.database.run("DROP TABLE search_index_config");
+		before.close();
+
+		const concepts = {
+			"duplicate-charge": ["повторное списание", "списали дважды"],
+		};
+		const after = await MattermostStore.open(path, { concepts });
+		expect(after.migrationVersions()).toEqual([1, 2, 3, 4, 5, 6]);
+		expect(
+			after.search(conceptToken("duplicate-charge"), [conversation.id], 10, {
+				source: "concept_fts",
+			}),
+		).toHaveLength(1);
+		after.close();
+
+		const changed = await MattermostStore.open(path, {
+			concepts: {
+				"duplicate-charge": ["списали дважды", "duplicate charge"],
+			},
+		});
+		expect(
+			changed
+				.search(conceptToken("duplicate-charge"), [conversation.id], 10, {
+					source: "concept_fts",
+				})
+				.map(({ post }) => post.id),
+		).toEqual(["post-2"]);
+		changed.close();
 	});
 
 	test("reports corrupt disposable indexes with guided rebuild metadata", async () => {
@@ -144,6 +217,20 @@ describe("MattermostStore", () => {
 	test("detects a missing FTS index during integrity verification", async () => {
 		const store = await MattermostStore.open(":memory:");
 		store.database.run("DROP TABLE posts_fts");
+		expect(() => store.verifyIntegrity()).toThrow();
+		store.close();
+	});
+
+	test("detects a missing morphology index during integrity verification", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.database.run("DROP TABLE posts_morph_fts");
+		expect(() => store.verifyIntegrity()).toThrow();
+		store.close();
+	});
+
+	test("detects a missing concept index during integrity verification", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.database.run("DROP TABLE posts_concept_fts");
 		expect(() => store.verifyIntegrity()).toThrow();
 		store.close();
 	});
@@ -231,6 +318,47 @@ describe("MattermostStore", () => {
 		expect(store.getPost("post-1")?.message).toBe(
 			"Платёж не прошёл, повторите ещё раз",
 		);
+		store.close();
+	});
+
+	test("matches exact stem tokens without prefix false positives", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.writePage({
+			conversation,
+			posts: [
+				post({
+					id: "relevant",
+					message: "Зависшими платежами занялась команда",
+				}),
+				post({
+					id: "noise",
+					message: "Зависимость платёжного календаря от праздников",
+				}),
+			],
+		});
+		const hits = store.search("зависш платеж", [conversation.id], 10, {
+			source: "morph_fts",
+		});
+		expect(hits.map(({ post }) => post.id)).toEqual(["relevant"]);
+		expect(hits[0]).toMatchObject({
+			source: "morph_fts",
+			sourceQuery: "зависш платеж",
+		});
+		store.writePage({
+			conversation,
+			posts: [
+				post({
+					id: "relevant",
+					update_at: 2,
+					message: "Команда закрыла обычную задачу",
+				}),
+			],
+		});
+		expect(
+			store.search("зависш платеж", [conversation.id], 10, {
+				source: "morph_fts",
+			}),
+		).toEqual([]);
 		store.close();
 	});
 
@@ -385,6 +513,27 @@ describe("MattermostStore", () => {
 			store.listEntities(root.id).filter(({ kind }) => kind !== "username"),
 		).toEqual([]);
 		store.close();
+	});
+
+	test("uses length- and script-aware bounded trigram policies", () => {
+		expect(trigramSearchPolicy("плт")).toBeNull();
+		expect(trigramSearchPolicy("платж")).toEqual({
+			minimumSimilarity: 0.5,
+			maximumEditDistance: 1,
+		});
+		expect(trigramSearchPolicy("реплкация")).toEqual({
+			minimumSimilarity: 0.5,
+			maximumEditDistance: 1,
+		});
+		expect(trigramSearchPolicy("retry")).toEqual({
+			minimumSimilarity: 0.5,
+			maximumEditDistance: 3,
+		});
+		expect(trigramSearchPolicy("scheduelRetry")).toEqual({
+			minimumSimilarity: 0.6,
+			maximumEditDistance: 2,
+		});
+		expect(trigramSearchPolicy("x".repeat(65))).toBeNull();
 	});
 
 	test("executes exact phrase, broad, and prefix searches independently", async () => {

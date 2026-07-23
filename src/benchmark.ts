@@ -54,6 +54,12 @@ export const retrievalBenchmarkFixtureSchema = z
 		synonyms: z
 			.record(z.string().min(2), z.array(z.string().min(2)).max(8))
 			.default({}),
+		concepts: z
+			.record(
+				z.string().regex(/^[a-z0-9][a-z0-9-]{1,63}$/),
+				z.array(z.string().min(2).max(120)).min(2).max(8),
+			)
+			.default({}),
 		conversations: z.array(conversationSchema).min(1),
 		posts: z.array(postSchema).min(1),
 		ticketRelationships: z
@@ -139,14 +145,20 @@ export type RetrievalBenchmarkCase = RetrievalBenchmarkFixture["cases"][number];
 export interface RetrievalBenchmarkCaseResult {
 	id: string;
 	queryClass: string;
+	query: string;
+	expectedThreadIds: string[];
 	rankedThreadIds: string[];
+	rankingReasons: Record<string, string[]>;
 	recallAt5: number;
 	recallAt10: number;
 	reciprocalRank: number;
 	ndcgAt5: number;
 	ndcgAt10: number;
+	irrelevantThreadsInTop5: number;
 	irrelevantThreadsHydrated: number;
 	contextBudgetBeforeFirstRelevant: number;
+	meanQueryDurationMs: number;
+	retrievalRequestsPerProbe: number;
 	stable: boolean;
 }
 
@@ -162,8 +174,12 @@ export interface RetrievalBenchmarkReport {
 		meanReciprocalRank: number;
 		meanNdcgAt5: number;
 		meanNdcgAt10: number;
+		irrelevantThreadsInTop5: number;
 		irrelevantThreadsHydrated: number;
 		meanContextBudgetBeforeFirstRelevant: number;
+		meanQueryDurationMs: number;
+		meanRetrievalRequestsPerProbe: number;
+		indexSizeBytes: number;
 		stable: boolean;
 	};
 }
@@ -178,14 +194,18 @@ export async function loadRetrievalBenchmarkFixture(
 
 export async function runRetrievalBenchmark(
 	fixture: RetrievalBenchmarkFixture,
-	options: { runs?: number } = {},
+	options: {
+		runs?: number;
+	} = {},
 ): Promise<RetrievalBenchmarkReport> {
 	const parsed = retrievalBenchmarkFixtureSchema.parse(fixture);
 	const runs = options.runs ?? 3;
 	if (!Number.isInteger(runs) || runs < 1) {
 		throw new Error("Benchmark runs must be a positive integer.");
 	}
-	const store = await MattermostStore.open(":memory:");
+	const store = await MattermostStore.open(":memory:", {
+		concepts: parsed.concepts,
+	});
 	try {
 		seedFixture(store, parsed);
 		const config = fixtureConfig(parsed);
@@ -193,13 +213,34 @@ export async function runRetrievalBenchmark(
 		for (const benchmarkCase of parsed.cases) {
 			const input = caseInput(benchmarkCase);
 			const rankings: string[][] = [];
+			const durations: number[] = [];
+			const requestCounts: number[] = [];
+			let rankingReasons: Record<string, string[]> = {};
 			for (let run = 0; run < runs; run += 1) {
+				let requestCount = 0;
+				const originalSearch = store.search.bind(store);
+				store.search = ((...args: Parameters<typeof store.search>) => {
+					requestCount += 1;
+					return originalSearch(...args);
+				}) as typeof store.search;
+				const startedAt = performance.now();
 				const result = await searchMattermost(input, {
 					config,
 					store,
 					now: () => 1,
 				});
+				durations.push(performance.now() - startedAt);
+				requestCounts.push(requestCount);
+				store.search = originalSearch;
 				rankings.push(result.candidates.map(({ threadId }) => threadId));
+				if (run === 0) {
+					rankingReasons = Object.fromEntries(
+						result.candidates.map(({ threadId, reasons }) => [
+							threadId,
+							reasons,
+						]),
+					);
+				}
 			}
 			const rankedThreadIds = rankings[0] ?? [];
 			const relevant = new Set(
@@ -213,7 +254,11 @@ export async function runRetrievalBenchmark(
 			);
 			const context = await getMattermostContext(
 				{ ...input, local: true, noWiden: true },
-				{ config, store, now: () => 1 },
+				{
+					config,
+					store,
+					now: () => 1,
+				},
 			);
 			const firstRelevantContextIndex = context.threads.findIndex(
 				({ threadId }) => relevant.has(threadId),
@@ -225,7 +270,10 @@ export async function runRetrievalBenchmark(
 			cases.push({
 				id: benchmarkCase.id,
 				queryClass: benchmarkCase.queryClass,
+				query: describeCaseQuery(benchmarkCase),
+				expectedThreadIds: [...relevant],
 				rankedThreadIds,
+				rankingReasons,
 				recallAt5: recallAt(rankedThreadIds, relevant, 5),
 				recallAt10: recallAt(rankedThreadIds, relevant, 10),
 				reciprocalRank: reciprocalRank(rankedThreadIds, relevant),
@@ -239,12 +287,19 @@ export async function runRetrievalBenchmark(
 					relevanceGrades,
 					10,
 				),
+				irrelevantThreadsInTop5: rankedThreadIds
+					.slice(0, 5)
+					.filter((threadId) => !relevant.has(threadId)).length,
 				irrelevantThreadsHydrated: context.threads.filter(
 					({ threadId }) => !relevant.has(threadId),
 				).length,
 				contextBudgetBeforeFirstRelevant: threadsBeforeRelevant.reduce(
 					(total, thread) => total + thread.budget.used,
 					0,
+				),
+				meanQueryDurationMs: roundMetric(mean(durations)),
+				retrievalRequestsPerProbe: roundMetric(
+					mean(requestCounts) / Math.max(1, resolveProbeCount(benchmarkCase)),
 				),
 				stable: rankings.every((ranking) =>
 					arraysEqual(ranking, rankedThreadIds),
@@ -265,6 +320,10 @@ export async function runRetrievalBenchmark(
 				),
 				meanNdcgAt5: mean(cases.map(({ ndcgAt5 }) => ndcgAt5)),
 				meanNdcgAt10: mean(cases.map(({ ndcgAt10 }) => ndcgAt10)),
+				irrelevantThreadsInTop5: cases.reduce(
+					(total, result) => total + result.irrelevantThreadsInTop5,
+					0,
+				),
 				irrelevantThreadsHydrated: cases.reduce(
 					(total, result) => total + result.irrelevantThreadsHydrated,
 					0,
@@ -275,6 +334,17 @@ export async function runRetrievalBenchmark(
 							contextBudgetBeforeFirstRelevant,
 					),
 				),
+				meanQueryDurationMs: roundMetric(
+					mean(cases.map(({ meanQueryDurationMs }) => meanQueryDurationMs)),
+				),
+				meanRetrievalRequestsPerProbe: roundMetric(
+					mean(
+						cases.map(
+							({ retrievalRequestsPerProbe }) => retrievalRequestsPerProbe,
+						),
+					),
+				),
+				indexSizeBytes: sqliteIndexSize(store),
 				stable: cases.every(({ stable }) => stable),
 			},
 		};
@@ -348,6 +418,7 @@ function fixtureConfig(fixture: RetrievalBenchmarkFixture): MattermostConfig {
 		historyDays: 3650,
 		pageSize: 100,
 		synonyms: fixture.synonyms,
+		concepts: fixture.concepts,
 		budgets: {
 			defaultMaxCharacters: 2_000,
 			defaultPerThreadCharacters: 600,
@@ -389,6 +460,36 @@ function fixtureConfig(fixture: RetrievalBenchmarkFixture): MattermostConfig {
 				]),
 		),
 	};
+}
+
+function describeCaseQuery(benchmarkCase: RetrievalBenchmarkCase): string {
+	return [
+		benchmarkCase.ticket ?? benchmarkCase.subject,
+		...benchmarkCase.queries,
+	]
+		.filter((value): value is string => Boolean(value))
+		.join(" | ");
+}
+
+function resolveProbeCount(benchmarkCase: RetrievalBenchmarkCase): number {
+	return (
+		(benchmarkCase.ticket || benchmarkCase.subject ? 1 : 0) +
+		benchmarkCase.queries.length
+	);
+}
+
+function sqliteIndexSize(store: MattermostStore): number {
+	const pageCount = store.database
+		.query<{ page_count: number }, []>("PRAGMA page_count")
+		.get()?.page_count;
+	const pageSize = store.database
+		.query<{ page_size: number }, []>("PRAGMA page_size")
+		.get()?.page_size;
+	return (pageCount ?? 0) * (pageSize ?? 0);
+}
+
+function roundMetric(value: number): number {
+	return Math.round(value * 1_000) / 1_000;
 }
 
 function caseInput(benchmarkCase: RetrievalBenchmarkCase) {

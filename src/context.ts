@@ -230,6 +230,7 @@ export async function getMattermostContext(
 			input.queries,
 			config.synonyms,
 			input.probes,
+			config.concepts,
 		);
 		const resolvedFilters = resolveSearchFilters(input);
 		const client = input.local
@@ -636,6 +637,7 @@ export async function searchMattermost(
 			input.queries,
 			config.synonyms,
 			input.probes,
+			config.concepts,
 		);
 		const resolvedFilters = resolveSearchFilters(input);
 		const all = configuredConversations(config, store);
@@ -1530,7 +1532,9 @@ async function withResources<T>(
 	const config = dependencies.config ?? (await loadMattermostConfig());
 	const ownedStore = dependencies.store
 		? undefined
-		: await MattermostStore.open(config.databasePath);
+		: await MattermostStore.open(config.databasePath, {
+				concepts: config.concepts,
+			});
 	const store = dependencies.store ?? ownedStore;
 	if (!store) throw new Error("Mattermost store initialization failed.");
 	try {

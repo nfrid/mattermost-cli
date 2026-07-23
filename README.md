@@ -42,6 +42,13 @@ Edit `.mattermost/config.json`. Channels and direct messages are separate allowl
   "synonyms": {
     "репликация": ["replication", "data replication"]
   },
+  "concepts": {
+    "duplicate-charge": [
+      "повторное списание",
+      "списали дважды",
+      "duplicate charge"
+    ]
+  },
   "channels": {
     "engineering": {
       "id": "channel-id",
@@ -102,6 +109,7 @@ bun run src/bin.ts sync --full
 
 ```bash
 bun run src/bin.ts search 'deployment timeout'
+bun run src/bin.ts search 'customer billed twice'
 bun run src/bin.ts context PROJ-123
 bun run src/bin.ts context --query 'deployment timeout' --repository example-service
 bun run src/bin.ts context 'incident' --channel engineering --fresh
@@ -117,7 +125,19 @@ English and Russian significant terms and stop words are recognized. Russian sea
 
 The local index also extracts conservative engineering entities such as tickets, repository references, pull requests, commits, URLs and permalinks, file paths, scoped packages, code symbols, error codes, usernames, services, and attachment filenames. Exact structured matches are reported separately from lexical evidence and can admit a candidate without weakening conversation allowlists.
 
-Russian retrieval uses bounded inflection-prefix variants, a small built-in set of common Russian/English engineering aliases, and mixed-script transliteration for technical tokens. Project-specific synonym groups can be configured with the top-level `synonyms` object; groups are symmetric, limited to 32 keys and eight aliases per key, and reported in each probe’s `expansions` diagnostics. Exact phrases and exact all-term matches retain stronger ranking evidence than expanded matches.
+Russian retrieval indexes Snowball-normalized document tokens in a separate `morph_fts` table and reports query `morphTerms` independently from exact terms and configured expansions. Morphology uses exact stem-token matching rather than prefix matching. Retrieval channels are combined with weighted reciprocal rank fusion, capped at one contribution per probe, source, and thread; diagnostics report each contribution’s source-local rank, weight, and weighted score. Exact phrase, strict lexical, term, broad, morphology, configured concepts, synonyms, transliteration, prefix, and trigram channels have successively weaker weights. The vendored stemmer is covered by the 3-clause BSD license and is verified against selected upstream vectors.
+
+Project-specific synonym groups can be configured with the top-level `synonyms` object; groups are symmetric, limited to 32 keys and eight aliases per key, and reported in each probe’s `expansions` diagnostics. Bounded multi-phrase domain concepts use the separate `concepts` object. A concept has a stable lowercase ID and two to eight explicit aliases; aliases cannot be shared between concepts. Matching aliases add an opaque token to the separate `concept_fts` index, while probe diagnostics expose only the concept ID and triggering phrase. Concept configuration changes automatically rebuild this disposable index.
+
+Keyboard-layout correction, Latin-to-Russian transliteration, and mixed-script confusable correction are separate bounded expansion kinds and fusion sources. Layout correction is restricted to likely wrong-layout Latin tokens, including Russian letters entered through punctuation keys; transliteration is restricted to characteristic Russian Latin spellings. Corrected Russian forms use the morphology index, while mixed-script corrections use exact tokens. Script variants are disabled for file paths, symbols, repositories, error probes, URLs, and paths. Diagnostics retain the source token, corrected value, correction kind, source-local rank, and low fusion weight.
+
+Candidate ranking performs a bounded in-memory proximity pass over at most eight terms per probe and 512 tokens per post; it does not add another retrieval request or index. Evidence distinguishes exact or morphological terms near each other, same-post coverage, expansion-assisted coverage, and terms distributed across a thread. Diagnostics expose same-post counts, the minimum covering token window, root/reply/across-thread term coverage, and distinct probe coverage. Exact phrase and multi-probe coverage remain stronger than proximity, and expansion-assisted proximity is deliberately non-absolute so a shallow same-line mention cannot automatically displace stronger thread evidence. Exact phrases and exact all-term matches retain stronger ranking evidence than morphological, concept, or corrected-script matches.
+
+When otherwise equivalent candidates contain the exact query phrase in their root, ranking uses a bounded substantive-thread-depth tie-breaker before fusion and recency. The same tie-breaker is available to candidates reached through an explicit multi-word domain-concept phrase, but not through single-token technical aliases. It requires at least three posts containing six or more tokens and caps the score at five posts, so one unrelated late reply cannot promote an old thread. Diagnostics expose `threadPostCount`, `substantivePostCount`, and `threadDepthScore`; qualifying candidates include the `substantive_thread_depth` reason.
+
+Typo fallback is evaluated per term only after exact and Russian morphology channels fail for that term. Prefix retrieval is restricted to typed or identifier-shaped repositories, filenames, symbols, and services; natural Russian words go directly from morphology to bounded typo matching. When a probe already activates a configured concept, Russian natural-word typo requests are suppressed while identifier and Latin technical fallbacks remain eligible. Trigram matching accepts one token of 5–64 characters, applies script- and length-aware similarity/edit-distance limits, and compares Russian query/document stems so an inflected correct form can match a typo without admitting a wider prefix family. Exact hits suppress typo evidence for the same term. Fusion diagnostics expose `fallbackKind`, `minimumSimilarity`, and `maximumEditDistance`, while ranking reasons distinguish `prefix_match` from `typo_match`.
+
+Hard retrieval limits are fixed in code: each probe retains at most eight significant terms, eight morphology terms, eight concept matches, 24 generated expansions, and eight total fuzzy requests; each lexical or structured source returns at most 100 candidates. Proximity inspects at most eight terms and 512 tokens per post. These bounds keep diagnostics, fallback work, and candidate aggregation deterministic for oversized input.
 
 Both `context` and `search` support hard thread filters: `--from <username>`, `--after <date>`, `--before <date>`, `--has-file`, and case-insensitive attachment filename substring matching with `--file <pattern>`. Dates are normalized to ISO timestamps in JSON; date-only values use UTC, date-times require `Z` or an explicit UTC offset, `after` is inclusive, and `before` is exclusive. `--file` implies `--has-file`.
 
@@ -220,6 +240,11 @@ A failed sync or migration does not advance a successful freshness checkpoint. T
 5. Treat chat as historical evidence and reconcile it with the issue tracker, code, and newer sources.
 
 The CLI is fully functional without a daemon. WebSockets and operating-system credential-store integration are possible future enhancements.
+
+## Archived and future experiments
+
+- [Rejected local reranker](experiments/reranker.md)
+- [Deferred hybrid semantic retrieval](experiments/semantic-search.md)
 
 ## Development and release gate
 

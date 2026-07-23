@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync } from "node:fs";
 import { chmod, mkdir } from "node:fs/promises";
 import { basename, dirname } from "node:path";
+import type { SearchConcepts } from "./config.ts";
 import {
 	type EngineeringEntity,
 	type EngineeringEntityKind,
@@ -13,6 +14,11 @@ import type {
 	MattermostPost,
 	MattermostUser,
 } from "./mattermost/schemas.ts";
+import {
+	conceptIndexFingerprint,
+	conceptTokensForText,
+} from "./search-concepts.ts";
+import { normalizeMorphText } from "./search-token-normalization.ts";
 import { normalizeSearchText } from "./text.ts";
 
 export type ConversationKind = "channel" | "direct_message";
@@ -87,6 +93,8 @@ export type LexicalRetrievalSource =
 	| "strict_fts"
 	| "broad_fts"
 	| "term_fts"
+	| "morph_fts"
+	| "concept_fts"
 	| "prefix_fts"
 	| "trigram";
 
@@ -102,6 +110,11 @@ export interface LexicalHit {
 export interface LexicalSearchOptions {
 	source?: LexicalRetrievalSource;
 	filters?: ThreadSearchFilters;
+}
+
+export interface TrigramSearchPolicy {
+	minimumSimilarity: number;
+	maximumEditDistance: number;
 }
 
 export interface StructuredEntityRecord extends EngineeringEntity {
@@ -221,12 +234,38 @@ CREATE INDEX post_entities_thread ON post_entities(thread_id);
 		sql: "DELETE FROM post_entities;",
 		rebuildEntities: true,
 	},
+	{
+		version: 5,
+		sql: `
+CREATE VIRTUAL TABLE posts_morph_fts USING fts5(post_id UNINDEXED, morph, tokenize='unicode61');
+`,
+		rebuildMorphFts: true,
+	},
+	{
+		version: 6,
+		sql: `
+CREATE VIRTUAL TABLE posts_concept_fts USING fts5(post_id UNINDEXED, concepts, tokenize='unicode61');
+CREATE TABLE search_index_config (
+  kind TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL
+);
+`,
+		rebuildConceptFts: true,
+	},
 ] as const;
+
+export interface MattermostStoreOptions {
+	concepts?: SearchConcepts;
+}
 
 export class MattermostStore {
 	readonly database: Database;
+	private readonly concepts: Readonly<SearchConcepts>;
 
-	static async open(path: string): Promise<MattermostStore> {
+	static async open(
+		path: string,
+		options: MattermostStoreOptions = {},
+	): Promise<MattermostStore> {
 		let database: Database | undefined;
 		try {
 			if (path !== ":memory:") {
@@ -237,7 +276,7 @@ export class MattermostStore {
 				}
 			}
 			database = new Database(path, { create: true });
-			const store = new MattermostStore(database);
+			const store = new MattermostStore(database, options);
 			if (path !== ":memory:") secureDatabaseFiles(path);
 			return store;
 		} catch (error) {
@@ -254,11 +293,13 @@ export class MattermostStore {
 		}
 	}
 
-	constructor(database: Database) {
+	constructor(database: Database, options: MattermostStoreOptions = {}) {
 		this.database = database;
+		this.concepts = options.concepts ?? {};
 		this.database.run("PRAGMA foreign_keys = ON");
 		this.database.run("PRAGMA journal_mode = WAL");
 		this.migrate();
+		this.synchronizeConceptIndexConfig();
 	}
 
 	close(): void {
@@ -285,6 +326,8 @@ export class MattermostStore {
 			);
 		}
 		this.database.query("SELECT count(*) FROM posts_fts").get();
+		this.database.query("SELECT count(*) FROM posts_morph_fts").get();
+		this.database.query("SELECT count(*) FROM posts_concept_fts").get();
 	}
 
 	finalizeFullSync(
@@ -306,6 +349,12 @@ export class MattermostStore {
 				"SELECT id FROM posts WHERE conversation_id = ? AND id NOT IN (SELECT post_id FROM full_sync_retained_posts)";
 			this.database
 				.query(`DELETE FROM posts_fts WHERE post_id IN (${stalePosts})`)
+				.run(conversation.id);
+			this.database
+				.query(`DELETE FROM posts_morph_fts WHERE post_id IN (${stalePosts})`)
+				.run(conversation.id);
+			this.database
+				.query(`DELETE FROM posts_concept_fts WHERE post_id IN (${stalePosts})`)
 				.run(conversation.id);
 			this.database
 				.query(
@@ -424,6 +473,12 @@ ON CONFLICT(id) DO UPDATE SET root_id=excluded.root_id, thread_id=excluded.threa
 			});
 		this.database.query("DELETE FROM posts_fts WHERE post_id = ?").run(post.id);
 		this.database
+			.query("DELETE FROM posts_morph_fts WHERE post_id = ?")
+			.run(post.id);
+		this.database
+			.query("DELETE FROM posts_concept_fts WHERE post_id = ?")
+			.run(post.id);
+		this.database
 			.query("DELETE FROM post_entities WHERE post_id = ?")
 			.run(post.id);
 		this.database
@@ -433,6 +488,17 @@ ON CONFLICT(id) DO UPDATE SET root_id=excluded.root_id, thread_id=excluded.threa
 			this.database
 				.query("INSERT INTO posts_fts (post_id, message) VALUES (?, ?)")
 				.run(post.id, normalizeSearchText(post.message));
+			this.database
+				.query("INSERT INTO posts_morph_fts (post_id, morph) VALUES (?, ?)")
+				.run(post.id, normalizeMorphText(post.message));
+			const conceptTokens = conceptTokensForText(post.message, this.concepts);
+			if (conceptTokens.length) {
+				this.database
+					.query(
+						"INSERT INTO posts_concept_fts (post_id, concepts) VALUES (?, ?)",
+					)
+					.run(post.id, conceptTokens.join(" "));
+			}
 		}
 		for (const fileId of post.file_ids) {
 			this.database
@@ -826,14 +892,38 @@ ORDER BY thread_id, post_id, kind LIMIT ?`)
 				threadFilter,
 			);
 		}
-		const rows = this.database
-			.query<Record<string, unknown>, (string | number)[]>(`
+		const rows =
+			source === "morph_fts"
+				? this.database
+						.query<Record<string, unknown>, (string | number)[]>(`
+SELECT p.*, bm25(posts_morph_fts) AS lexical_bm25,
+  p.message AS lexical_snippet
+FROM posts_morph_fts f JOIN posts p ON p.id = f.post_id
+WHERE posts_morph_fts MATCH ? AND p.conversation_id IN (${placeholders})${threadFilter.clause}
+ORDER BY lexical_bm25, p.create_at DESC, p.id LIMIT ?`)
+						.all(match, ...conversationIds, ...threadFilter.parameters, limit)
+				: source === "concept_fts"
+					? this.database
+							.query<Record<string, unknown>, (string | number)[]>(`
+SELECT p.*, bm25(posts_concept_fts) AS lexical_bm25,
+  p.message AS lexical_snippet
+FROM posts_concept_fts f JOIN posts p ON p.id = f.post_id
+WHERE posts_concept_fts MATCH ? AND p.conversation_id IN (${placeholders})${threadFilter.clause}
+ORDER BY lexical_bm25, p.create_at DESC, p.id LIMIT ?`)
+							.all(match, ...conversationIds, ...threadFilter.parameters, limit)
+					: this.database
+							.query<Record<string, unknown>, (string | number)[]>(`
 SELECT p.*, bm25(posts_fts) AS lexical_bm25,
   snippet(posts_fts, 1, '', '', ' … ', 24) AS lexical_snippet
 FROM posts_fts f JOIN posts p ON p.id = f.post_id
 WHERE posts_fts MATCH ? AND p.conversation_id IN (${placeholders})${threadFilter.clause}
 ORDER BY lexical_bm25, p.create_at DESC, p.id LIMIT ?`)
-			.all(match, ...conversationIds, ...threadFilter.parameters, limit);
+							.all(
+								match,
+								...conversationIds,
+								...threadFilter.parameters,
+								limit,
+							);
 		return rows.map((row, index) => ({
 			post: rowToPost(row),
 			source,
@@ -850,8 +940,9 @@ ORDER BY lexical_bm25, p.create_at DESC, p.id LIMIT ?`)
 		limit: number,
 		threadFilter: { clause: string; parameters: Array<string | number> },
 	): LexicalHit[] {
+		const policy = trigramSearchPolicy(probe);
 		const trigrams = stringTrigrams(probe).slice(0, 12);
-		if (!trigrams.length) return [];
+		if (!policy || !trigrams.length) return [];
 		const placeholders = conversationIds.map(() => "?").join(", ");
 		const trigramClauses = trigrams.map(() => "instr(f.message, ?) > 0");
 		const rows = this.database
@@ -869,10 +960,14 @@ ORDER BY p.create_at DESC, p.id LIMIT ?`)
 		return rows
 			.map((row) => {
 				const message = String(row.message);
-				const similarity = bestTokenTrigramSimilarity(message, probe);
+				const similarity = bestBoundedTokenTrigramSimilarity(
+					message,
+					probe,
+					policy,
+				);
 				return { row, message, similarity };
 			})
-			.filter(({ similarity }) => similarity >= 0.5)
+			.filter(({ similarity }) => similarity >= policy.minimumSimilarity)
 			.sort(
 				(left, right) =>
 					right.similarity - left.similarity ||
@@ -956,6 +1051,55 @@ VALUES (?, ?, ?, ?, ?, ?)`);
 		}
 	}
 
+	private rebuildConceptFts(): void {
+		this.database.run("DELETE FROM posts_concept_fts");
+		const posts = this.database
+			.query<{ id: string; message: string }, []>(
+				"SELECT id, message FROM posts WHERE delete_at = 0 AND message <> '' ORDER BY id",
+			)
+			.all();
+		const insert = this.database.query(
+			"INSERT INTO posts_concept_fts (post_id, concepts) VALUES (?, ?)",
+		);
+		for (const post of posts) {
+			const tokens = conceptTokensForText(post.message, this.concepts);
+			if (tokens.length) insert.run(post.id, tokens.join(" "));
+		}
+	}
+
+	private synchronizeConceptIndexConfig(): void {
+		const fingerprint = conceptIndexFingerprint(this.concepts);
+		const current = this.database
+			.query<{ fingerprint: string }, [string]>(
+				"SELECT fingerprint FROM search_index_config WHERE kind = ?",
+			)
+			.get("concepts")?.fingerprint;
+		if (current === fingerprint) return;
+		this.transaction(() => {
+			this.rebuildConceptFts();
+			this.database
+				.query(
+					"INSERT INTO search_index_config (kind, fingerprint) VALUES ('concepts', ?) ON CONFLICT(kind) DO UPDATE SET fingerprint = excluded.fingerprint",
+				)
+				.run(fingerprint);
+		});
+	}
+
+	private rebuildMorphFts(): void {
+		this.database.run("DELETE FROM posts_morph_fts");
+		const posts = this.database
+			.query<{ id: string; message: string }, []>(
+				"SELECT id, message FROM posts WHERE delete_at = 0 AND message <> '' ORDER BY id",
+			)
+			.all();
+		const insert = this.database.query(
+			"INSERT INTO posts_morph_fts (post_id, morph) VALUES (?, ?)",
+		);
+		for (const post of posts) {
+			insert.run(post.id, normalizeMorphText(post.message));
+		}
+	}
+
 	private rebuildEntities(): void {
 		this.database.run("DELETE FROM post_entities");
 		const posts = this.database
@@ -1009,6 +1153,17 @@ VALUES (?, ?, ?, ?, ?, ?)`);
 				}
 				if ("rebuildEntities" in migration && migration.rebuildEntities) {
 					this.rebuildEntities();
+				}
+				if ("rebuildMorphFts" in migration && migration.rebuildMorphFts) {
+					this.rebuildMorphFts();
+				}
+				if ("rebuildConceptFts" in migration && migration.rebuildConceptFts) {
+					this.rebuildConceptFts();
+					this.database
+						.query(
+							"INSERT INTO search_index_config (kind, fingerprint) VALUES ('concepts', ?)",
+						)
+						.run(conceptIndexFingerprint(this.concepts));
 				}
 				this.database
 					.query(
@@ -1117,21 +1272,82 @@ function stringTrigrams(value: string): string[] {
 	];
 }
 
-function bestTokenTrigramSimilarity(message: string, probe: string): number {
-	const expected = new Set(stringTrigrams(probe));
-	if (!expected.size) return 0;
+export function trigramSearchPolicy(probe: string): TrigramSearchPolicy | null {
+	const tokens = normalizeSearchText(probe).match(/[\p{L}\p{N}_-]+/gu) ?? [];
+	const length = Array.from(tokens[0] ?? "").length;
+	if (tokens.length !== 1 || length < 5 || length > 64) return null;
+	const token = tokens[0] ?? "";
+	const latin = /^[a-z]+$/u.test(token);
+	return {
+		minimumSimilarity: !latin && length <= 9 ? 0.5 : length <= 6 ? 0.5 : 0.6,
+		maximumEditDistance: latin && length <= 6 ? 3 : length >= 10 ? 2 : 1,
+	};
+}
+
+function bestBoundedTokenTrigramSimilarity(
+	message: string,
+	probe: string,
+	policy: TrigramSearchPolicy,
+): number {
+	const queryValues = new Set([normalizeSearchText(probe)]);
+	const queryMorph = normalizeMorphText(probe);
+	if (queryMorph) queryValues.add(queryMorph);
 	const tokens = normalizeSearchText(message).match(/[\p{L}\p{N}_-]+/gu) ?? [];
 	let best = 0;
 	for (const token of tokens) {
-		const actual = new Set(stringTrigrams(token));
-		if (!actual.size) continue;
-		let overlap = 0;
-		for (const trigram of expected) {
-			if (actual.has(trigram)) overlap += 1;
+		const candidateValues = new Set([token]);
+		const morph = normalizeMorphText(token);
+		if (morph) candidateValues.add(morph);
+		for (const query of queryValues) {
+			const expected = new Set(stringTrigrams(query));
+			if (!expected.size) continue;
+			for (const candidate of candidateValues) {
+				if (
+					boundedEditDistance(query, candidate, policy.maximumEditDistance) ===
+					null
+				) {
+					continue;
+				}
+				const actual = new Set(stringTrigrams(candidate));
+				if (!actual.size) continue;
+				let overlap = 0;
+				for (const trigram of expected) {
+					if (actual.has(trigram)) overlap += 1;
+				}
+				best = Math.max(best, (2 * overlap) / (expected.size + actual.size));
+			}
 		}
-		best = Math.max(best, (2 * overlap) / (expected.size + actual.size));
 	}
 	return best;
+}
+
+function boundedEditDistance(
+	leftValue: string,
+	rightValue: string,
+	maximum: number,
+): number | null {
+	const left = Array.from(normalizeSearchText(leftValue));
+	const right = Array.from(normalizeSearchText(rightValue));
+	if (Math.abs(left.length - right.length) > maximum) return null;
+	let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+	for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+		const current = [leftIndex];
+		let rowMinimum = leftIndex;
+		for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+			const value = Math.min(
+				(previous[rightIndex] ?? maximum + 1) + 1,
+				(current[rightIndex - 1] ?? maximum + 1) + 1,
+				(previous[rightIndex - 1] ?? maximum + 1) +
+					(left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+			);
+			current.push(value);
+			rowMinimum = Math.min(rowMinimum, value);
+		}
+		if (rowMinimum > maximum) return null;
+		previous = current;
+	}
+	const distance = previous[right.length] ?? maximum + 1;
+	return distance <= maximum ? distance : null;
 }
 
 export function buildFtsProbe(value: string): string | null {
@@ -1156,6 +1372,8 @@ export function buildFtsQuery(
 			return terms.join(" ");
 		case "strict_fts":
 		case "term_fts":
+		case "morph_fts":
+		case "concept_fts":
 			return escaped.map((term) => `"${term}"`).join(" AND ");
 	}
 }

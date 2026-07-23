@@ -1,6 +1,6 @@
 {
 	"schemaVersion": 1,
-	"name": "initial-realistic-searches",
+	"name": "russian-search-challenges-v3",
 	"conversations": [
 		{
 			"id": "channel-payments",
@@ -21,6 +21,16 @@
 			"priority": 50,
 			"repositories": ["worker-runtime"],
 			"scopes": ["platform"]
+		},
+		{
+			"id": "channel-search-quality",
+			"alias": "search-quality",
+			"kind": "channel",
+			"name": "search-quality",
+			"description": "Synthetic search quality investigations",
+			"priority": 25,
+			"repositories": ["search-lab"],
+			"scopes": ["search-quality"]
 		}
 	],
 	"posts": [
@@ -562,6 +572,134 @@
 			"conversationId": "channel-platform",
 			"createAt": 2641,
 			"message": "На встрече достаточно пяти минут: причина и исправление уже описаны в старом расследовании."
+		},
+		{
+			"id": "thread-russian-verbs",
+			"conversationId": "channel-platform",
+			"createAt": 1700,
+			"message": "Задачи пришли в очередь после восстановления планировщика."
+		},
+		{
+			"id": "reply-russian-verbs",
+			"rootId": "thread-russian-verbs",
+			"conversationId": "channel-platform",
+			"createAt": 1701,
+			"message": "Теперь каждая задача приходит один раз, повторов не видим."
+		},
+		{
+			"id": "thread-russian-verb-prefix-noise",
+			"conversationId": "channel-platform",
+			"createAt": 2700,
+			"message": "Обновили задачник приходского волонтёрского проекта; это не связано с очередями или воркерами."
+		},
+		{
+			"id": "thread-russian-participle",
+			"conversationId": "channel-platform",
+			"createAt": 1710,
+			"message": "Разбираемся с зависшими воркерами после исчерпания пула соединений."
+		},
+		{
+			"id": "reply-russian-participle",
+			"rootId": "thread-russian-participle",
+			"conversationId": "channel-platform",
+			"createAt": 1711,
+			"message": "Зависший воркер удерживал lease, остальные экземпляры работали нормально."
+		},
+		{
+			"id": "thread-russian-rollback",
+			"conversationId": "channel-platform",
+			"createAt": 1720,
+			"message": "Откат релиза завершён; rollback deployment вернул стабильную версию."
+		},
+		{
+			"id": "reply-russian-rollback",
+			"rootId": "thread-russian-rollback",
+			"conversationId": "channel-platform",
+			"createAt": 1721,
+			"message": "Релиз откатили после роста ошибок, данные не потеряны."
+		},
+		{
+			"id": "thread-russian-anglicism",
+			"conversationId": "channel-payments",
+			"createAt": 1730,
+			"message": "Ретраями колбэка случайно создали лишнюю доставку события."
+		},
+		{
+			"id": "reply-russian-anglicism",
+			"rootId": "thread-russian-anglicism",
+			"conversationId": "channel-payments",
+			"createAt": 1731,
+			"message": "Один ретрай callback безопасен, повторные попытки ограничили."
+		},
+		{
+			"id": "thread-russian-agreement",
+			"conversationId": "channel-payments",
+			"createAt": 1740,
+			"message": "После планового обновления уведомления перестали отправляться отдельным клиентам."
+		},
+		{
+			"id": "reply-russian-agreement",
+			"rootId": "thread-russian-agreement",
+			"conversationId": "channel-payments",
+			"createAt": 1741,
+			"message": "Плановое обновление исправили повторным деплоем consumer."
+		},
+		{
+			"id": "thread-russian-layout",
+			"conversationId": "channel-payments",
+			"createAt": 1750,
+			"message": "Ретрай callback после 502 подробно проверен в этом треде."
+		},
+		{
+			"id": "thread-russian-typo",
+			"conversationId": "channel-payments",
+			"createAt": 1760,
+			"message": "Уведомление о платеже не отправилось из-за ошибки шаблона."
+		},
+		{
+			"id": "thread-russian-negative-prefix",
+			"conversationId": "channel-payments",
+			"createAt": 1770,
+			"message": "Платёжный календарь команды и зависимость отпусков обсуждаем отдельно от инцидентов."
+		},
+		{
+			"id": "thread-russian-perfective-participle",
+			"conversationId": "channel-platform",
+			"createAt": 1780,
+			"message": "Инженер бросил зависшую задачу после отмены запуска; обработку продолжил другой воркер."
+		},
+		{
+			"id": "thread-proximity-investigation",
+			"conversationId": "channel-search-quality",
+			"createAt": 50,
+			"message": "Расследование цепочки повторной обработки платежей после ночного релиза."
+		},
+		{
+			"id": "reply-proximity-symptom",
+			"rootId": "thread-proximity-investigation",
+			"conversationId": "channel-search-quality",
+			"createAt": 51,
+			"message": "В одной цепочке timeout callback и повторное списание появились почти одновременно; дальше команда сверила идентификаторы заказов, временные метки, журналы consumer, состояние ledger и историю повторной доставки по каждому затронутому событию."
+		},
+		{
+			"id": "reply-proximity-cause",
+			"rootId": "thread-proximity-investigation",
+			"conversationId": "channel-search-quality",
+			"createAt": 52,
+			"message": "Consumer подтвердил callback после истечения lease, поэтому replay создал вторую проводку."
+		},
+		{
+			"id": "reply-proximity-fix",
+			"rootId": "thread-proximity-investigation",
+			"conversationId": "channel-search-quality",
+			"createAt": 53,
+			"message": "Добавили idempotency check и запретили повторную доставку после подтверждённой проводки."
+		},
+		{
+			"id": "thread-proximity-glossary",
+			"conversationId": "channel-search-quality",
+			"createAt": 2500,
+			"message": "Timeout в отчёте; callback в документации; повторное списание в словаре."
 		}
 	],
 	"ticketRelationships": [
@@ -891,6 +1029,14 @@
 					"grade": 3
 				},
 				{
+					"threadId": "thread-russian-agreement",
+					"grade": 2
+				},
+				{
+					"threadId": "thread-russian-typo",
+					"grade": 2
+				},
+				{
 					"threadId": "thread-notification-wording",
 					"grade": 1
 				},
@@ -899,7 +1045,7 @@
 					"grade": 1
 				}
 			],
-			"notes": "Запрос в естественной форме описывает инцидентный тред, где те же понятия употреблены как «уведомления», «клиентам» и «не приходят». Два новых треда дают слабые точные совпадения только по словам «уведомление» и «клиенту» и обсуждают редактуру, поэтому не должны блокировать морфологический fallback."
+			"notes": "Запрос описывает доставку уведомлений клиентам. Глубокий тред содержит полное расследование; два коротких incident threads подтверждают ту же проблему и имеют среднюю релевантность. Редакторские треды совпадают только по отдельным словам и остаются слабыми."
 		},
 		{
 			"id": "old-deep-investigation-vs-shallow-exact",
@@ -933,9 +1079,271 @@
 				}
 			],
 			"notes": "Старый тред содержит влияние, причину, исправление и follow-up. Пять новых тредов действительно слабо релевантны, но используют ту же точную ошибку только для дайджеста, текста алерта, одноразового staging-события, runbook и повестки."
+		},
+		{
+			"id": "russian-verb-forms",
+			"queryClass": "russian_verb_forms",
+			"subject": "задача приходит",
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian-verbs",
+					"grade": 3
+				}
+			],
+			"notes": "Формы «задача приходит» и «задачи пришли» проверяют глагольное чередование и склонение существительного; похожий prefix-шум не релевантен."
+		},
+		{
+			"id": "russian-participles",
+			"queryClass": "russian_participles",
+			"subject": "зависший воркер",
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian-participle",
+					"grade": 3
+				}
+			],
+			"notes": "Причастие и существительное встречаются в единственном и множественном творительном падеже."
+		},
+		{
+			"id": "russian-irregular-rollback",
+			"queryClass": "russian_irregular_forms",
+			"subject": "откатили релиз",
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian-rollback",
+					"grade": 3
+				}
+			],
+			"notes": "Глагол, существительное и русско-английская терминология описывают одно действие отката."
+		},
+		{
+			"id": "russian-technical-anglicisms",
+			"queryClass": "russian_technical_anglicisms",
+			"subject": "ретрай callback",
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian-anglicism",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-russian-layout",
+					"grade": 2
+				}
+			],
+			"notes": "Технический англицизм склоняется рядом с исходным английским термином."
+		},
+		{
+			"id": "russian-adjective-agreement",
+			"queryClass": "russian_adjective_agreement",
+			"subject": "плановое обновление клиенту",
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian-agreement",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-notification-morphology-deep",
+					"grade": 2
+				}
+			],
+			"notes": "Согласование прилагательного и падежи существительных должны сохранять релевантные incident threads."
+		},
+		{
+			"id": "wrong-keyboard-layout-baseline",
+			"queryClass": "wrong_keyboard_layout",
+			"subject": "htnhfq callback",
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian-layout",
+					"grade": 3
+				}
+			],
+			"notes": "Известный baseline failure: русское слово «ретрай» набрано в английской раскладке; исправление относится к более поздней фазе."
+		},
+		{
+			"id": "russian-natural-word-typo",
+			"queryClass": "russian_word_typo",
+			"subject": "уведомленеи платеж",
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian-typo",
+					"grade": 3
+				}
+			],
+			"notes": "Опечатка в естественном русском слове измеряет шум и recall текущего trigram fallback."
+		},
+		{
+			"id": "russian-prefix-negative",
+			"queryClass": "russian_prefix_negative",
+			"subject": "зависший платеж",
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-russian-payment-deep",
+					"grade": 3
+				}
+			],
+			"notes": "Нерелевантный тред со словами «платёжный» и «зависимость» не должен подниматься из-за широких prefix stems."
+		},
+		{
+			"id": "russian-perfective-participle",
+			"queryClass": "russian_perfective_participle",
+			"subject": "бросивший",
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian-perfective-participle",
+					"grade": 3
+				}
+			],
+			"notes": "Snowball должен связать причастие «бросивший» с глагольной формой «бросил»; ручной suffix stem оставляет слишком длинную основу."
+		},
+		{
+			"id": "concept-duplicate-charge",
+			"queryClass": "domain_concept_paraphrase",
+			"subject": "деньги списали дважды после повтора",
+			"scopes": ["payments"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian-payment-deep",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-vague",
+					"grade": 2
+				},
+				{
+					"threadId": "thread-russian",
+					"grade": 2
+				}
+			],
+			"notes": "Известный semantic failure: разговорная формулировка «списали дважды» должна связываться с повторным или duplicate charge без общего точного словаря."
+		},
+		{
+			"id": "concept-retry-action",
+			"queryClass": "domain_concept_retry",
+			"subject": "повторный запуск обработки callback",
+			"scopes": ["payments"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-callback-deep",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-russian-anglicism",
+					"grade": 2
+				},
+				{
+					"threadId": "thread-probes",
+					"grade": 1
+				}
+			],
+			"notes": "Формулировка действия через «повторный запуск» должна находить retry/scheduleRetry обсуждения, но не получать вес exact evidence."
+		},
+		{
+			"id": "full-wrong-keyboard-layout",
+			"queryClass": "wrong_keyboard_layout_phrase",
+			"subject": "pfdbckb gkfnt;b",
+			"scopes": ["payments"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-russian-payment-deep",
+					"grade": 3
+				}
+			],
+			"notes": "Фраза «зависли платежи» целиком набрана в английской раскладке и не содержит корректного lexical anchor."
+		},
+		{
+			"id": "latin-transliteration-phrase",
+			"queryClass": "latin_transliteration_phrase",
+			"subject": "replikaciya dannyh",
+			"scopes": ["payments"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-mixed-language",
+					"grade": 3
+				}
+			],
+			"notes": "Русская фраза «репликация данных» введена латиницей; будущая транслитерация должна быть bounded fallback, а не exact evidence."
+		},
+		{
+			"id": "mixed-script-confusable",
+			"queryClass": "mixed_script_confusable",
+			"subject": "paymеnt callback",
+			"scopes": ["payments"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-probes",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-callback-deep",
+					"grade": 2
+				},
+				{
+					"threadId": "thread-ticket",
+					"grade": 1
+				}
+			],
+			"notes": "В слове paymеnt используется кириллическая «е». Нормализация confusables должна восстановить технический токен без широкого fuzzy search."
+		},
+		{
+			"id": "short-russian-typo",
+			"queryClass": "short_russian_word_typo",
+			"subject": "платж завис",
+			"scopes": ["payments"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-russian",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-russian-payment-deep",
+					"grade": 3
+				}
+			],
+			"notes": "Две короткие неполные русские формы проверяют recall и шум typo fallback; нерелевантная «платёжный календарь и зависимость отпусков» не считается ответом."
+		},
+		{
+			"id": "proximity-same-post-window",
+			"queryClass": "same_post_token_proximity",
+			"subject": "timeout callback повторное списание",
+			"scopes": ["search-quality"],
+			"expectedThreads": [
+				{
+					"threadId": "thread-proximity-investigation",
+					"grade": 3
+				},
+				{
+					"threadId": "thread-proximity-glossary",
+					"grade": 1
+				}
+			],
+			"notes": "Оба треда содержат все термины в одном сообщении. Incident thread держит их в коротком причинном окне и содержит расследование; новый glossary перечисляет термины в независимых разделах."
 		}
 	],
 	"synonyms": {
 		"репликейшн": ["replication"]
+	},
+	"concepts": {
+		"duplicate-charge": [
+			"повторное списание",
+			"списали дважды",
+			"duplicate charge",
+			"charged a customer twice"
+		],
+		"retry": [
+			"повторный запуск",
+			"повторные попытки",
+			"retry",
+			"ретрай",
+			"scheduleRetry"
+		]
 	}
 }

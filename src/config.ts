@@ -10,6 +10,15 @@ const searchSynonymsSchema = z
 		z.array(z.string().trim().min(2).max(80)).max(8),
 	)
 	.default({});
+const searchConceptsSchema = z
+	.record(
+		z
+			.string()
+			.trim()
+			.regex(/^[a-z0-9][a-z0-9-]{1,63}$/),
+		z.array(z.string().trim().min(2).max(120)).min(2).max(8),
+	)
+	.default({});
 
 const routeMetadataSchema = z.object({
 	description: z.string().trim().min(1),
@@ -59,6 +68,7 @@ const localConfigSchema = z
 		historyDays: z.number().int().positive().default(365),
 		pageSize: z.number().int().min(1).max(200).default(100),
 		synonyms: searchSynonymsSchema,
+		concepts: searchConceptsSchema,
 		budgets: outputBudgetsSchema,
 		channels: z
 			.record(z.string().trim().min(1), configuredChannelSchema)
@@ -74,6 +84,37 @@ const localConfigSchema = z
 				message: "Search synonyms are limited to 32 configured groups.",
 				path: ["synonyms"],
 			});
+		}
+		if (Object.keys(config.concepts).length > 32) {
+			context.addIssue({
+				code: "custom",
+				message: "Search concepts are limited to 32 configured groups.",
+				path: ["concepts"],
+			});
+		}
+		const conceptAliases = new Map<string, string>();
+		for (const [conceptId, aliases] of Object.entries(config.concepts)) {
+			const normalizedInGroup = new Set<string>();
+			for (const alias of aliases) {
+				const normalized = alias.toLowerCase().replaceAll("ё", "е");
+				if (normalizedInGroup.has(normalized)) {
+					context.addIssue({
+						code: "custom",
+						message: `Concept ${conceptId} contains duplicate alias ${alias}.`,
+						path: ["concepts", conceptId],
+					});
+				}
+				normalizedInGroup.add(normalized);
+				const existing = conceptAliases.get(normalized);
+				if (existing && existing !== conceptId) {
+					context.addIssue({
+						code: "custom",
+						message: `Concept alias ${alias} is shared by ${existing} and ${conceptId}.`,
+						path: ["concepts", conceptId],
+					});
+				}
+				conceptAliases.set(normalized, conceptId);
+			}
 		}
 		for (const alias of Object.keys(config.channels)) {
 			if (alias in config.directMessages) {
@@ -91,11 +132,13 @@ export type ConfiguredDirectMessage = z.output<
 	typeof configuredDirectMessageSchema
 >;
 export type OutputBudgets = z.output<typeof outputBudgetsSchema>;
+export type SearchConcepts = z.output<typeof searchConceptsSchema>;
 export type LocalMattermostConfig = z.output<typeof localConfigSchema>;
 
 export interface MattermostConfig
-	extends Omit<LocalMattermostConfig, "synonyms"> {
+	extends Omit<LocalMattermostConfig, "synonyms" | "concepts"> {
 	synonyms?: LocalMattermostConfig["synonyms"];
+	concepts?: SearchConcepts;
 	url: string;
 	configPath: string;
 	databasePath: string;

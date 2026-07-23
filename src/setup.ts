@@ -232,7 +232,7 @@ async function addLocalChecks(
 	checks: DoctorCheck[],
 ): Promise<void> {
 	checks.push(await sqliteCheck());
-	checks.push(await databaseIndexCheck(config.databasePath));
+	checks.push(await databaseIndexCheck(config.databasePath, config.concepts));
 	checks.push(
 		await writablePathCheck("config_directory", dirname(config.configPath)),
 	);
@@ -266,10 +266,13 @@ async function sqliteCheck(): Promise<DoctorCheck> {
 	}
 }
 
-async function databaseIndexCheck(path: string): Promise<DoctorCheck> {
+async function databaseIndexCheck(
+	path: string,
+	concepts: MattermostConfig["concepts"],
+): Promise<DoctorCheck> {
 	let store: MattermostStore | undefined;
 	try {
-		store = await MattermostStore.open(path);
+		store = await MattermostStore.open(path, { concepts });
 		store.verifyIntegrity();
 		const versions = store.migrationVersions();
 		store.close();

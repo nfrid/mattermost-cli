@@ -108,7 +108,9 @@ export async function syncCommand(
 	options: Pick<SyncOptions, "aliases" | "full"> = {},
 	dependencies: CommandDependencies = {},
 ): Promise<CommandResult<unknown>> {
-	const store = await MattermostStore.open(config.databasePath);
+	const store = await MattermostStore.open(config.databasePath, {
+		concepts: config.concepts,
+	});
 	try {
 		return commandSuccess(
 			"sync",

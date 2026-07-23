@@ -19,6 +19,9 @@ describe("loadMattermostConfig", () => {
 			url: "https://chat.example.test/",
 			teamId: "team-id",
 			synonyms: { репликация: ["replication", "data replication"] },
+			concepts: {
+				"duplicate-charge": ["повторное списание", "списали дважды"],
+			},
 			channels: {
 				payments: {
 					name: "payments",
@@ -49,6 +52,9 @@ describe("loadMattermostConfig", () => {
 		expect(config.synonyms).toEqual({
 			репликация: ["replication", "data replication"],
 		});
+		expect(config.concepts).toEqual({
+			"duplicate-charge": ["повторное списание", "списали дважды"],
+		});
 		expect(config.budgets.defaultMaxCharacters).toBe(16_000);
 	});
 
@@ -59,6 +65,23 @@ describe("loadMattermostConfig", () => {
 			teamId: "team-id",
 			synonyms: {
 				репликация: Array.from({ length: 9 }, (_, index) => `alias-${index}`),
+			},
+			channels: {},
+			directMessages: {},
+		});
+		await expect(
+			loadMattermostConfig({ projectRoot, env: {} }),
+		).rejects.toMatchObject({ kind: "invalid_config" });
+	});
+
+	test("bounds concepts and rejects aliases shared by concept groups", async () => {
+		const projectRoot = await temporaryProject({
+			schemaVersion: 1,
+			url: "https://chat.example.test",
+			teamId: "team-id",
+			concepts: {
+				"duplicate-charge": ["повторное списание", "списали дважды"],
+				billing: ["повторное списание", "billing incident"],
 			},
 			channels: {},
 			directMessages: {},

@@ -133,7 +133,10 @@ describe("agent projection", () => {
 	test("projects compact search candidates without detailed freshness evidence", async () => {
 		const store = await seededStore({ stale: true, complete: false });
 		const search = await searchMattermost(
-			{ subject: "payment evidence", channels: ["payments"] },
+			{
+				subject: "payment evidence",
+				channels: ["payments"],
+			},
 			{ config: configFixture(), store, now: () => 8_200_000 },
 		);
 		const result = projectAgentResult(
@@ -161,6 +164,7 @@ describe("agent projection", () => {
 						"exact_phrase_in_root",
 						"exact_phrase_in_reply",
 						"all_terms_in_thread",
+						"exact_terms_near",
 						"rank_fusion",
 						"routing_explicit_channel",
 					],

@@ -22,6 +22,7 @@
 		"format:fix": "biome format --write .",
 		"test": "bun test",
 		"benchmark": "bun run src/benchmark-cli.ts benchmarks/retrieval.v1.json",
+		"benchmark:compare": "bun run src/benchmark-compare-cli.ts",
 		"smoke": "MATTERMOST_INTEGRATION=1 bun test src/mattermost/integration.test.ts",
 		"check": "bun run typecheck && biome check . && bun test",
 		"check:release": "bun run check && bun run smoke",
