@@ -106,20 +106,36 @@ export async function syncConfiguredConversations(
 		client,
 		options.aliases,
 	);
+	const outcomes = await mapWithConcurrency(
+		conversations,
+		async (conversation) => {
+			options.onProgress?.(`Syncing ${conversation.alias}…`);
+			try {
+				const result = await syncConversation(
+					config,
+					client,
+					store,
+					conversation,
+					options,
+				);
+				return { success: true as const, result };
+			} catch (error) {
+				return { success: false as const, conversation, error };
+			}
+		},
+	);
 	const results: ConversationSyncResult[] = [];
-	for (const conversation of conversations) {
-		options.onProgress?.(`Syncing ${conversation.alias}…`);
-		try {
-			results.push(
-				await syncConversation(config, client, store, conversation, options),
-			);
-		} catch (error) {
-			throw new ReconciliationError(
-				conversation,
-				store.getCheckpoint(conversation.id),
-				error,
-			);
-		}
+	let failure: { conversation: ConversationRecord; error: unknown } | undefined;
+	for (const outcome of outcomes) {
+		if (outcome.success) results.push(outcome.result);
+		else failure ??= outcome;
+	}
+	if (failure) {
+		throw new ReconciliationError(
+			failure.conversation,
+			store.getCheckpoint(failure.conversation.id),
+			failure.error,
+		);
 	}
 	return { conversations: results };
 }

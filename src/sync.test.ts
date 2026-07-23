@@ -68,6 +68,47 @@ const config = {
 } satisfies MattermostConfig;
 
 describe("targeted synchronization", () => {
+	test("synchronizes independent conversations concurrently in configured order", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const client = new FakeClient();
+		client.pages.set(
+			"channel-payments:0",
+			list(post("payment-post", "channel-payments", 1_000)),
+		);
+		client.pages.set(
+			"channel-platform:0",
+			list(post("platform-post", "channel-platform", 1_000)),
+		);
+		let releaseRequests = () => {};
+		client.postRequestGate = new Promise<void>((resolve) => {
+			releaseRequests = resolve;
+		});
+		let firstRequestStarted = () => {};
+		const firstRequest = new Promise<void>((resolve) => {
+			firstRequestStarted = resolve;
+		});
+		client.onPostRequest = firstRequestStarted;
+
+		const pending = syncConfiguredConversations(config, client, store, {
+			aliases: ["payments", "platform"],
+			now: () => 2_000,
+		});
+		await firstRequest;
+		await Promise.resolve();
+		const startedChannelIds = client.postRequests.map(
+			({ channelId }) => channelId,
+		);
+		releaseRequests();
+		const result = await pending;
+
+		expect(startedChannelIds).toEqual(["channel-payments", "channel-platform"]);
+		expect(result.conversations.map(({ alias }) => alias)).toEqual([
+			"payments",
+			"platform",
+		]);
+		store.close();
+	});
+
 	test("backfills only requested configured conversations and records bounded coverage", async () => {
 		const store = await MattermostStore.open(":memory:");
 		const client = new FakeClient();
@@ -458,6 +499,8 @@ class FakeClient implements SyncClient {
 		before?: string;
 	}[] = [];
 	failUsers = false;
+	postRequestGate?: Promise<void>;
+	onPostRequest?: () => void;
 
 	async getChannelByName(
 		_teamId: string,
@@ -490,6 +533,8 @@ class FakeClient implements SyncClient {
 			page: options.page,
 			before: options.before,
 		});
+		this.onPostRequest?.();
+		if (this.postRequestGate) await this.postRequestGate;
 		if (options.since !== undefined)
 			return this.sincePosts.get(channelId) ?? list();
 		if (options.before) {
