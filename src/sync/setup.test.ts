@@ -3,7 +3,10 @@ import { chmod, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MattermostConfig } from "../config/config.ts";
-import { MattermostClient } from "../mattermost/client.ts";
+import {
+	connectionFromConfig,
+	MattermostClient,
+} from "../mattermost/client.ts";
 import {
 	listConfiguredConversations,
 	runDoctor,
@@ -86,7 +89,7 @@ describe("configured conversations", () => {
 
 	test("resolves channel names and validates explicit DM IDs without writing config", async () => {
 		const requestedPaths: string[] = [];
-		const client = new MattermostClient(config, {
+		const client = new MattermostClient(connectionFromConfig(config), {
 			fetch: (async (input: string | URL | Request) => {
 				const path = new URL(String(input)).pathname;
 				requestedPaths.push(path);
@@ -125,7 +128,7 @@ describe("configured conversations", () => {
 			configPath,
 			databasePath,
 		};
-		const client = new MattermostClient(doctorConfig, {
+		const client = new MattermostClient(connectionFromConfig(doctorConfig), {
 			fetch: (async () =>
 				new Response(`expired ${doctorConfig.token}`, {
 					status: 401,
@@ -174,7 +177,7 @@ describe("configured conversations", () => {
 			}
 			return Response.json(channel("dm-id", "D", "alice__bob", ""));
 		}) as typeof fetch;
-		const client = new MattermostClient(doctorConfig, {
+		const client = new MattermostClient(connectionFromConfig(doctorConfig), {
 			fetch: fetchImplementation,
 		});
 

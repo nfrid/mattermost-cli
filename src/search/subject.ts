@@ -1,5 +1,6 @@
 import type { SearchConcepts } from "../config/config.ts";
 import { ConfigError } from "../shared/errors.ts";
+import { extractPermalinkId } from "./extract.ts";
 import { expandQueryTerms } from "./query-expansion.ts";
 import { conceptQueryMatches } from "./search-concepts.ts";
 import { morphSearchTerms } from "./search-token-normalization.ts";
@@ -13,7 +14,6 @@ import type {
 
 const POST_ID_PATTERN = /^[a-z0-9]{26}$/;
 const TICKET_PATTERN = /^[A-Z][A-Z0-9]+-\d+$/i;
-const PERMALINK_PATTERN = /\/pl\/([a-z0-9]{26})(?:[/?#]|$)/i;
 const MAX_TERMS_PER_PROBE = 8;
 const MAX_MORPH_TERMS_PER_PROBE = 8;
 const MAX_CONCEPT_MATCHES_PER_PROBE = 8;
@@ -33,11 +33,11 @@ export function classifySubject(
 		return { kind: "ticket", ticketKey, raw: explicitTicket };
 	}
 	const raw = positional?.trim() ?? "";
-	const permalink = raw.match(PERMALINK_PATTERN)?.[1];
+	const permalink = extractPermalinkId(raw);
 	if (permalink) {
 		return {
 			kind: "post",
-			postId: permalink.toLowerCase(),
+			postId: permalink,
 			raw,
 			source: "permalink",
 		};

@@ -9,6 +9,7 @@ import {
 	buildThreadFilterSql,
 	matchCenteredSnippet,
 } from "./search-sql.ts";
+import { describeThreadFilters } from "./thread-filters.ts";
 import {
 	bestBoundedTokenTrigramSimilarity,
 	stringTrigrams,
@@ -271,21 +272,22 @@ export function threadMatchesFilters(
 	threadId: string,
 	filters: ThreadSearchFilters = {},
 ): boolean {
+	const predicate = describeThreadFilters(filters);
 	const postClauses = ["p.thread_id = $threadId", "p.delete_at = 0"];
 	const parameters: Record<string, string | number> = {
 		$threadId: threadId,
 	};
-	if (filters.username) {
+	if (predicate.username) {
 		postClauses.push("lower(u.username) = lower($username)");
-		parameters.$username = filters.username.replace(/^@/, "");
+		parameters.$username = predicate.username;
 	}
-	if (filters.after !== undefined) {
+	if (predicate.after !== undefined) {
 		postClauses.push("p.create_at >= $after");
-		parameters.$after = filters.after;
+		parameters.$after = predicate.after;
 	}
-	if (filters.before !== undefined) {
+	if (predicate.before !== undefined) {
 		postClauses.push("p.create_at < $before");
-		parameters.$before = filters.before;
+		parameters.$before = predicate.before;
 	}
 	if (
 		!store.database
@@ -296,15 +298,15 @@ WHERE ${postClauses.join(" AND ")} LIMIT 1`)
 	) {
 		return false;
 	}
-	if (!filters.hasFile && !filters.filePattern) return true;
+	if (!predicate.requireFile) return true;
 	const fileClauses = [
 		"p.thread_id = $threadId",
 		"p.delete_at = 0",
 		"f.delete_at = 0",
 	];
-	if (filters.filePattern) {
+	if (predicate.filePattern) {
 		fileClauses.push("instr(lower(f.name), lower($filePattern)) > 0");
-		parameters.$filePattern = filters.filePattern;
+		parameters.$filePattern = predicate.filePattern;
 	}
 	return Boolean(
 		store.database

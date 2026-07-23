@@ -1,5 +1,6 @@
 import { dirname } from "node:path";
 import { z } from "zod";
+import { normalizeSearchText } from "../search/text.ts";
 import { ConfigError } from "../shared/errors.ts";
 import { resolveLocalPaths } from "../shared/paths.ts";
 
@@ -101,7 +102,7 @@ const localConfigSchema = z
 		for (const [conceptId, aliases] of Object.entries(config.concepts)) {
 			const normalizedInGroup = new Set<string>();
 			for (const alias of aliases) {
-				const normalized = alias.toLowerCase().replaceAll("ё", "е");
+				const normalized = normalizeSearchText(alias);
 				if (normalizedInGroup.has(normalized)) {
 					context.addIssue({
 						code: "custom",

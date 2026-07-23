@@ -2,7 +2,16 @@ import { z } from "zod";
 import type { MattermostConfig } from "../config/config.ts";
 import { requireMattermostToken } from "../config/config.ts";
 import { mapWithConcurrency } from "../shared/concurrency.ts";
-import { AppError } from "../shared/errors.ts";
+import {
+	DEFAULT_TIMEOUT_MS,
+	MAX_ERROR_BODY_CHARACTERS,
+	MAX_RESPONSE_BODY_BYTES,
+	MattermostApiError,
+	readResponseBytes,
+	readResponseText,
+	redactToken,
+	requestJson,
+} from "./http.ts";
 import {
 	type MattermostChannel,
 	type MattermostFileInfo,
@@ -18,10 +27,6 @@ import {
 	mattermostTeamSchema,
 	mattermostUserSchema,
 } from "./schemas.ts";
-
-const MAX_ERROR_BODY_CHARACTERS = 4_096;
-const MAX_RESPONSE_BODY_BYTES = 16 * 1_024 * 1_024;
-const DEFAULT_TIMEOUT_MS = 30_000;
 
 const channelPostOptionsSchema = z
 	.object({
@@ -49,17 +54,18 @@ const teamPostSearchOptionsSchema = z.object({
 export type ChannelPostOptions = z.input<typeof channelPostOptionsSchema>;
 export type TeamPostSearchOptions = z.input<typeof teamPostSearchOptionsSchema>;
 
-export class MattermostApiError extends AppError {
-	constructor(
-		message: string,
-		readonly status: number,
-		readonly responseBody: string,
-		kind = "api_error",
-		options?: ErrorOptions,
-	) {
-		super(message, "mattermost", kind, 1, options);
-		this.name = "MattermostApiError";
-	}
+export { MattermostApiError } from "./http.ts";
+
+/** Minimal connection credentials for the read-only Mattermost client. */
+export interface MattermostConnection {
+	url: string;
+	token: string;
+}
+
+export function connectionFromConfig(
+	config: MattermostConfig,
+): MattermostConnection {
+	return { url: config.url, token: requireMattermostToken(config) };
 }
 
 export interface MattermostClientOptions {
@@ -73,9 +79,12 @@ export class MattermostClient {
 	private readonly fetchImplementation: typeof fetch;
 	private readonly timeoutMs: number;
 
-	constructor(config: MattermostConfig, options: MattermostClientOptions = {}) {
-		this.baseUrl = `${config.url}/api/v4`;
-		this.token = requireMattermostToken(config);
+	constructor(
+		connection: MattermostConnection,
+		options: MattermostClientOptions = {},
+	) {
+		this.baseUrl = `${connection.url}/api/v4`;
+		this.token = connection.token;
 		this.fetchImplementation = options.fetch ?? fetch;
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	}
@@ -125,13 +134,11 @@ export class MattermostClient {
 	): Promise<MattermostPostList> {
 		const parsed = channelPostOptionsSchema.parse(options);
 		const query: Record<string, string> = {};
-
 		if (parsed.page !== undefined) query.page = String(parsed.page);
 		if (parsed.perPage !== undefined) query.per_page = String(parsed.perPage);
 		if (parsed.since !== undefined) query.since = String(parsed.since);
 		if (parsed.before !== undefined) query.before = parsed.before;
 		if (parsed.after !== undefined) query.after = parsed.after;
-
 		return this.getJson(
 			`/channels/${encodeURIComponent(channelId)}/posts`,
 			mattermostPostListSchema,
@@ -178,27 +185,7 @@ export class MattermostClient {
 	}
 
 	async downloadFile(fileId: string): Promise<Uint8Array> {
-		return this.#requestBinary(`/files/${encodeURIComponent(fileId)}`);
-	}
-
-	private getJson<T>(
-		path: string,
-		schema: z.ZodType<T>,
-		searchParams: Record<string, string> = {},
-	): Promise<T> {
-		return this.#requestJson("GET", path, schema, searchParams);
-	}
-
-	private postJson<T>(
-		path: string,
-		schema: z.ZodType<T>,
-		body: unknown,
-	): Promise<T> {
-		return this.#requestJson("POST", path, schema, {}, body);
-	}
-
-	async #requestBinary(path: string): Promise<Uint8Array> {
-		const url = new URL(`${this.baseUrl}${path}`);
+		const url = new URL(`${this.baseUrl}/files/${encodeURIComponent(fileId)}`);
 		let response: Response;
 		try {
 			response = await this.fetchImplementation(url, {
@@ -263,144 +250,41 @@ export class MattermostClient {
 		return bytes;
 	}
 
-	async #requestJson<T>(
-		method: "GET" | "POST",
+	private getJson<T>(
 		path: string,
 		schema: z.ZodType<T>,
 		searchParams: Record<string, string> = {},
-		body?: unknown,
 	): Promise<T> {
-		const url = new URL(`${this.baseUrl}${path}`);
-
-		for (const [name, value] of Object.entries(searchParams)) {
-			url.searchParams.set(name, value);
-		}
-
-		let response: Response;
-
-		try {
-			response = await this.fetchImplementation(url, {
-				method,
-				headers: {
-					Accept: "application/json",
-					Authorization: `Bearer ${this.token}`,
-					...(body === undefined ? {} : { "Content-Type": "application/json" }),
-				},
-				...(body === undefined ? {} : { body: JSON.stringify(body) }),
-				signal: AbortSignal.timeout(this.timeoutMs),
-			});
-		} catch (error) {
-			throw new MattermostApiError(
-				"Mattermost API request failed before receiving a response.",
-				0,
-				"",
-				"request_failed",
-				{ cause: error },
-			);
-		}
-
-		if (!response.ok) {
-			const tokenBytes = new TextEncoder().encode(this.token).length;
-			const { text } = await readResponseText(
-				response,
-				MAX_ERROR_BODY_CHARACTERS + tokenBytes,
-				true,
-			);
-			const responseBody = [...redactToken(text, this.token)]
-				.slice(0, MAX_ERROR_BODY_CHARACTERS)
-				.join("");
-			throw new MattermostApiError(
-				`Mattermost API request failed with ${response.status} ${response.statusText}.`,
-				response.status,
-				responseBody,
-			);
-		}
-
-		try {
-			const declaredLength = Number(response.headers.get("content-length"));
-			if (
-				Number.isFinite(declaredLength) &&
-				declaredLength > MAX_RESPONSE_BODY_BYTES
-			) {
-				throw new MattermostApiError(
-					"Mattermost API response exceeded the configured safety bound.",
-					response.status,
-					"",
-					"response_too_large",
-				);
-			}
-			const { text, truncated } = await readResponseText(
-				response,
-				MAX_RESPONSE_BODY_BYTES,
-				false,
-			);
-			if (truncated) {
-				throw new MattermostApiError(
-					"Mattermost API response exceeded the configured safety bound.",
-					response.status,
-					"",
-					"response_too_large",
-				);
-			}
-			return schema.parse(JSON.parse(text));
-		} catch (error) {
-			if (error instanceof MattermostApiError) throw error;
-			throw new MattermostApiError(
-				"Mattermost API returned an invalid response.",
-				response.status,
-				"",
-				"invalid_response",
-				{ cause: error },
-			);
-		}
+		return requestJson(
+			{
+				baseUrl: this.baseUrl,
+				token: this.token,
+				fetchImplementation: this.fetchImplementation,
+				timeoutMs: this.timeoutMs,
+				method: "GET",
+				path,
+				searchParams,
+			},
+			schema,
+		);
 	}
-}
 
-async function readResponseBytes(
-	response: Response,
-	maxBytes: number,
-): Promise<{ bytes: Uint8Array; truncated: boolean }> {
-	if (!response.body) return { bytes: new Uint8Array(), truncated: false };
-	const reader = response.body.getReader();
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	let truncated = false;
-	while (true) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		const remaining = maxBytes - total;
-		if (value.byteLength > remaining) {
-			if (remaining > 0) chunks.push(value.slice(0, remaining));
-			truncated = true;
-			await reader.cancel();
-			break;
-		}
-		chunks.push(value);
-		total += value.byteLength;
+	private postJson<T>(
+		path: string,
+		schema: z.ZodType<T>,
+		body: unknown,
+	): Promise<T> {
+		return requestJson(
+			{
+				baseUrl: this.baseUrl,
+				token: this.token,
+				fetchImplementation: this.fetchImplementation,
+				timeoutMs: this.timeoutMs,
+				method: "POST",
+				path,
+				body,
+			},
+			schema,
+		);
 	}
-	const bytes = new Uint8Array(
-		chunks.reduce((length, chunk) => length + chunk.byteLength, 0),
-	);
-	let offset = 0;
-	for (const chunk of chunks) {
-		bytes.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	return { bytes, truncated };
-}
-
-async function readResponseText(
-	response: Response,
-	maxBytes: number,
-	allowTruncate: boolean,
-): Promise<{ text: string; truncated: boolean }> {
-	const { bytes, truncated } = await readResponseBytes(response, maxBytes);
-	if (truncated && !allowTruncate) {
-		return { text: "", truncated: true };
-	}
-	return { text: new TextDecoder().decode(bytes), truncated };
-}
-
-function redactToken(value: string, token: string): string {
-	return token ? value.replaceAll(token, "[REDACTED]") : value;
 }

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { MattermostConfig } from "../config/config.ts";
-import { MattermostApiError, MattermostClient } from "./client.ts";
+import {
+	connectionFromConfig,
+	MattermostApiError,
+	MattermostClient,
+} from "./client.ts";
 
 const config = {
 	schemaVersion: 1,
@@ -32,7 +36,7 @@ describe("MattermostClient", () => {
 	test("uses GET, bearer auth, encoded paths, and supported query parameters", async () => {
 		let capturedUrl = "";
 		let capturedInit: RequestInit | undefined;
-		const client = new MattermostClient(config, {
+		const client = new MattermostClient(connectionFromConfig(config), {
 			fetch: mockFetch((input, init) => {
 				capturedUrl = String(input);
 				capturedInit = init;
@@ -58,7 +62,7 @@ describe("MattermostClient", () => {
 	test("performs only the named bounded team post search operation", async () => {
 		let capturedUrl = "";
 		let capturedInit: RequestInit | undefined;
-		const client = new MattermostClient(config, {
+		const client = new MattermostClient(connectionFromConfig(config), {
 			fetch: mockFetch((input, init) => {
 				capturedUrl = String(input);
 				capturedInit = init;
@@ -88,7 +92,7 @@ describe("MattermostClient", () => {
 
 	test("rejects unbounded team post search before a request", async () => {
 		let called = false;
-		const client = new MattermostClient(config, {
+		const client = new MattermostClient(connectionFromConfig(config), {
 			fetch: mockFetch(() => {
 				called = true;
 				return jsonResponse({});
@@ -102,7 +106,7 @@ describe("MattermostClient", () => {
 
 	test("rejects oversized post-search result sets", async () => {
 		const order = Array.from({ length: 101 }, (_, index) => `post-${index}`);
-		const client = new MattermostClient(config, {
+		const client = new MattermostClient(connectionFromConfig(config), {
 			fetch: mockFetch(() => jsonResponse({ order, posts: {} })),
 		});
 		await expect(
@@ -112,7 +116,7 @@ describe("MattermostClient", () => {
 
 	test("rejects mutually incompatible channel cursors before a request", async () => {
 		let called = false;
-		const client = new MattermostClient(config, {
+		const client = new MattermostClient(connectionFromConfig(config), {
 			fetch: mockFetch(() => {
 				called = true;
 				return jsonResponse({});
@@ -126,7 +130,7 @@ describe("MattermostClient", () => {
 	});
 
 	test("redacts tokens and bounds API response bodies", async () => {
-		const client = new MattermostClient(config, {
+		const client = new MattermostClient(connectionFromConfig(config), {
 			fetch: mockFetch(() =>
 				Promise.resolve(
 					new Response(`super-secret-token:${"x".repeat(10_000)}`, {
@@ -150,7 +154,7 @@ describe("MattermostClient", () => {
 	});
 
 	test("redacts a token that crosses the displayed error boundary", async () => {
-		const client = new MattermostClient(config, {
+		const client = new MattermostClient(connectionFromConfig(config), {
 			fetch: mockFetch(() =>
 				Promise.resolve(
 					new Response(`${"x".repeat(4_090)}super-secret-token:suffix`, {
@@ -170,7 +174,7 @@ describe("MattermostClient", () => {
 	});
 
 	test("rejects success bodies above the bounded response size", async () => {
-		const client = new MattermostClient(config, {
+		const client = new MattermostClient(connectionFromConfig(config), {
 			fetch: mockFetch(() =>
 				Promise.resolve(
 					new Response("{}", {
@@ -185,7 +189,7 @@ describe("MattermostClient", () => {
 	});
 
 	test("validates response fields while tolerating unrelated fields", async () => {
-		const client = new MattermostClient(config, {
+		const client = new MattermostClient(connectionFromConfig(config), {
 			fetch: mockFetch(() =>
 				jsonResponse({
 					id: "user-id",

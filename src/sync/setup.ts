@@ -12,6 +12,10 @@ import type { MattermostClient } from "../mattermost/client.ts";
 import type { MattermostChannel } from "../mattermost/schemas.ts";
 import type { Warning } from "../shared/command-result.ts";
 import { databaseFilePaths, MattermostStore } from "../store/index.ts";
+import {
+	channelIdentityMatches,
+	directMessageIdentityMatches,
+} from "./identity.ts";
 
 export type ConfiguredDirectMessageResult = Omit<
 	ConfiguredDirectMessage,
@@ -164,10 +168,7 @@ async function validateChannel(
 		const remote = channel.id
 			? await client.getChannel(channel.id)
 			: await client.getChannelByName(config.teamId, channel.name);
-		const valid =
-			(remote.type === "O" || remote.type === "P") &&
-			remote.team_id === config.teamId &&
-			remote.name === channel.name;
+		const valid = channelIdentityMatches(remote, channel, config.teamId);
 		return channelValidationItem(alias, "channel", channel.id, remote, valid);
 	} catch (error) {
 		return {
@@ -187,7 +188,7 @@ async function validateDirectMessage(
 ): Promise<ValidationItem> {
 	try {
 		const remote = await client.getChannel(directMessage.channelId);
-		const valid = remote.type === "D" || remote.type === "G";
+		const valid = directMessageIdentityMatches(remote, directMessage);
 		return channelValidationItem(
 			alias,
 			"direct_message",

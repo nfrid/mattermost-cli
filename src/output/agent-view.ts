@@ -20,9 +20,14 @@ import {
 import {
 	extractEngineeringEntities,
 	extractTicketKeys,
+	MULTI_TICKET_BULLETIN_MIN_KEYS,
 } from "../search/extract.ts";
-import type { MattermostSubject } from "../search/index.ts";
+import {
+	POINTER_EXCERPT_LIMIT,
+	truncateExcerpt,
+} from "../search/match-utils.ts";
 import type { CommandResult, Warning } from "../shared/command-result.ts";
+import { isoTimestamp, subjectValue } from "./shared.ts";
 
 export interface AgentFile {
 	id: string;
@@ -269,7 +274,7 @@ function projectSearch(
 				conversation: candidate.conversationAlias,
 				kind: candidate.conversationKind,
 				url: candidate.link,
-				latestAt: iso(candidate.latestActivityAt),
+				latestAt: isoTimestamp(candidate.latestActivityAt),
 				excerpts: [...new Set(candidate.matches.map(({ excerpt }) => excerpt))],
 			}),
 		),
@@ -433,8 +438,8 @@ function evidenceCardFields(
 	return {
 		role: options.role,
 		span: {
-			firstAt: iso(first?.createAt ?? 0),
-			lastAt: iso(last?.createAt ?? 0),
+			firstAt: isoTimestamp(first?.createAt ?? 0),
+			lastAt: isoTimestamp(last?.createAt ?? 0),
 			totalPosts: thread.totalPosts,
 		},
 		anchors: collectAnchors(chronological, {
@@ -471,24 +476,24 @@ function collectAnchors(
 			push({
 				kind: "root",
 				postId: post.id,
-				at: iso(post.createAt),
-				text: post.message.slice(0, 160),
+				at: isoTimestamp(post.createAt),
+				text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
 			});
 		}
 		if (subject && keys.includes(subject)) {
 			push({
 				kind: "ticket_mention",
 				postId: post.id,
-				at: iso(post.createAt),
-				text: post.message.slice(0, 160),
+				at: isoTimestamp(post.createAt),
+				text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
 			});
 		}
 		if (matchIds.has(post.id)) {
 			push({
 				kind: "match_hit",
 				postId: post.id,
-				at: iso(post.createAt),
-				text: post.message.slice(0, 160),
+				at: isoTimestamp(post.createAt),
+				text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
 				matched: subject ? [subject] : keys.slice(0, 3),
 			});
 		}
@@ -497,7 +502,7 @@ function collectAnchors(
 			push({
 				kind: "file",
 				postId: post.id,
-				at: iso(post.createAt),
+				at: isoTimestamp(post.createAt),
 				files: liveFiles.map((file) => ({
 					id: file.id,
 					name: file.name,
@@ -505,12 +510,12 @@ function collectAnchors(
 				})),
 			});
 		}
-		if (keys.length >= 2) {
+		if (keys.length >= MULTI_TICKET_BULLETIN_MIN_KEYS) {
 			push({
 				kind: "multi_ticket",
 				postId: post.id,
-				at: iso(post.createAt),
-				text: post.message.slice(0, 160),
+				at: isoTimestamp(post.createAt),
+				text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
 				matched: keys,
 			});
 		}
@@ -524,8 +529,8 @@ function collectAnchors(
 			push({
 				kind: "codeish",
 				postId: post.id,
-				at: iso(post.createAt),
-				text: post.message.slice(0, 160),
+				at: isoTimestamp(post.createAt),
+				text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
 			});
 		}
 	}
@@ -534,8 +539,8 @@ function collectAnchors(
 		push({
 			kind: "latest",
 			postId: latest.id,
-			at: iso(latest.createAt),
-			text: latest.message.slice(0, 160),
+			at: isoTimestamp(latest.createAt),
+			text: truncateExcerpt(latest.message, POINTER_EXCERPT_LIMIT),
 		});
 	}
 	return anchors;
@@ -619,7 +624,7 @@ function projectRelatedTickets(
 		...(pointer.url ? { url: pointer.url } : {}),
 		...(pointer.conversation ? { conversation: pointer.conversation } : {}),
 		...(pointer.latestAt !== undefined
-			? { latestAt: iso(pointer.latestAt) }
+			? { latestAt: isoTimestamp(pointer.latestAt) }
 			: {}),
 		...(pointer.excerpt ? { excerpt: pointer.excerpt } : {}),
 		...(pointer.sourceThreadId
@@ -744,8 +749,10 @@ function projectMessage(post: {
 	return {
 		id: post.id,
 		text: post.message,
-		at: iso(post.createAt),
-		...(post.updateAt > post.createAt ? { editedAt: iso(post.updateAt) } : {}),
+		at: isoTimestamp(post.createAt),
+		...(post.updateAt > post.createAt
+			? { editedAt: isoTimestamp(post.updateAt) }
+			: {}),
 		...(post.deleteAt ? { deleted: true as const } : {}),
 		...(files.length ? { files } : {}),
 	};
@@ -761,21 +768,6 @@ function status(
 		searchComplete,
 		threadsComplete,
 	};
-}
-
-function subjectValue(subject: MattermostSubject): string {
-	switch (subject.kind) {
-		case "ticket":
-			return subject.ticketKey;
-		case "post":
-			return subject.postId;
-		case "text":
-			return subject.text;
-	}
-}
-
-function iso(timestamp: number): string {
-	return new Date(timestamp).toISOString();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

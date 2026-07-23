@@ -1,6 +1,7 @@
 import type { MattermostConfig } from "../config/config.ts";
 import { ConfigError } from "../shared/errors.ts";
 import type { ConversationRecord, MattermostStore } from "../store/index.ts";
+import { resolveConfiguredAllowlist } from "../sync/conversations.ts";
 import type {
 	RankingReason,
 	RoutedConversation,
@@ -12,50 +13,10 @@ export function configuredConversations(
 	config: MattermostConfig,
 	store: MattermostStore,
 ): RoutedConversation[] {
-	const indexed = new Map(
-		store
-			.listConversations()
-			.map((conversation) => [conversation.alias, conversation]),
-	);
-	const result: RoutedConversation[] = [];
-	for (const [alias, channel] of Object.entries(config.channels)) {
-		const indexedConversation = indexed.get(alias);
-		const local =
-			indexedConversation?.kind === "channel" &&
-			indexedConversation.name === channel.name &&
-			(!channel.id || indexedConversation.id === channel.id)
-				? indexedConversation
-				: undefined;
-		const id = channel.id ?? local?.id;
-		if (!id) continue;
-		result.push({
-			id,
-			alias,
-			kind: "channel",
-			name: channel.name,
-			description: channel.description,
-			priority: channel.priority,
-			evidence: [],
-		});
-	}
-	for (const [alias, directMessage] of Object.entries(config.directMessages)) {
-		const indexedConversation = indexed.get(alias);
-		const local =
-			indexedConversation?.kind === "direct_message" &&
-			indexedConversation.id === directMessage.channelId
-				? indexedConversation
-				: undefined;
-		result.push({
-			id: directMessage.channelId,
-			alias,
-			kind: "direct_message",
-			name: local?.name ?? alias,
-			description: directMessage.description,
-			priority: directMessage.priority,
-			evidence: [],
-		});
-	}
-	return result.sort(routeTieBreak);
+	return resolveConfiguredAllowlist(config, store).map((conversation) => ({
+		...conversation,
+		evidence: [],
+	}));
 }
 
 export function routeConversations(

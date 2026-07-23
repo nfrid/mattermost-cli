@@ -1,6 +1,10 @@
 import { extractTicketKeys } from "../search/extract.ts";
 import {
+	DEFAULT_CLUSTER_MERGE_GAP,
+	DEFAULT_MATCH_RADIUS,
+	DEFAULT_TICKET_RADIUS,
 	segmentThreadByTicketProximity,
+	type TicketProximityMetrics,
 	ticketWindowPostIds,
 } from "./ticket-segments.ts";
 
@@ -99,11 +103,12 @@ export interface PackThreadOptions {
 	mode?: "default" | "short";
 	limit: number;
 	full?: boolean;
+	/** Precomputed ticket proximity metrics to avoid re-segmentation. */
+	ticketMetrics?: TicketProximityMetrics;
 }
 
-const DEFAULT_NEIGHBORHOOD_RADIUS = 2;
-const DEFAULT_TICKET_NEIGHBORHOOD_RADIUS = 8;
-const DEFAULT_CLUSTER_MERGE_GAP = 2;
+const DEFAULT_NEIGHBORHOOD_RADIUS = DEFAULT_MATCH_RADIUS;
+const DEFAULT_TICKET_NEIGHBORHOOD_RADIUS = DEFAULT_TICKET_RADIUS;
 /** High-priority tail posts before gap-fill; remainder may fill later. */
 const LATEST_PRIORITY_COUNT = 3;
 const SHORT_LATEST_PRIORITY_COUNT = 2;
@@ -147,23 +152,29 @@ export function packThread(
 		0,
 		options.clusterMergeGap ?? DEFAULT_CLUSTER_MERGE_GAP,
 	);
-	const ticketMetrics = subjectTicket
-		? segmentThreadByTicketProximity(chronological, {
-				subjectTicket,
-				matchingPostIds: options.matchingPostIds,
-				ticketRadius,
-				matchRadius,
-				clusterMergeGap: mergeGap,
-			})
-		: undefined;
+	const ticketMetrics =
+		options.ticketMetrics ??
+		(subjectTicket
+			? segmentThreadByTicketProximity(chronological, {
+					subjectTicket,
+					matchingPostIds: options.matchingPostIds,
+					ticketRadius,
+					matchRadius,
+					clusterMergeGap: mergeGap,
+				})
+			: undefined);
 	const inTicketWindow = subjectTicket
-		? ticketWindowPostIds(chronological, {
-				subjectTicket,
-				matchingPostIds: options.matchingPostIds,
-				ticketRadius,
-				matchRadius,
-				clusterMergeGap: mergeGap,
-			})
+		? ticketWindowPostIds(
+				chronological,
+				{
+					subjectTicket,
+					matchingPostIds: options.matchingPostIds,
+					ticketRadius,
+					matchRadius,
+					clusterMergeGap: mergeGap,
+				},
+				ticketMetrics,
+			)
 		: undefined;
 
 	if (options.full) {

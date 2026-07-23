@@ -3,6 +3,7 @@ import type { EvidencePost } from "../evidence/packing.ts";
 import { MattermostApiError } from "../mattermost/client.ts";
 import type { MattermostPost } from "../mattermost/schemas.ts";
 import {
+	buildRankingReasons,
 	evaluateThreadEvidence,
 	type MattermostSubject,
 	type RankingReason,
@@ -149,33 +150,20 @@ export function reevaluateCandidate(
 	subject: MattermostSubject,
 	probes: readonly RetrievalProbe[],
 ): { reasons: RankingReason[]; latestActivityAt: number } {
-	const reasons: RankingReason[] = [];
-	if (candidate.reasons.includes("direct_post")) reasons.push("direct_post");
-	if (candidate.reasons.includes("remote_search"))
-		reasons.push("remote_search");
-	if (candidate.reasons.includes("explicit_ticket_relationship")) {
-		reasons.push("explicit_ticket_relationship");
-	}
 	const root = posts.find(({ id }) => id === candidate.rootPostId);
 	const ticketKey = subject.kind === "ticket" ? subject.ticketKey : undefined;
-	if (
+	const rootHasTicket = Boolean(
+		ticketKey && root && containsNormalizedExactText(root.message, ticketKey),
+	);
+	const replyHasTicket = Boolean(
 		ticketKey &&
-		root &&
-		containsNormalizedExactText(root.message, ticketKey)
-	) {
-		reasons.push("ticket_in_root");
-	}
-	if (
-		ticketKey &&
-		posts.some(
-			(post) =>
-				post.id !== candidate.rootPostId &&
-				containsNormalizedExactText(post.message, ticketKey),
-		)
-	) {
-		reasons.push("ticket_in_reply");
-	}
-	if (
+			posts.some(
+				(post) =>
+					post.id !== candidate.rootPostId &&
+					containsNormalizedExactText(post.message, ticketKey),
+			),
+	);
+	const hasStructuredMatch = Boolean(
 		candidate.structuredMatches?.some((structured) => {
 			const post = posts.find(({ id }) => id === structured.postId);
 			return Boolean(
@@ -186,58 +174,29 @@ export function reevaluateCandidate(
 								!deleteAt && containsNormalizedText(name, structured.value),
 						)),
 			);
-		})
-	) {
-		reasons.push("structured_entity_match");
-	}
+		}),
+	);
 	const rankingEvidence = evaluateThreadEvidence(
 		posts,
 		candidate.rootPostId,
 		subject,
 		probes,
 	);
-	if (rankingEvidence.subjectInRoot) reasons.push("subject_in_root");
-	if (
-		rankingEvidence.exactPhraseInRootCount > 0 ||
-		rankingEvidence.exactPhraseInReplyCount > 0
-	) {
-		reasons.push("exact_phrase");
-	}
-	if (rankingEvidence.exactPhraseInRootCount > 0) {
-		reasons.push("exact_phrase_in_root");
-	}
-	if (rankingEvidence.exactPhraseInReplyCount > 0) {
-		reasons.push("exact_phrase_in_reply");
-	}
-	if ((rankingEvidence.exactFullyMatchedProbeCount ?? 0) > 0) {
-		reasons.push("all_terms_in_thread");
-	}
-	if (
-		rankingEvidence.fullyMatchedProbeCount >
-		(rankingEvidence.exactFullyMatchedProbeCount ?? 0)
-	) {
-		reasons.push("all_expanded_terms_in_thread");
-	}
-	if ((rankingEvidence.expansionMatchCount ?? 0) > 0) {
-		reasons.push("query_expansion");
-	}
-	if (rankingEvidence.matchedProbeCount > 1) {
-		reasons.push("multiple_probes_in_thread");
-	}
-	if ((rankingEvidence.threadDepthScore ?? 0) > 0) {
-		reasons.push("substantive_thread_depth");
-	}
-	if (rankingEvidence.thinTicketStub) reasons.push("thin_thread");
-	if (rankingEvidence.multiTicketRoot) reasons.push("multi_ticket_root");
-	if (candidate.fusionScore) reasons.push("rank_fusion");
 	const routingReason = candidate.reasons.find((reason) =>
 		reason.startsWith("routing_"),
 	);
-	if (routingReason) reasons.push(routingReason);
-	if (candidate.priority) reasons.push("conversation_priority");
-	reasons.push("latest_activity");
 	return {
-		reasons,
+		reasons: buildRankingReasons({
+			preserve: candidate.reasons,
+			rootHasTicket,
+			replyHasTicket,
+			hasStructuredMatch,
+			rankingEvidence,
+			fusionContributions: candidate.fusionContributions,
+			fusionScore: candidate.fusionScore,
+			routingReason,
+			priority: Boolean(candidate.priority),
+		}),
 		latestActivityAt: Math.max(
 			...posts.map((post) =>
 				Math.max(post.createAt, post.updateAt, post.deleteAt),

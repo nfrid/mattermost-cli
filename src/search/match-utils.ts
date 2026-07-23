@@ -1,11 +1,23 @@
 import type { LexicalRetrievalSource } from "../store/index.ts";
 import type { SearchMatch } from "./types.ts";
 
-export function excerpt(message: string): string {
+/** Default character budget for search-match excerpts. */
+export const SEARCH_EXCERPT_LIMIT = 240;
+/** Default character budget for agent/related-ticket string excerpts. */
+export const POINTER_EXCERPT_LIMIT = 160;
+
+export function truncateExcerpt(
+	message: string,
+	limit = SEARCH_EXCERPT_LIMIT,
+): string {
 	const characters = [...message];
-	return characters.length <= 240
+	return characters.length <= limit
 		? message
-		: `${characters.slice(0, 239).join("")}…`;
+		: `${characters.slice(0, Math.max(0, limit - 1)).join("")}…`;
+}
+
+export function excerpt(message: string): string {
+	return truncateExcerpt(message, SEARCH_EXCERPT_LIMIT);
 }
 
 export function deduplicateMatches(

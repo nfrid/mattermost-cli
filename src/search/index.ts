@@ -10,6 +10,9 @@ export {
 	type EngineeringEntityKind,
 	extractEngineeringEntities,
 	extractTicketKeys,
+	MULTI_TICKET_BULLETIN_MIN_KEYS,
+	PERMALINK_PATH_PATTERN,
+	TICKET_PATTERN,
 } from "./extract.ts";
 export {
 	reciprocalRankFusionScore,
@@ -17,11 +20,17 @@ export {
 } from "./fusion.ts";
 export { searchThreads } from "./lexical.ts";
 export {
+	POINTER_EXCERPT_LIMIT,
+	SEARCH_EXCERPT_LIMIT,
+	truncateExcerpt,
+} from "./match-utils.ts";
+export {
 	expandQueryTerms,
 	matchesQueryExpansion,
 	type QueryExpansion,
 } from "./query-expansion.ts";
 export {
+	buildRankingReasons,
 	candidateFromGroup,
 	evaluateThreadEvidence,
 } from "./ranking.ts";

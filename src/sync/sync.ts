@@ -13,6 +13,10 @@ import type {
 	MattermostStore,
 	SyncCheckpoint,
 } from "../store/index.ts";
+import {
+	channelIdentityMatches,
+	directMessageIdentityMatches,
+} from "./identity.ts";
 
 const MATTERMOST_SINCE_RESULT_LIMIT = 1_000;
 
@@ -173,17 +177,13 @@ export async function resolveConversations(
 			const channel = configuredChannel.id
 				? await client.getChannel(configuredChannel.id)
 				: await client.getChannelByName(config.teamId, configuredChannel.name);
-			if (channel.team_id !== config.teamId) {
-				throw new ConfigError(
-					`Configured channel ${alias} is not in team ${config.teamId}.`,
-					"channel_team_mismatch",
-				);
-			}
-			if (
-				(channel.type !== "O" && channel.type !== "P") ||
-				channel.name !== configuredChannel.name ||
-				(configuredChannel.id && channel.id !== configuredChannel.id)
-			) {
+			if (!channelIdentityMatches(channel, configuredChannel, config.teamId)) {
+				if (channel.team_id !== config.teamId) {
+					throw new ConfigError(
+						`Configured channel ${alias} is not in team ${config.teamId}.`,
+						"channel_team_mismatch",
+					);
+				}
 				throw new ConfigError(
 					`Configured channel ${alias} resolved to an unexpected identity or type.`,
 					"channel_identity_mismatch",
@@ -203,10 +203,7 @@ export async function resolveConversations(
 		dmEntries,
 		async ([alias, directMessage]) => {
 			const channel = await client.getChannel(directMessage.channelId);
-			if (
-				(channel.type !== "D" && channel.type !== "G") ||
-				channel.id !== directMessage.channelId
-			) {
+			if (!directMessageIdentityMatches(channel, directMessage)) {
 				throw new ConfigError(
 					`Configured direct message ${alias} resolved to an unexpected identity or type.`,
 					"direct_message_identity_mismatch",

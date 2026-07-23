@@ -2,9 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { MattermostConfig } from "../config/config.ts";
-import { configuredConversations } from "../search/index.ts";
 import { ConfigError } from "../shared/errors.ts";
 import type { IndexedFile, MattermostStore } from "../store/index.ts";
+import { resolveConfiguredAllowlist } from "./conversations.ts";
 
 export interface FileDownloadInput {
 	fileId: string;
@@ -51,7 +51,7 @@ export async function downloadMattermostFile(
 	}
 
 	const allowedConversationIds = new Set(
-		configuredConversations(dependencies.config, dependencies.store).map(
+		resolveConfiguredAllowlist(dependencies.config, dependencies.store).map(
 			({ id }) => id,
 		),
 	);

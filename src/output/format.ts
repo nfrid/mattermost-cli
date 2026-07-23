@@ -13,6 +13,7 @@ import type {
 	DoctorResult,
 } from "../sync/setup.ts";
 import type { SyncResult } from "../sync/sync.ts";
+import { conversationLabel, formatSubject, isoTimestamp } from "./shared.ts";
 import { styles } from "./styles.ts";
 
 interface WhoamiResult {
@@ -346,7 +347,7 @@ function formatThread(data: ThreadResult): string {
 		joinParts([
 			formatField("Freshness", styles.hint(data.freshnessMode)),
 			formatField("complete", formatCompleteness(data.complete, "yes", "no")),
-			`observed ${styles.timestamp(new Date(data.freshness.observedAt).toISOString())}`,
+			`observed ${styles.timestamp(isoTimestamp(data.freshness.observedAt))}`,
 		]),
 		joinParts([
 			formatField(
@@ -409,12 +410,12 @@ function formatCompleteness(
 }
 
 function formatConversation(kind: string, alias: string): string {
-	return styles.channel(`${kind === "channel" ? "#" : "DM "}${alias}`);
+	return styles.channel(conversationLabel(kind, alias));
 }
 
 function formatPost(post: PackedPost): string[] {
 	return [
-		`${styles.timestamp(`[${new Date(post.createAt).toISOString()}]`)} ${styles.username(`@${post.authorUsername}`)}: ${post.deleteAt ? styles.warning("[deleted]") : post.message}`,
+		`${styles.timestamp(`[${isoTimestamp(post.createAt)}]`)} ${styles.username(`@${post.authorUsername}`)}: ${post.deleteAt ? styles.warning("[deleted]") : post.message}`,
 		...post.attachments.map((attachment) =>
 			joinParts([
 				`${styles.warning("Attachment:")} ${styles.label(attachment.name)}`,
@@ -438,12 +439,4 @@ function formatOmittedAttachment(attachment: {
 		`${styles.accent(String(attachment.size))} bytes`,
 		`post ${styles.identifier(attachment.postId)}`,
 	]);
-}
-
-function formatSubject(subject: ContextResult["subject"]): string {
-	return subject.kind === "ticket"
-		? subject.ticketKey
-		: subject.kind === "post"
-			? subject.postId
-			: subject.text;
 }

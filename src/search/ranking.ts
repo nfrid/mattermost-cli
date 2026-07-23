@@ -6,7 +6,10 @@ import type {
 	TicketThreadRelationship,
 } from "../store/index.ts";
 import { scoreVector } from "./candidates.ts";
-import { extractTicketKeys } from "./extract.ts";
+import {
+	extractTicketKeys,
+	MULTI_TICKET_BULLETIN_MIN_KEYS,
+} from "./extract.ts";
 import { deduplicateMatches, excerpt } from "./match-utils.ts";
 import { matchesQueryExpansion } from "./query-expansion.ts";
 import { routeReason, routeWeight } from "./routing.ts";
@@ -38,7 +41,95 @@ const MAX_SUBSTANTIVE_THREAD_DEPTH = 5;
 const NEAR_TOKEN_WINDOW = 8;
 const LOW_TICKET_DENSITY_THRESHOLD = 0.15;
 const LOW_TICKET_DENSITY_MIN_POSTS = 20;
-const MULTI_TICKET_ROOT_MIN_KEYS = 3;
+
+export interface RankingReasonInput {
+	preserve?: readonly RankingReason[];
+	explicitRelationship?: boolean;
+	rootHasTicket?: boolean;
+	replyHasTicket?: boolean;
+	hasStructuredMatch?: boolean;
+	rankingEvidence: Pick<
+		ThreadRankingEvidence,
+		| "subjectInRoot"
+		| "exactPhraseInRootCount"
+		| "exactPhraseInReplyCount"
+		| "exactFullyMatchedProbeCount"
+		| "fullyMatchedProbeCount"
+		| "proximityKind"
+		| "morphMatchedTermCount"
+		| "expansionMatchCount"
+		| "matchedProbeCount"
+		| "threadDepthScore"
+		| "thinTicketStub"
+		| "multiTicketRoot"
+	>;
+	fusionContributions?: readonly Pick<RankFusionContribution, "source">[];
+	fusionScore?: number;
+	routingReason?: RankingReason;
+	priority?: boolean;
+}
+
+/** Shared ranking-reason list for candidate construction and post-hydrate reevaluation. */
+export function buildRankingReasons(
+	input: RankingReasonInput,
+): RankingReason[] {
+	const reasons: RankingReason[] = [];
+	const preserved = new Set(input.preserve ?? []);
+	if (preserved.has("direct_post")) reasons.push("direct_post");
+	if (preserved.has("remote_search")) reasons.push("remote_search");
+	if (
+		input.explicitRelationship ||
+		preserved.has("explicit_ticket_relationship")
+	) {
+		reasons.push("explicit_ticket_relationship");
+	}
+	if (input.rootHasTicket) reasons.push("ticket_in_root");
+	if (input.replyHasTicket) reasons.push("ticket_in_reply");
+	if (input.hasStructuredMatch) reasons.push("structured_entity_match");
+	const evidence = input.rankingEvidence;
+	if (evidence.subjectInRoot) reasons.push("subject_in_root");
+	const exactPhrase =
+		evidence.exactPhraseInRootCount > 0 || evidence.exactPhraseInReplyCount > 0;
+	if (exactPhrase) reasons.push("exact_phrase");
+	if (evidence.exactPhraseInRootCount) reasons.push("exact_phrase_in_root");
+	if (evidence.exactPhraseInReplyCount) reasons.push("exact_phrase_in_reply");
+	if ((evidence.exactFullyMatchedProbeCount ?? 0) > 0) {
+		reasons.push("all_terms_in_thread");
+	}
+	if (
+		evidence.fullyMatchedProbeCount >
+		(evidence.exactFullyMatchedProbeCount ?? 0)
+	) {
+		reasons.push("all_expanded_terms_in_thread");
+	}
+	if (evidence.proximityKind) reasons.push(evidence.proximityKind);
+	if ((evidence.morphMatchedTermCount ?? 0) > 0) {
+		reasons.push("morphology_match");
+	}
+	const fusionSources = new Set(
+		(input.fusionContributions ?? []).map(({ source }) => source),
+	);
+	if (fusionSources.has("concept_fts")) reasons.push("concept_match");
+	if (fusionSources.has("keyboard_layout"))
+		reasons.push("keyboard_layout_match");
+	if (fusionSources.has("transliteration"))
+		reasons.push("transliteration_match");
+	if (fusionSources.has("mixed_script")) reasons.push("mixed_script_match");
+	if (fusionSources.has("prefix_fts")) reasons.push("prefix_match");
+	if (fusionSources.has("trigram")) reasons.push("typo_match");
+	if ((evidence.expansionMatchCount ?? 0) > 0) reasons.push("query_expansion");
+	if (evidence.matchedProbeCount > 1) reasons.push("multiple_probes_in_thread");
+	if ((evidence.threadDepthScore ?? 0) > 0) {
+		reasons.push("substantive_thread_depth");
+	}
+	if (evidence.thinTicketStub) reasons.push("thin_thread");
+	if (evidence.multiTicketRoot) reasons.push("multi_ticket_root");
+	if (input.fusionScore) reasons.push("rank_fusion");
+	if (input.routingReason) reasons.push(input.routingReason);
+	if (input.priority) reasons.push("conversation_priority");
+	reasons.push("latest_activity");
+	return reasons;
+}
 
 export function candidateFromGroup(
 	store: MattermostStore,
@@ -80,13 +171,6 @@ export function candidateFromGroup(
 		probes,
 		group.matches,
 	);
-	const exactPhrase =
-		rankingEvidence.exactPhraseInRootCount > 0 ||
-		rankingEvidence.exactPhraseInReplyCount > 0;
-	const allTerms = (rankingEvidence.exactFullyMatchedProbeCount ?? 0) > 0;
-	const allExpandedTerms =
-		rankingEvidence.fullyMatchedProbeCount >
-		(rankingEvidence.exactFullyMatchedProbeCount ?? 0);
 	const structuredMatches = [...group.structuredMatches.values()].sort(
 		(left, right) =>
 			left.postId.localeCompare(right.postId) ||
@@ -118,62 +202,19 @@ export function candidateFromGroup(
 			Math.max(post.createAt, post.updateAt, post.deleteAt),
 		),
 	);
-	const reasons: RankingReason[] = [];
-	if (explicitRelationship) reasons.push("explicit_ticket_relationship");
-	if (rootHasTicket) reasons.push("ticket_in_root");
-	if (replyHasTicket) reasons.push("ticket_in_reply");
-	if (structuredMatches.length) reasons.push("structured_entity_match");
-	if (rankingEvidence.subjectInRoot) reasons.push("subject_in_root");
-	if (exactPhrase) reasons.push("exact_phrase");
-	if (rankingEvidence.exactPhraseInRootCount) {
-		reasons.push("exact_phrase_in_root");
-	}
-	if (rankingEvidence.exactPhraseInReplyCount) {
-		reasons.push("exact_phrase_in_reply");
-	}
-	if (allTerms) reasons.push("all_terms_in_thread");
-	if (allExpandedTerms) reasons.push("all_expanded_terms_in_thread");
-	if (rankingEvidence.proximityKind) {
-		reasons.push(rankingEvidence.proximityKind);
-	}
-	if ((rankingEvidence.morphMatchedTermCount ?? 0) > 0) {
-		reasons.push("morphology_match");
-	}
-	if (fusionContributions.some(({ source }) => source === "concept_fts")) {
-		reasons.push("concept_match");
-	}
-	if (fusionContributions.some(({ source }) => source === "keyboard_layout")) {
-		reasons.push("keyboard_layout_match");
-	}
-	if (fusionContributions.some(({ source }) => source === "transliteration")) {
-		reasons.push("transliteration_match");
-	}
-	if (fusionContributions.some(({ source }) => source === "mixed_script")) {
-		reasons.push("mixed_script_match");
-	}
-	if (fusionContributions.some(({ source }) => source === "prefix_fts")) {
-		reasons.push("prefix_match");
-	}
-	if (fusionContributions.some(({ source }) => source === "trigram")) {
-		reasons.push("typo_match");
-	}
-	if ((rankingEvidence.expansionMatchCount ?? 0) > 0) {
-		reasons.push("query_expansion");
-	}
-	if (rankingEvidence.matchedProbeCount > 1) {
-		reasons.push("multiple_probes_in_thread");
-	}
-	if ((rankingEvidence.threadDepthScore ?? 0) > 0) {
-		reasons.push("substantive_thread_depth");
-	}
+	const reasons = buildRankingReasons({
+		explicitRelationship,
+		rootHasTicket,
+		replyHasTicket,
+		hasStructuredMatch: structuredMatches.length > 0,
+		rankingEvidence,
+		fusionContributions,
+		fusionScore,
+		routingReason: routeReason(conversation),
+		priority: Boolean(conversation.priority),
+	});
 	const thinTicketStub = Boolean(rankingEvidence.thinTicketStub);
-	if (thinTicketStub) reasons.push("thin_thread");
 	const multiTicketRoot = Boolean(rankingEvidence.multiTicketRoot);
-	if (multiTicketRoot) reasons.push("multi_ticket_root");
-	if (fusionScore) reasons.push("rank_fusion");
-	reasons.push(routeReason(conversation));
-	if (conversation.priority) reasons.push("conversation_priority");
-	reasons.push("latest_activity");
 	const demoteRootTicket = thinTicketStub || multiTicketRoot;
 	const ticketDensity = rankingEvidence.ticketDensity ?? 0;
 	const rootAnchoredFocused = Boolean(rankingEvidence.rootAnchoredFocused);
@@ -533,7 +574,7 @@ function isMultiTicketRootBulletin(
 	if (!root) return false;
 	const normalizedKey = ticketKey.toUpperCase();
 	const rootTickets = extractTicketKeys(root.message);
-	if (rootTickets.length < MULTI_TICKET_ROOT_MIN_KEYS) return false;
+	if (rootTickets.length < MULTI_TICKET_BULLETIN_MIN_KEYS) return false;
 	if (!rootTickets.includes(normalizedKey)) return false;
 	const replies = thread.filter((post) => post.id !== root.id);
 	if (

@@ -24,7 +24,12 @@ export interface EngineeringEntity {
 const FILE_EXTENSION_PATTERN =
 	/(?:^|[\s("'`])((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|rb|php|cs|cpp|h|hpp|sql|ya?ml|json|toml|ini|conf|md))(?![\p{L}\p{N}_])/giu;
 const URL_PATTERN = /https?:\/\/[^\s<>()]+/giu;
-const TICKET_PATTERN = /\b[A-Z][A-Z0-9]+-\d+\b/gi;
+/** Tracker keys like `BTB-2080` / `TECHSUPP-109`. */
+export const TICKET_PATTERN = /\b[A-Z][A-Z0-9]+-\d+\b/gi;
+/** Mattermost permalink path fragment `/pl/<26-char-id>` (captures id). */
+export const PERMALINK_PATH_PATTERN = /\/pl\/([a-z0-9]{26})(?:[/?#]|$)/i;
+/** Minimum distinct ticket keys for multi-ticket bulletin demotion / labels. */
+export const MULTI_TICKET_BULLETIN_MIN_KEYS = 3;
 const COMMIT_PATTERN = /\b[0-9a-f]{7,40}\b/gi;
 const PULL_REQUEST_PATTERN = /\b(?:PR|MR)\s*[#!](\d{1,7})\b/gi;
 const PACKAGE_PATTERN =
@@ -45,16 +50,21 @@ export function extractTicketKeys(text: string): string[] {
 	].sort((left, right) => left.localeCompare(right));
 }
 
+export function extractPermalinkId(value: string): string | undefined {
+	return value.match(PERMALINK_PATH_PATTERN)?.[1]?.toLowerCase();
+}
+
+export function isPermalinkUrl(value: string): boolean {
+	PERMALINK_PATH_PATTERN.lastIndex = 0;
+	return PERMALINK_PATH_PATTERN.test(value);
+}
+
 export function extractEngineeringEntities(text: string): EngineeringEntity[] {
 	const entities: EngineeringEntity[] = [];
 	const urls = text.match(URL_PATTERN) ?? [];
 	for (const rawUrl of urls) {
 		const value = trimTrailingPunctuation(rawUrl);
-		addEntity(
-			entities,
-			/\/pl\/[a-z0-9]{26}(?:[/?#]|$)/i.test(value) ? "permalink" : "url",
-			value,
-		);
+		addEntity(entities, isPermalinkUrl(value) ? "permalink" : "url", value);
 		try {
 			const url = new URL(value);
 			const path = url.pathname.split("/").filter(Boolean);

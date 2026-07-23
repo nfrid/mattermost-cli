@@ -13,7 +13,7 @@ import { commandSuccess } from "../shared/command-result.ts";
 import { MattermostStore } from "../store/index.ts";
 import { validateConfiguredConversations } from "../sync/setup.ts";
 import { syncConfiguredConversations } from "../sync/sync.ts";
-import { MattermostClient } from "./client.ts";
+import { connectionFromConfig, MattermostClient } from "./client.ts";
 
 const enabled = Bun.env.MATTERMOST_INTEGRATION === "1";
 
@@ -36,7 +36,7 @@ test.skipIf(!enabled)(
 				"MATTERMOST_SMOKE_CHANNEL_ID is not an explicitly configured conversation ID.",
 			);
 		}
-		const client = new MattermostClient(config);
+		const client = new MattermostClient(connectionFromConfig(config));
 		const [page, recent] = await Promise.all([
 			client.getChannelPosts(channelId, { page: 0, perPage: 1 }),
 			client.getChannelPosts(channelId, {
@@ -88,7 +88,7 @@ test.skipIf(!enabled)(
 					? { [directMessageEntry[0]]: directMessageEntry[1] }
 					: {},
 			};
-			const client = new MattermostClient(smokeConfig);
+			const client = new MattermostClient(connectionFromConfig(smokeConfig));
 			expect((await client.getCurrentUser()).id).toBeTruthy();
 			const nativeSearch = await client.searchTeamPosts(smokeConfig.teamId, {
 				terms: query,

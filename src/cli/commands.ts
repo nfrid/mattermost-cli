@@ -8,6 +8,7 @@ import {
 	type ThreadInput,
 } from "../context/index.ts";
 import {
+	connectionFromConfig,
 	MattermostClient,
 	type MattermostClientOptions,
 } from "../mattermost/client.ts";
@@ -178,7 +179,7 @@ function createClient(
 	config: MattermostConfig,
 	dependencies: CommandDependencies,
 ): MattermostClient {
-	return new MattermostClient(config, {
+	return new MattermostClient(connectionFromConfig(config), {
 		fetch: dependencies.fetch,
 		timeoutMs: dependencies.timeoutMs,
 	});

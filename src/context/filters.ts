@@ -1,7 +1,9 @@
 import type { EvidencePost } from "../evidence/packing.ts";
-import { containsNormalizedText } from "../search/text.ts";
 import { ConfigError } from "../shared/errors.ts";
-import type { ThreadSearchFilters } from "../store/index.ts";
+import {
+	type ThreadSearchFilters,
+	threadPostsMatchFilters,
+} from "../store/index.ts";
 import type { SearchFilterInput, SearchFilters } from "./types.ts";
 
 export function resolveSearchFilters(input: SearchFilterInput): {
@@ -68,23 +70,5 @@ export function evidenceMatchesFilters(
 	posts: readonly EvidencePost[],
 	filters: ThreadSearchFilters,
 ): boolean {
-	const postMatches = posts.some(
-		(post) =>
-			!post.deleteAt &&
-			(!filters.username ||
-				post.authorUsername.toLowerCase() ===
-					filters.username.replace(/^@/, "").toLowerCase()) &&
-			(filters.after === undefined || post.createAt >= filters.after) &&
-			(filters.before === undefined || post.createAt < filters.before),
-	);
-	if (!postMatches) return false;
-	if (!filters.hasFile && !filters.filePattern) return true;
-	return posts.some((post) =>
-		post.attachments.some(
-			(attachment) =>
-				!attachment.deleteAt &&
-				(!filters.filePattern ||
-					containsNormalizedText(attachment.name, filters.filePattern)),
-		),
-	);
+	return threadPostsMatchFilters(posts, filters);
 }

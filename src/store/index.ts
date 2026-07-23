@@ -1,6 +1,11 @@
 export { databaseFilePaths } from "./paths.ts";
 export { buildFtsQuery, buildThreadFilterSql } from "./search-sql.ts";
 export { MattermostStore, type MattermostStoreOptions } from "./store.ts";
+export {
+	describeThreadFilters,
+	type ThreadFilterPredicate,
+	threadPostsMatchFilters,
+} from "./thread-filters.ts";
 export { trigramSearchPolicy } from "./trigram.ts";
 export type {
 	ConversationKind,

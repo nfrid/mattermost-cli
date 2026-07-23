@@ -10,7 +10,11 @@ import {
 	segmentThreadByTicketProximity,
 	type TicketSegment,
 } from "../evidence/ticket-segments.ts";
-import { MattermostApiError, MattermostClient } from "../mattermost/client.ts";
+import {
+	connectionFromConfig,
+	MattermostApiError,
+	MattermostClient,
+} from "../mattermost/client.ts";
 import type {
 	MattermostPost,
 	MattermostPostList,
@@ -181,7 +185,7 @@ export async function getMattermostContext(
 		});
 		const client = input.local
 			? undefined
-			: (providedClient ?? new MattermostClient(config));
+			: (providedClient ?? new MattermostClient(connectionFromConfig(config)));
 		let performedWidening = false;
 		let fallbackRouting: RoutingResult | undefined;
 		const searched = new Map<string, RoutedConversation>();
@@ -477,6 +481,7 @@ export async function getMattermostContext(
 							: perThreadCharacters,
 						remaining,
 					),
+					...(ticketMetrics ? { ticketMetrics } : {}),
 				});
 				remaining -= packed.budget.used;
 				const surround = resolveConversationSurround(
@@ -882,7 +887,7 @@ export async function getMattermostThread(
 		}
 		const client = input.local
 			? undefined
-			: (providedClient ?? new MattermostClient(config));
+			: (providedClient ?? new MattermostClient(connectionFromConfig(config)));
 		const all = resolveContextConversations(config, store);
 		const warnings: Warning[] = [];
 		const observedAt = dependencies.now?.() ?? Date.now();

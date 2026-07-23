@@ -451,6 +451,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
           "exact_phrase_in_root",
           "exact_phrase_in_reply",
           "all_terms_in_thread",
+          "exact_terms_near",
           "rank_fusion",
           "routing_explicit_channel",
           "conversation_priority",

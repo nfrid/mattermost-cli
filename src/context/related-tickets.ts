@@ -1,7 +1,13 @@
 import type { MattermostConfig } from "../config/config.ts";
 import { segmentThreadByTicketProximity } from "../evidence/ticket-segments.ts";
-import { extractTicketKeys } from "../search/extract.ts";
-import type { MattermostSubject, RetrievalProbe } from "../search/index.ts";
+import {
+	extractTicketKeys,
+	MULTI_TICKET_BULLETIN_MIN_KEYS,
+} from "../search/extract.ts";
+import {
+	POINTER_EXCERPT_LIMIT,
+	truncateExcerpt,
+} from "../search/match-utils.ts";
 import type { MattermostStore } from "../store/index.ts";
 import { postLink } from "./helpers.ts";
 import type { ContextThread, RelatedTicketPointer } from "./types.ts";
@@ -16,7 +22,6 @@ export function resolveRelatedTicketPointers(input: {
 	allowlist: ReadonlySet<string>;
 }): RelatedTicketPointer[] {
 	const subject = input.subjectTicket?.toUpperCase();
-	const MULTI_TICKET_BULLETIN_MIN = 3;
 	type Mention = {
 		key: string;
 		postId: string;
@@ -53,9 +58,9 @@ export function resolveRelatedTicketPointers(input: {
 		for (const post of thread.posts) {
 			const postKeys = extractTicketKeys(post.message);
 			const multiTicketBulletin =
-				postKeys.length >= MULTI_TICKET_BULLETIN_MIN ||
+				postKeys.length >= MULTI_TICKET_BULLETIN_MIN_KEYS ||
 				(post.id === thread.threadId &&
-					rootKeys.length >= MULTI_TICKET_BULLETIN_MIN);
+					rootKeys.length >= MULTI_TICKET_BULLETIN_MIN_KEYS);
 			for (const key of postKeys) {
 				if (key === subject) continue;
 				mentions.push({
@@ -66,7 +71,7 @@ export function resolveRelatedTicketPointers(input: {
 					conversationId: thread.conversationId,
 					conversationAlias: thread.conversationAlias,
 					createAt: post.createAt,
-					excerpt: post.message.slice(0, 160),
+					excerpt: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
 					inWindow:
 						windowIds.has(post.id) || thread.matchingPostIds.includes(post.id),
 					multiTicketBulletin,
@@ -190,7 +195,10 @@ export function resolveRelatedTicketPointers(input: {
 			url: postLink(input.config, bestThreadId),
 			...(conversation ? { conversation: conversation.alias } : {}),
 			...(latestAt ? { latestAt } : {}),
-			excerpt: (hit?.message ?? entry.first.excerpt).slice(0, 160),
+			excerpt: truncateExcerpt(
+				hit?.message ?? entry.first.excerpt,
+				POINTER_EXCERPT_LIMIT,
+			),
 			sourceThreadId: entry.first.threadId,
 			hydrated: false,
 		});

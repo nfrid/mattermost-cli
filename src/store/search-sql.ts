@@ -1,17 +1,16 @@
 import { normalizeSearchText } from "../search/text.ts";
+import {
+	describeThreadFilters,
+	threadFilterIsEmpty,
+} from "./thread-filters.ts";
 import type { LexicalRetrievalSource, ThreadSearchFilters } from "./types.ts";
 
 export function buildThreadFilterSql(
 	threadAlias: string,
 	filters: ThreadSearchFilters,
 ): { clause: string; parameters: Array<string | number> } {
-	if (
-		!filters.username &&
-		filters.after === undefined &&
-		filters.before === undefined &&
-		!filters.hasFile &&
-		!filters.filePattern
-	) {
+	const predicate = describeThreadFilters(filters);
+	if (threadFilterIsEmpty(predicate)) {
 		return { clause: "", parameters: [] };
 	}
 	const parameters: Array<string | number> = [];
@@ -19,30 +18,30 @@ export function buildThreadFilterSql(
 		`fp.thread_id = ${threadAlias}.thread_id`,
 		"fp.delete_at = 0",
 	];
-	if (filters.username) {
+	if (predicate.username) {
 		postClauses.push("lower(fu.username) = lower(?)");
-		parameters.push(filters.username.replace(/^@/, ""));
+		parameters.push(predicate.username);
 	}
-	if (filters.after !== undefined) {
+	if (predicate.after !== undefined) {
 		postClauses.push("fp.create_at >= ?");
-		parameters.push(filters.after);
+		parameters.push(predicate.after);
 	}
-	if (filters.before !== undefined) {
+	if (predicate.before !== undefined) {
 		postClauses.push("fp.create_at < ?");
-		parameters.push(filters.before);
+		parameters.push(predicate.before);
 	}
 	let clause = ` AND EXISTS (
 SELECT 1 FROM posts fp LEFT JOIN users fu ON fu.id = fp.user_id
 WHERE ${postClauses.join(" AND ")})`;
-	if (filters.hasFile || filters.filePattern) {
+	if (predicate.requireFile) {
 		const fileClauses = [
 			`ffp.thread_id = ${threadAlias}.thread_id`,
 			"ffp.delete_at = 0",
 			"ff.delete_at = 0",
 		];
-		if (filters.filePattern) {
+		if (predicate.filePattern) {
 			fileClauses.push("instr(lower(ff.name), lower(?)) > 0");
-			parameters.push(filters.filePattern);
+			parameters.push(predicate.filePattern);
 		}
 		clause += ` AND EXISTS (
 SELECT 1 FROM posts ffp

@@ -1,4 +1,7 @@
-import { extractTicketKeys } from "../search/extract.ts";
+import {
+	extractTicketKeys,
+	MULTI_TICKET_BULLETIN_MIN_KEYS,
+} from "../search/extract.ts";
 
 export type TicketSegmentReason =
 	| "ticket_window"
@@ -45,10 +48,12 @@ export interface SegmentThreadOptions {
 	omittedGapHydrateThreshold?: number;
 }
 
-const DEFAULT_TICKET_RADIUS = 8;
-const DEFAULT_MATCH_RADIUS = 2;
-const DEFAULT_CLUSTER_MERGE_GAP = 2;
+export const DEFAULT_TICKET_RADIUS = 8;
+export const DEFAULT_MATCH_RADIUS = 2;
+export const DEFAULT_CLUSTER_MERGE_GAP = 2;
 const DEFAULT_OMITTED_GAP_HYDRATE = 10;
+
+export { MULTI_TICKET_BULLETIN_MIN_KEYS };
 
 /**
  * Slice a chronological thread into subject-ticket / match windows and
@@ -169,10 +174,11 @@ export function segmentThreadByTicketProximity(
 export function ticketWindowPostIds(
 	posts: readonly { id: string; message: string }[],
 	options: SegmentThreadOptions = {},
+	metrics?: TicketProximityMetrics,
 ): Set<string> {
-	const metrics = segmentThreadByTicketProximity(posts, options);
+	const resolved = metrics ?? segmentThreadByTicketProximity(posts, options);
 	const ids = new Set<string>();
-	for (const segment of metrics.segments) {
+	for (const segment of resolved.segments) {
 		if (
 			segment.reason !== "ticket_window" &&
 			segment.reason !== "match_window"
