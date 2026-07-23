@@ -53,17 +53,14 @@ const LOW_TICKET_DENSITY_THRESHOLD = 0.15;
 const LOW_TICKET_DENSITY_MIN_POSTS = 20;
 export const RRF_RANK_CONSTANT = 60;
 
-export type RankFusionSource =
+type RankFusionSource =
 	| LexicalRetrievalSource
 	| "synonym"
 	| "keyboard_layout"
 	| "transliteration"
 	| "mixed_script";
 
-export type TypoFallbackKind =
-	| "identifier"
-	| "latin_technical_term"
-	| "russian_word";
+type TypoFallbackKind = "identifier" | "latin_technical_term" | "russian_word";
 
 export const RETRIEVAL_SOURCE_WEIGHTS: Readonly<
 	Record<RankFusionSource, number>
@@ -199,7 +196,7 @@ export type RankingReason =
 	| "conversation_priority"
 	| "latest_activity";
 
-export type ProximityKind =
+type ProximityKind =
 	| "exact_terms_near"
 	| "morph_terms_near"
 	| "exact_terms_same_post"
@@ -656,7 +653,7 @@ export function widenedRouting(
 	};
 }
 
-export interface SearchThreadsOptions {
+interface SearchThreadsOptions {
 	deadlineAt?: number;
 	incomplete?: { value: boolean };
 	includeAutomation?: boolean;
@@ -942,12 +939,17 @@ function hasTicketHitInGrouped(
 ): boolean {
 	for (const threadId of grouped.keys()) {
 		const thread = getThread(threadId);
-		if (thread.some((post) => contains(post.message, ticketKey))) return true;
+		if (
+			thread.some((post) =>
+				containsNormalizedExactText(post.message, ticketKey),
+			)
+		)
+			return true;
 	}
 	return false;
 }
 
-export function isUnrepliedAutomationThread(
+function isUnrepliedAutomationThread(
 	store: MattermostStore,
 	threadId: string,
 	getThread: (threadId: string) => IndexedPost[],
@@ -960,7 +962,7 @@ export function isUnrepliedAutomationThread(
 	return isAutomationAuthor(store, root, suppressAuthors);
 }
 
-export function isAutomationAuthor(
+function isAutomationAuthor(
 	store: MattermostStore,
 	post: IndexedPost,
 	suppressAuthors: readonly string[] = [],
@@ -1050,6 +1052,31 @@ export function remoteSearchCandidate(
 		}),
 		fusionScore,
 	};
+}
+
+export function mergeRemoteSearchCandidate(
+	existing: ThreadCandidate,
+	candidate: ThreadCandidate,
+	conversation: RoutedConversation,
+): void {
+	existing.matchingPostIds = [
+		...new Set([...existing.matchingPostIds, ...candidate.matchingPostIds]),
+	].sort();
+	existing.matches = [...existing.matches, ...candidate.matches];
+	existing.latestActivityAt = Math.max(
+		existing.latestActivityAt,
+		candidate.latestActivityAt,
+	);
+	existing.fusionScore =
+		(existing.fusionScore ?? 0) + (candidate.fusionScore ?? 0);
+	existing.scoreVector = scoreVector({
+		matchedProbeCount: new Set(existing.matches.map(({ probe }) => probe)).size,
+		routing: routeWeight(conversation),
+		fusion: existing.fusionScore,
+		conversationPriority: conversation.priority,
+		latestRelevantMatchAt: existing.latestActivityAt,
+		latestActivityAt: existing.latestActivityAt,
+	});
 }
 
 export function directCandidate(
@@ -1293,11 +1320,15 @@ function candidateFromGroup(
 	const conversation = conversations.get(root.conversationId);
 	if (!conversation) return null;
 	const ticketKey = subject.kind === "ticket" ? subject.ticketKey : undefined;
-	const rootHasTicket = Boolean(ticketKey && contains(root.message, ticketKey));
+	const rootHasTicket = Boolean(
+		ticketKey && containsNormalizedExactText(root.message, ticketKey),
+	);
 	const replyHasTicket = Boolean(
 		ticketKey &&
 			thread.some(
-				(post) => post.id !== root.id && contains(post.message, ticketKey),
+				(post) =>
+					post.id !== root.id &&
+					containsNormalizedExactText(post.message, ticketKey),
 			),
 	);
 	const explicitRelationship = relationships.some(
@@ -1520,13 +1551,16 @@ export function evaluateThreadEvidence(
 	const probeEvidence = probes.map((probe) => {
 		const phrases = probe.phrases.length ? probe.phrases : [probe.value];
 		const phraseInRoot = Boolean(
-			root && phrases.some((phrase) => contains(root.message, phrase)),
+			root &&
+				phrases.some((phrase) =>
+					containsNormalizedExactText(root.message, phrase),
+				),
 		);
 		const phraseInReplies = phrases.some((phrase) =>
-			replies.some((post) => contains(post.message, phrase)),
+			replies.some((post) => containsNormalizedExactText(post.message, phrase)),
 		);
 		const exactMatchedTerms = probe.terms.filter((term) =>
-			thread.some((post) => contains(post.message, term)),
+			thread.some((post) => containsNormalizedExactText(post.message, term)),
 		);
 		const morphMatchedTerms = probe.terms.filter((term) => {
 			if (exactMatchedTerms.includes(term)) return false;
@@ -1597,8 +1631,12 @@ export function evaluateThreadEvidence(
 		probes.some((probe) => {
 			const phrases = probe.phrases.length ? probe.phrases : [probe.value];
 			return (
-				phrases.some((phrase) => contains(post.message, phrase)) ||
-				probe.terms.some((term) => contains(post.message, term)) ||
+				phrases.some((phrase) =>
+					containsNormalizedExactText(post.message, phrase),
+				) ||
+				probe.terms.some((term) =>
+					containsNormalizedExactText(post.message, term),
+				) ||
 				(probe.morphTerms ?? []).some((term) =>
 					containsNormalizedExactText(normalizeMorphText(post.message), term),
 				) ||
@@ -1645,10 +1683,13 @@ export function evaluateThreadEvidence(
 			: [];
 	return {
 		subjectInRoot: Boolean(
-			root && subjectPhrases.some((phrase) => contains(root.message, phrase)),
+			root &&
+				subjectPhrases.some((phrase) =>
+					containsNormalizedExactText(root.message, phrase),
+				),
 		),
 		subjectInReplies: subjectPhrases.some((phrase) =>
-			replies.some((post) => contains(post.message, phrase)),
+			replies.some((post) => containsNormalizedExactText(post.message, phrase)),
 		),
 		exactPhraseInRootCount,
 		exactPhraseInReplyCount: probeEvidence.filter(
@@ -1759,7 +1800,10 @@ function isMultiTicketRootBulletin(
 	if (rootTickets.length < MULTI_TICKET_ROOT_MIN_KEYS) return false;
 	if (!rootTickets.includes(normalizedKey)) return false;
 	const replies = thread.filter((post) => post.id !== root.id);
-	if (replies.some((post) => contains(post.message, ticketKey))) return false;
+	if (
+		replies.some((post) => containsNormalizedExactText(post.message, ticketKey))
+	)
+		return false;
 	return true;
 }
 
@@ -2261,10 +2305,6 @@ function routeReason(conversation: RoutedConversation): RankingReason {
 		widened: "routing_widened",
 	};
 	return reasons[type];
-}
-
-function contains(message: string, value: string): boolean {
-	return containsNormalizedExactText(message, value);
 }
 
 function excerpt(message: string): string {

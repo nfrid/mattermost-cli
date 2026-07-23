@@ -39,7 +39,7 @@ export interface OutputWriter {
 	write(text: string): unknown;
 }
 
-export interface CliContext extends CommandDependencies {
+interface CliContext extends CommandDependencies {
 	stdout?: OutputWriter;
 	stderr?: OutputWriter;
 	env?: Record<string, string | undefined>;

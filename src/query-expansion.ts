@@ -14,7 +14,7 @@ export interface QueryExpansion {
 	match: "exact" | "morph" | "prefix";
 }
 
-export interface QueryExpansionOptions {
+interface QueryExpansionOptions {
 	rawText?: string;
 	enableScriptVariants?: boolean;
 }

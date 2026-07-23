@@ -8,7 +8,6 @@ import {
 	type ThreadInput,
 } from "./context.ts";
 import {
-	asFileDownloadClient,
 	downloadMattermostFile,
 	type FileDownloadInput,
 } from "./file-download.ts";
@@ -125,9 +124,7 @@ export async function fileCommand(
 		const data = await downloadMattermostFile(input, {
 			config,
 			store,
-			client: input.local
-				? undefined
-				: asFileDownloadClient(createClient(config, dependencies)),
+			client: input.local ? undefined : createClient(config, dependencies),
 		});
 		return commandSuccess("file", data);
 	} finally {

@@ -20,6 +20,7 @@ import {
 	directCandidate,
 	evaluateThreadEvidence,
 	type MattermostSubject,
+	mergeRemoteSearchCandidate,
 	mergeThreadCandidates,
 	type RankingReason,
 	type RetrievalProbe,
@@ -1188,25 +1189,7 @@ async function searchRemoteCandidates(
 				byThreadId.set(candidate.threadId, candidate);
 				continue;
 			}
-			existing.matchingPostIds = [
-				...new Set([...existing.matchingPostIds, ...candidate.matchingPostIds]),
-			].sort();
-			existing.matches = [...existing.matches, ...candidate.matches];
-			existing.latestActivityAt = Math.max(
-				existing.latestActivityAt,
-				candidate.latestActivityAt,
-			);
-			existing.fusionScore =
-				(existing.fusionScore ?? 0) + (candidate.fusionScore ?? 0);
-			existing.scoreVector[7] = new Set(
-				existing.matches.map(({ probe }) => probe),
-			).size;
-			existing.scoreVector[10] = existing.fusionScore;
-			existing.scoreVector[14] = Math.max(
-				existing.scoreVector[14] ?? 0,
-				candidate.latestActivityAt,
-			);
-			existing.scoreVector[15] = existing.latestActivityAt;
+			mergeRemoteSearchCandidate(existing, candidate, conversation);
 		}
 		queries.push({
 			probe: probe.value,
@@ -1630,7 +1613,11 @@ function reevaluateCandidate(
 	}
 	const root = posts.find(({ id }) => id === candidate.rootPostId);
 	const ticketKey = subject.kind === "ticket" ? subject.ticketKey : undefined;
-	if (ticketKey && root && containsExactText(root.message, ticketKey)) {
+	if (
+		ticketKey &&
+		root &&
+		containsNormalizedExactText(root.message, ticketKey)
+	) {
 		reasons.push("ticket_in_root");
 	}
 	if (
@@ -1638,7 +1625,7 @@ function reevaluateCandidate(
 		posts.some(
 			(post) =>
 				post.id !== candidate.rootPostId &&
-				containsExactText(post.message, ticketKey),
+				containsNormalizedExactText(post.message, ticketKey),
 		)
 	) {
 		reasons.push("ticket_in_reply");
@@ -1648,10 +1635,10 @@ function reevaluateCandidate(
 			const post = posts.find(({ id }) => id === structured.postId);
 			return Boolean(
 				post &&
-					(containsText(post.message, structured.value) ||
+					(containsNormalizedText(post.message, structured.value) ||
 						post.attachments.some(
 							({ name, deleteAt }) =>
-								!deleteAt && containsText(name, structured.value),
+								!deleteAt && containsNormalizedText(name, structured.value),
 						)),
 			);
 		})
@@ -1720,7 +1707,7 @@ function postMatchesProbeTerm(
 	term: string,
 ): boolean {
 	return (
-		containsExactText(message, term) ||
+		containsNormalizedExactText(message, term) ||
 		(probe.expansions ?? []).some(
 			(expansion) =>
 				expansion.sourceTerm === term &&
@@ -1742,7 +1729,9 @@ function matchingProbeValues(
 							postMatchesProbeTerm(post.message, probe, term),
 						),
 					)
-				: live.some((post) => containsExactText(post.message, probe.value)),
+				: live.some((post) =>
+						containsNormalizedExactText(post.message, probe.value),
+					),
 		)
 		.map(({ value }) => value);
 }
@@ -1774,7 +1763,8 @@ function currentMatches(
 			}
 		} else {
 			for (const post of live) {
-				if (containsExactText(post.message, probe.value)) matches.add(post.id);
+				if (containsNormalizedExactText(post.message, probe.value))
+					matches.add(post.id);
 			}
 		}
 	}
@@ -1782,9 +1772,9 @@ function currentMatches(
 		const post = live.find(({ id }) => id === structured.postId);
 		if (
 			post &&
-			(containsText(post.message, structured.value) ||
+			(containsNormalizedText(post.message, structured.value) ||
 				post.attachments.some(({ name, deleteAt }) =>
-					!deleteAt ? containsText(name, structured.value) : false,
+					!deleteAt ? containsNormalizedText(name, structured.value) : false,
 				))
 		) {
 			matches.add(post.id);
@@ -1873,7 +1863,7 @@ function evidenceMatchesFilters(
 			(attachment) =>
 				!attachment.deleteAt &&
 				(!filters.filePattern ||
-					containsText(attachment.name, filters.filePattern)),
+					containsNormalizedText(attachment.name, filters.filePattern)),
 		),
 	);
 }
@@ -2143,14 +2133,6 @@ function freshnessEvidence(
 			observedAt: now,
 		}),
 	);
-}
-
-function containsText(message: string, value: string): boolean {
-	return containsNormalizedText(message, value);
-}
-
-function containsExactText(message: string, value: string): boolean {
-	return containsNormalizedExactText(message, value);
 }
 
 function localDisplayName(user: IndexedUser | undefined): string {

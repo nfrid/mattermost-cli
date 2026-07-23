@@ -247,22 +247,6 @@ export function inspectFreshness(
 	});
 }
 
-export async function reconcileStaleConversations(
-	config: MattermostConfig,
-	client: SyncClient,
-	store: MattermostStore,
-	aliases?: readonly string[],
-): Promise<SyncResult> {
-	const conversations = await resolveConversations(config, client, aliases);
-	const staleAliases = inspectFreshness(config, store, conversations)
-		.filter(({ stale }) => stale)
-		.map(({ alias }) => alias);
-	if (!staleAliases.length) return { conversations: [] };
-	return syncConfiguredConversations(config, client, store, {
-		aliases: staleAliases,
-	});
-}
-
 async function syncConversation(
 	config: MattermostConfig,
 	client: SyncClient,

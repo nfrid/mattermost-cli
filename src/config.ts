@@ -270,7 +270,3 @@ function nonEmpty(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	return trimmed ? trimmed : undefined;
 }
-
-export function configDirectory(config: MattermostConfig): string {
-	return dirname(config.configPath);
-}

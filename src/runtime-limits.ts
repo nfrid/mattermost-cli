@@ -2,7 +2,7 @@
 export const SQLITE_BUSY_TIMEOUT_MS = 20_000;
 
 /** Soft wall-clock budget for local (+ automatic remote) search work. */
-export const SEARCH_DEADLINE_MS = 45_000;
+const SEARCH_DEADLINE_MS = 45_000;
 
 /** How long a second process waits for freshen/sync single-flight. */
 export const FRESHEN_LOCK_TIMEOUT_MS = 30_000;

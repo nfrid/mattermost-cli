@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { MattermostConfig } from "./config.ts";
 import { ConfigError } from "./errors.ts";
-import type { MattermostClient } from "./mattermost/client.ts";
 import { configuredConversations } from "./retrieval.ts";
 import type { IndexedFile, MattermostStore } from "./storage.ts";
 
@@ -23,7 +22,7 @@ export interface FileDownloadResult {
 	conversationId: string;
 }
 
-export interface FileDownloadClient {
+interface FileDownloadClient {
 	getFileInfo(fileId: string): Promise<{
 		id: string;
 		post_id: string;
@@ -125,7 +124,7 @@ export async function downloadMattermostFile(
 	};
 }
 
-export function defaultDownloadPath(fileId: string, name: string): string {
+function defaultDownloadPath(fileId: string, name: string): string {
 	return join(tmpdir(), `mm-${fileId}-${sanitizeFileName(name)}`);
 }
 
@@ -136,11 +135,4 @@ export function sanitizeFileName(name: string): string {
 		.replace(/^\.+/, "")
 		.slice(0, MAX_FILE_NAME_LENGTH);
 	return cleaned || "attachment";
-}
-
-/** Narrow MattermostClient to the file download surface used by this module. */
-export function asFileDownloadClient(
-	client: MattermostClient,
-): FileDownloadClient {
-	return client;
 }

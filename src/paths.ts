@@ -1,9 +1,9 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import { ConfigError } from "./errors.ts";
 
-export const PROJECT_ROOT = resolve(import.meta.dir, "..");
+const PROJECT_ROOT = resolve(import.meta.dir, "..");
 
-export interface LocalPaths {
+interface LocalPaths {
 	projectRoot: string;
 	configPath: string;
 	databasePath: string;

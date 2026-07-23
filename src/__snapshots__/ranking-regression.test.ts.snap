@@ -1,6 +1,6 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
-exports[`schema version 1 command contracts locks populated deterministic search and context output: populated search v1 1`] = `
+exports[`ranking regression snapshots locks populated deterministic search and context output: populated search v1 1`] = `
 {
   "command": "search",
   "data": {
@@ -280,7 +280,7 @@ exports[`schema version 1 command contracts locks populated deterministic search
 }
 `;
 
-exports[`schema version 1 command contracts locks populated deterministic search and context output: populated context v1 1`] = `
+exports[`ranking regression snapshots locks populated deterministic search and context output: populated context v1 1`] = `
 {
   "command": "context",
   "data": {

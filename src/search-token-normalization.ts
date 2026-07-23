@@ -1,9 +1,9 @@
 import { normalizeSearchText } from "./text.ts";
 import { stemRussianSnowball } from "./vendor/snowball/russian.ts";
 
-export type SearchTokenLanguage = "russian" | "latin" | "mixed" | "other";
+type SearchTokenLanguage = "russian" | "latin" | "mixed" | "other";
 
-export interface SearchTokenAnalysis {
+interface SearchTokenAnalysis {
 	original: string;
 	normalized: string;
 	language: SearchTokenLanguage;

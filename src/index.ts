@@ -71,19 +71,6 @@ export {
 	whoamiResultV1Schema,
 } from "./contracts.ts";
 export {
-	buildCoverage,
-	type CoverageEvidence,
-	type CoverageGapCode,
-	type CoverageTrust,
-	shouldRecommendFull,
-} from "./coverage.ts";
-export {
-	type EngineeringEntity,
-	type EngineeringEntityKind,
-	extractEngineeringEntities,
-	extractTicketKeys,
-} from "./entities.ts";
-export {
 	AppError,
 	ConfigError,
 	DatabaseError,
@@ -105,110 +92,8 @@ export type {
 	MattermostUser,
 } from "./mattermost/schemas.ts";
 export {
-	buildTimeline,
-	type EvidenceAttachment,
-	type EvidencePost,
-	type PackedPost,
-	type PackedThread,
-	type PackSkip,
-	type PackSkipReason,
-	type PackThreadOptions,
-	type PackTimelineItem,
-	packThread,
-	renderedAttachmentUnits,
-	renderedPostUnits,
-} from "./packing.ts";
-export {
-	expandQueryTerms,
-	matchesQueryExpansion,
-	type QueryExpansion,
-	type QueryExpansionKind,
-} from "./query-expansion.ts";
-export {
 	type CommandResult,
 	SCHEMA_VERSION,
 	type StableError,
 	type Warning,
 } from "./results.ts";
-export {
-	type AgentProbeInput,
-	type AgentProbeKind,
-	classifySubject,
-	configuredConversations,
-	directCandidate,
-	type LexicalMatchEvidence,
-	type MattermostSubject,
-	type RankFusionContribution,
-	type RankingReason,
-	type RetrievalProbe,
-	type RoutedConversation,
-	type RoutingEvidenceType,
-	type RoutingResult,
-	RRF_RANK_CONSTANT,
-	reciprocalRankFusionScore,
-	remoteSearchCandidate,
-	resolveProbes,
-	routeConversations,
-	type SearchMatch,
-	type SearchResult,
-	type StructuredSearchMatch,
-	searchThreads,
-	type ThreadCandidate,
-	type ThreadRankingEvidence,
-	widenedRouting,
-} from "./retrieval.ts";
-export {
-	type ChannelValidationResult,
-	type ConfiguredConversationsResult,
-	type ConfiguredDirectMessageResult,
-	type DoctorCheck,
-	type DoctorResult,
-	listConfiguredConversations,
-	runDoctor,
-	type ValidationItem,
-	validateConfiguredConversations,
-} from "./setup.ts";
-export {
-	buildFtsProbe,
-	buildFtsQuery,
-	type ConversationKind,
-	type ConversationRecord,
-	databaseFilePaths,
-	type IndexedFile,
-	type IndexedPost,
-	type IndexedUser,
-	type LexicalHit,
-	type LexicalRetrievalSource,
-	type LexicalSearchOptions,
-	MattermostStore,
-	type PageWrite,
-	type StructuredEntityHit,
-	type StructuredEntityRecord,
-	type SyncCheckpoint,
-	type ThreadSearchFilters,
-	type TicketThreadRelationship,
-} from "./storage.ts";
-export {
-	type ConversationFreshness,
-	type ConversationSyncResult,
-	inspectFreshness,
-	reconcileStaleConversations,
-	resolveConversations,
-	type SyncClient,
-	type SyncOptions,
-	type SyncResult,
-	syncConfiguredConversations,
-} from "./sync.ts";
-export {
-	containsNormalizedText,
-	normalizeSearchText,
-	STOP_WORDS,
-} from "./text.ts";
-export {
-	type SegmentThreadOptions,
-	segmentThreadByTicketProximity,
-	type TicketProximityMetrics,
-	type TicketSegment,
-	type TicketSegmentReason,
-	ticketWindowPostIds,
-} from "./ticket-segments.ts";

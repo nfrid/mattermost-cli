@@ -1,24 +1,21 @@
 import { mkdir, open, readFile, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 
-export interface FileLockOptions {
-	timeoutMs?: number;
-	staleMs?: number;
+interface FileLockOptions {
+	timeoutMs: number;
+	staleMs: number;
 	pollMs?: number;
 }
 
-export type FileLockResult<T> =
-	| { acquired: true; value: T }
-	| { acquired: false };
+type FileLockResult<T> = { acquired: true; value: T } | { acquired: false };
 
 /** Exclusive create lockfile around a critical section (freshen/sync). */
 export async function withFileLock<T>(
 	lockPath: string,
 	action: () => Promise<T>,
-	options: FileLockOptions = {},
+	options: FileLockOptions,
 ): Promise<FileLockResult<T>> {
-	const timeoutMs = options.timeoutMs ?? 30_000;
-	const staleMs = options.staleMs ?? 120_000;
+	const { timeoutMs, staleMs } = options;
 	const pollMs = options.pollMs ?? 50;
 	const started = Date.now();
 	await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 }).catch(

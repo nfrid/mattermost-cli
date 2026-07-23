@@ -115,7 +115,7 @@ export interface LexicalSearchOptions {
 	filters?: ThreadSearchFilters;
 }
 
-export interface TrigramSearchPolicy {
+interface TrigramSearchPolicy {
 	minimumSimilarity: number;
 	maximumEditDistance: number;
 }
@@ -263,7 +263,7 @@ ALTER TABLE users ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0;
 	},
 ] as const;
 
-export interface MattermostStoreOptions {
+interface MattermostStoreOptions {
 	concepts?: SearchConcepts;
 }
 
@@ -526,7 +526,7 @@ ON CONFLICT(id) DO UPDATE SET root_id=excluded.root_id, thread_id=excluded.threa
 			)
 			.run(post.id);
 		if (!post.delete_at) {
-			for (const key of discoveredTicketKeys(post.message)) {
+			for (const key of extractTicketKeys(post.message)) {
 				this.database
 					.query(
 						"INSERT OR IGNORE INTO ticket_threads (ticket_key, thread_id, source_post_id, origin) VALUES (?, ?, ?, 'discovered')",
@@ -535,13 +535,6 @@ ON CONFLICT(id) DO UPDATE SET root_id=excluded.root_id, thread_id=excluded.threa
 			}
 			this.indexPostEntities(post, threadId);
 		}
-	}
-
-	applyTombstone(post: MattermostPost): void {
-		if (!post.delete_at) {
-			throw new Error("A tombstone must have a non-zero delete_at timestamp.");
-		}
-		this.upsertPost(post);
 	}
 
 	linkTicketThread(
@@ -647,11 +640,6 @@ ON CONFLICT(conversation_id) DO UPDATE SET newest_post_id=excluded.newest_post_i
 		return row ? rowToPost(row) : null;
 	}
 
-	getRoot(postId: string): IndexedPost | null {
-		const post = this.getPost(postId);
-		return post ? this.getPost(post.rootId || post.id) : null;
-	}
-
 	listConversations(): ConversationRecord[] {
 		return this.database
 			.query<
@@ -667,25 +655,6 @@ ON CONFLICT(conversation_id) DO UPDATE SET newest_post_id=excluded.newest_post_i
 				"SELECT id, alias, kind, name, description FROM conversations ORDER BY alias",
 			)
 			.all();
-	}
-
-	getConversationByAlias(alias: string): ConversationRecord | null {
-		return (
-			this.database
-				.query<
-					{
-						id: string;
-						alias: string;
-						kind: ConversationKind;
-						name: string;
-						description: string;
-					},
-					[string]
-				>(
-					"SELECT id, alias, kind, name, description FROM conversations WHERE alias = ?",
-				)
-				.get(alias) ?? null
-		);
 	}
 
 	getUsers(userIds: readonly string[]): IndexedUser[] {
@@ -1425,10 +1394,6 @@ function boundedEditDistance(
 	return distance <= maximum ? distance : null;
 }
 
-export function buildFtsProbe(value: string): string | null {
-	return buildFtsQuery(value, "strict_fts");
-}
-
 export function buildFtsQuery(
 	value: string,
 	source: LexicalRetrievalSource,
@@ -1451,10 +1416,6 @@ export function buildFtsQuery(
 		case "concept_fts":
 			return escaped.map((term) => `"${term}"`).join(" AND ");
 	}
-}
-
-function discoveredTicketKeys(message: string): string[] {
-	return extractTicketKeys(message);
 }
 
 function rowToPost(row: Record<string, unknown>): IndexedPost {
