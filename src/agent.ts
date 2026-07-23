@@ -4,12 +4,14 @@ import type {
 	SearchContextResult,
 	ThreadResult,
 } from "./context.ts";
+import { extractTicketKeys } from "./entities.ts";
 import type {
 	EvidencePost,
 	PackedPost,
 	PackedThread,
 	PackTimelineItem,
 } from "./packing.ts";
+import { largestTimelineSkip } from "./packing.ts";
 import type { CommandResult, Warning } from "./results.ts";
 import type { MattermostSubject } from "./retrieval.ts";
 
@@ -65,6 +67,10 @@ export interface AgentThread {
 	kind: "channel" | "direct_message";
 	url: string;
 	omitted: AgentOmission;
+	/** True when omit/skip is large enough that `mm thread --full` is warranted. */
+	recommendFull?: boolean;
+	largestSkip?: number;
+	omittedRatio?: number;
 	posts: AgentTimelineItem[];
 	/** Prior DM root posts for short threads (not replies of this thread). */
 	surround?: AgentMessageGroup[];
@@ -88,6 +94,9 @@ export type AgentCommandResult =
 			[key: string]: unknown;
 	  }
 	| Extract<CommandResult<never>, { success: false }>;
+
+const RECOMMEND_FULL_MIN_OMITTED_RATIO = 0.25;
+const RECOMMEND_FULL_MIN_LARGEST_SKIP = 5;
 
 /** Build the compact agent view from the same validated result used by JSON output. */
 export function projectAgentResult(
@@ -140,6 +149,10 @@ function projectContext(
 	data: ContextResult,
 	warnings: Warning[],
 ): AgentCommandResult {
+	const relatedTickets = relatedTicketsFromThreads(
+		data.threads,
+		data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+	);
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
@@ -151,6 +164,7 @@ function projectContext(
 		...(data.remoteSearch.performed || data.remoteSearch.requested
 			? { remoteSearch: data.remoteSearch }
 			: {}),
+		...(relatedTickets.length ? { relatedTickets } : {}),
 		threads: data.threads.map(projectContextThread),
 		warnings,
 	};
@@ -186,10 +200,15 @@ function projectThread(
 ): AgentCommandResult {
 	const packingComplete =
 		data.thread.omittedPosts === 0 && data.thread.totalOmittedAttachments === 0;
+	const relatedTickets = relatedTicketsFromPosts(
+		data.thread.posts,
+		data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+	);
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
 		status: status(data.freshnessMode, true, packingComplete),
+		...(relatedTickets.length ? { relatedTickets } : {}),
 		thread: projectPackedThread(
 			data.thread,
 			data.conversation.alias,
@@ -223,6 +242,8 @@ function projectPackedThread(
 	const omittedNames = [
 		...new Set(thread.omittedAttachments.map(({ name }) => name)),
 	];
+	const packingHints =
+		thread.omittedPosts > 0 ? packingCompletenessHints(thread) : undefined;
 	return {
 		threadId: thread.threadId,
 		conversation,
@@ -233,8 +254,65 @@ function projectPackedThread(
 			attachments: thread.totalOmittedAttachments,
 			...(omittedNames.length ? { files: omittedNames } : {}),
 		},
+		...(packingHints ?? {}),
 		posts: projectTimeline(thread.timeline),
 	};
+}
+
+function packingCompletenessHints(thread: PackedThread): {
+	recommendFull: boolean;
+	largestSkip: number;
+	omittedRatio: number;
+} {
+	const largestSkip = largestTimelineSkip(thread.timeline);
+	const omittedRatio =
+		thread.totalPosts > 0
+			? Math.round((thread.omittedPosts / thread.totalPosts) * 100) / 100
+			: 0;
+	return {
+		recommendFull:
+			omittedRatio >= RECOMMEND_FULL_MIN_OMITTED_RATIO ||
+			largestSkip >= RECOMMEND_FULL_MIN_LARGEST_SKIP,
+		largestSkip,
+		omittedRatio,
+	};
+}
+
+function relatedTicketsFromThreads(
+	threads: readonly ContextThread[],
+	subjectTicket?: string,
+): string[] {
+	const keys = new Set<string>();
+	for (const thread of threads) {
+		for (const post of thread.posts) {
+			for (const key of extractTicketKeys(post.message)) keys.add(key);
+		}
+		for (const post of thread.surround ?? []) {
+			for (const key of extractTicketKeys(post.message)) keys.add(key);
+		}
+	}
+	return finalizeRelatedTickets(keys, subjectTicket);
+}
+
+function relatedTicketsFromPosts(
+	posts: readonly EvidencePost[],
+	subjectTicket?: string,
+): string[] {
+	const keys = new Set<string>();
+	for (const post of posts) {
+		for (const key of extractTicketKeys(post.message)) keys.add(key);
+	}
+	return finalizeRelatedTickets(keys, subjectTicket);
+}
+
+function finalizeRelatedTickets(
+	keys: ReadonlySet<string>,
+	subjectTicket?: string,
+): string[] {
+	const subject = subjectTicket?.toUpperCase();
+	return [...keys]
+		.filter((key) => key !== subject)
+		.sort((left, right) => left.localeCompare(right));
 }
 
 function projectTimeline(

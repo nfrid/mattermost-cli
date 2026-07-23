@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractEngineeringEntities } from "./entities.ts";
+import { extractEngineeringEntities, extractTicketKeys } from "./entities.ts";
 
 describe("engineering entity extraction", () => {
 	test("extracts conservative identifiers from realistic mixed-language text", () => {
@@ -35,5 +35,13 @@ describe("engineering entity extraction", () => {
 				"После обеда созвонимся и обсудим, почему очередь снова растёт.",
 			),
 		).toEqual([]);
+	});
+
+	test("extracts unique tracker keys without depending on LLM packing", () => {
+		expect(
+			extractTicketKeys(
+				"TECHSUPP-109 + https://tracker.example/BTBOLD-238 and btb-1870",
+			),
+		).toEqual(["BTB-1870", "BTBOLD-238", "TECHSUPP-109"]);
 	});
 });

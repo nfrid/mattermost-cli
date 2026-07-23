@@ -115,6 +115,7 @@ export interface SearchInput
 		| "before"
 		| "hasFile"
 		| "file"
+		| "local"
 	> {
 	/** Max ranked candidates to return (default {@link DEFAULT_SEARCH_LIMIT}). */
 	limit?: number;
@@ -447,6 +448,19 @@ export async function getMattermostContext(
 			perThreadCharacters: config.budgets.defaultPerThreadCharacters,
 			maxThreads: config.budgets.defaultMaxThreads,
 		};
+		// When only one or two strong threads fit, give each a larger share so
+		// long decision middles are less likely to collapse into a single skip.
+		const expectedThreadCount = Math.min(
+			Math.max(1, candidates.length),
+			budgets.maxThreads,
+		);
+		const perThreadCharacters =
+			expectedThreadCount <= 2
+				? Math.max(
+						budgets.perThreadCharacters,
+						Math.floor(budgets.maxCharacters / expectedThreadCount),
+					)
+				: budgets.perThreadCharacters;
 		let remaining = budgets.maxCharacters;
 		const threads: ContextThread[] = [];
 		const matchedProbeValues = new Set<string>();
@@ -507,7 +521,7 @@ export async function getMattermostContext(
 					matchingPostIds: currentMatchingPostIds,
 					neighborhoodRadius: config.budgets.matchNeighborhoodRadius,
 					clusterMergeGap: config.budgets.clusterMergeGap,
-					limit: Math.min(budgets.perThreadCharacters, remaining),
+					limit: Math.min(perThreadCharacters, remaining),
 				});
 				remaining -= packed.budget.used;
 				const surround = resolveConversationSurround(
@@ -620,7 +634,10 @@ export async function getMattermostContext(
 			searchedConversations,
 			observedAt,
 		);
-		const warnings: Warning[] = [...freshenWarnings, ...remoteSearchWarnings];
+		const warnings: Warning[] = consolidateLocalFallbackWarnings([
+			...freshenWarnings,
+			...remoteSearchWarnings,
+		]);
 		if (searchIncomplete.value) {
 			warnings.push({
 				kind: "search_deadline",
@@ -933,7 +950,9 @@ export async function getMattermostThread(
 		}
 		const degradedToLocal = warnings.some(
 			({ kind }) =>
-				kind === "remote_hydrate_failed" || kind === "remote_resolve_failed",
+				kind === "remote_hydrate_failed" ||
+				kind === "remote_resolve_failed" ||
+				kind === "local_index_fallback",
 		);
 		const freshness =
 			input.local || !usedRemote || degradedToLocal
@@ -972,7 +991,7 @@ export async function getMattermostThread(
 			},
 			link: postLink(config, target.rootId || target.id),
 			thread: packed,
-			warnings,
+			warnings: consolidateLocalFallbackWarnings(warnings),
 		};
 	});
 }
@@ -1550,6 +1569,7 @@ function reevaluateCandidate(
 		reasons.push("substantive_thread_depth");
 	}
 	if (rankingEvidence.thinTicketStub) reasons.push("thin_thread");
+	if (rankingEvidence.multiTicketRoot) reasons.push("multi_ticket_root");
 	if (candidate.fusionScore) reasons.push("rank_fusion");
 	const routingReason = candidate.reasons.find((reason) =>
 		reason.startsWith("routing_"),
@@ -1746,6 +1766,25 @@ function routingHintWarnings(routing: RoutingResult): Warning[] {
 		});
 	}
 	return warnings;
+}
+
+/** Collapse repeated soft-degrade hydrate/resolve/freshen warnings into one signal. */
+function consolidateLocalFallbackWarnings(warnings: readonly Warning[]): Warning[] {
+	const fallbackKinds = new Set([
+		"remote_hydrate_failed",
+		"remote_resolve_failed",
+		"remote_freshen_failed",
+	]);
+	const fallbacks = warnings.filter(({ kind }) => fallbackKinds.has(kind));
+	if (fallbacks.length <= 1) return [...warnings];
+	return [
+		{
+			kind: "local_index_fallback",
+			message:
+				"Mattermost API/network calls failed; continuing from the local index.",
+		},
+		...warnings.filter(({ kind }) => !fallbackKinds.has(kind)),
+	];
 }
 
 function probeWarnings(

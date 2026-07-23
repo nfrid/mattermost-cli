@@ -1,3 +1,4 @@
+import { extractTicketKeys } from "./entities.ts";
 import type { MattermostConfig, SearchConcepts } from "./config.ts";
 import { ConfigError } from "./errors.ts";
 import {
@@ -184,6 +185,7 @@ export type RankingReason =
 	| "multiple_probes_in_thread"
 	| "substantive_thread_depth"
 	| "thin_thread"
+	| "multi_ticket_root"
 	| "rank_fusion"
 	| "routing_explicit_channel"
 	| "routing_scope"
@@ -231,6 +233,7 @@ export interface ThreadRankingEvidence {
 	substantivePostCount?: number;
 	threadDepthScore?: number;
 	thinTicketStub?: boolean;
+	multiTicketRoot?: boolean;
 	latestRelevantMatchAt: number | null;
 }
 
@@ -1390,10 +1393,13 @@ function candidateFromGroup(
 	}
 	const thinTicketStub = Boolean(rankingEvidence.thinTicketStub);
 	if (thinTicketStub) reasons.push("thin_thread");
+	const multiTicketRoot = Boolean(rankingEvidence.multiTicketRoot);
+	if (multiTicketRoot) reasons.push("multi_ticket_root");
 	if (fusionScore) reasons.push("rank_fusion");
 	reasons.push(routeReason(conversation));
 	if (conversation.priority) reasons.push("conversation_priority");
 	reasons.push("latest_activity");
+	const demoteRootTicket = thinTicketStub || multiTicketRoot;
 	return {
 		threadId,
 		rootPostId: root.id,
@@ -1412,14 +1418,14 @@ function candidateFromGroup(
 		priority: conversation.priority,
 		scoreVector: scoreVector({
 			explicitTicketRelationship: explicitRelationship ? 1 : 0,
-			// Thin URL/ticket stubs keep reply-tier ticket signal so substantive
-			// discussions outrank single-link DMs that only paste the ticket.
-			ticketInRoot: rootHasTicket && !thinTicketStub ? 1 : 0,
+			// Thin URL/ticket stubs and multi-ticket bulletin roots keep reply-tier
+			// ticket signal so focused discussions outrank list dumps.
+			ticketInRoot: rootHasTicket && !demoteRootTicket ? 1 : 0,
 			ticketInReply:
-				replyHasTicket || (rootHasTicket && thinTicketStub) ? 1 : 0,
+				replyHasTicket || (rootHasTicket && demoteRootTicket) ? 1 : 0,
 			subjectInRoot:
-				rankingEvidence.subjectInRoot && !thinTicketStub ? 1 : 0,
-			exactPhraseInRoot: thinTicketStub
+				rankingEvidence.subjectInRoot && !demoteRootTicket ? 1 : 0,
+			exactPhraseInRoot: demoteRootTicket
 				? 0
 				: rankingEvidence.exactPhraseInRootCount,
 			proximityTier: proximityTier(rankingEvidence.proximityKind),
@@ -1431,15 +1437,17 @@ function candidateFromGroup(
 			matchedProbeCount: rankingEvidence.matchedProbeCount,
 			structuredMatchCount: structuredMatches.length,
 			routing: routeWeight(conversation),
-			// Negative depth demotes thin stubs before fusion/recency ties.
-			threadDepth: thinTicketStub
-				? -1
+			// Negative depth demotes thin stubs / bulletins before fusion/recency.
+			threadDepth: demoteRootTicket
+				? multiTicketRoot
+					? -2
+					: -1
 				: (rankingEvidence.threadDepthScore ?? 0),
 			fusion: fusionScore,
 			matchedTermCount: rankingEvidence.matchedTermCount,
 			exactPhraseInReply:
 				rankingEvidence.exactPhraseInReplyCount +
-				(thinTicketStub ? rankingEvidence.exactPhraseInRootCount : 0),
+				(demoteRootTicket ? rankingEvidence.exactPhraseInRootCount : 0),
 			conversationPriority: conversation.priority,
 			latestRelevantMatchAt: rankingEvidence.latestRelevantMatchAt ?? 0,
 			latestActivityAt,
@@ -1585,6 +1593,11 @@ export function evaluateThreadEvidence(
 			: 0;
 	const ticketKey = subject.kind === "ticket" ? subject.ticketKey : undefined;
 	const thinTicketStub = isThinTicketStub(thread, ticketKey);
+	const multiTicketRoot = isMultiTicketRootBulletin(
+		thread,
+		rootPostId,
+		ticketKey,
+	);
 	const subjectPhrases =
 		subject.kind === "text"
 			? probes[0]?.phrases.length
@@ -1640,6 +1653,7 @@ export function evaluateThreadEvidence(
 		substantivePostCount,
 		threadDepthScore,
 		thinTicketStub,
+		multiTicketRoot,
 		latestRelevantMatchAt: relevantPosts.length
 			? Math.max(
 					...relevantPosts.map((post) =>
@@ -1678,6 +1692,29 @@ function isThinTicketStub(
 		return cleaned.match(/[\p{L}\p{N}]+/gu) ?? [];
 	});
 	return residualTokens.length <= 4;
+}
+
+const MULTI_TICKET_ROOT_MIN_KEYS = 3;
+
+/**
+ * Manager-style bulletin roots that list many tracker keys where the subject is
+ * only one of several and nobody followed up on it in-thread.
+ */
+function isMultiTicketRootBulletin(
+	thread: readonly Pick<IndexedPost, "id" | "message">[],
+	rootId?: string,
+	ticketKey?: string,
+): boolean {
+	if (!ticketKey || !rootId) return false;
+	const root = thread.find((post) => post.id === rootId) ?? thread[0];
+	if (!root) return false;
+	const normalizedKey = ticketKey.toUpperCase();
+	const rootTickets = extractTicketKeys(root.message);
+	if (rootTickets.length < MULTI_TICKET_ROOT_MIN_KEYS) return false;
+	if (!rootTickets.includes(normalizedKey)) return false;
+	const replies = thread.filter((post) => post.id !== root.id);
+	if (replies.some((post) => contains(post.message, ticketKey))) return false;
+	return true;
 }
 
 function escapeRegExp(value: string): string {

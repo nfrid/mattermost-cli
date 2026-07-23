@@ -177,6 +177,7 @@ const rankingReasonSchema = z.enum([
 	"multiple_probes_in_thread",
 	"substantive_thread_depth",
 	"thin_thread",
+	"multi_ticket_root",
 	"rank_fusion",
 	"routing_explicit_channel",
 	"routing_scope",

@@ -467,6 +467,62 @@ describe("context pipeline", () => {
 		store.close();
 	});
 
+	test("collapses repeated remote hydrate failures into one local-index warning", async () => {
+		const store = await seededStore({ fresh: true });
+		const secondRoot = "cccccccccccccccccccccccccc";
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			posts: [
+				postFixture({
+					id: secondRoot,
+					channel_id: "channel-payments",
+					message: "payment timeout follow-up thread",
+					create_at: 50,
+				}),
+				postFixture({
+					id: "dddddddddddddddddddddddddd",
+					root_id: secondRoot,
+					channel_id: "channel-payments",
+					message: "more payment timeout details",
+					create_at: 60,
+				}),
+			],
+		});
+		const client = new FakeContextClient();
+		client.getThread = async (postId: string) => {
+			client.threadRequests.push(postId);
+			throw new MattermostApiError(
+				"Mattermost API request failed with 503 Service Unavailable.",
+				503,
+				"service_unavailable",
+			);
+		};
+		const result = await getMattermostContext(
+			{ subject: "payment timeout", channels: ["payments"], fresh: true },
+			{
+				config: configFixture({
+					budgets: {
+						...configFixture().budgets,
+						defaultMaxThreads: 2,
+					},
+				}),
+				store,
+				client,
+				now: () => 100,
+			},
+		);
+		expect(result.threads.length).toBeGreaterThanOrEqual(1);
+		expect(client.threadRequests.length).toBeGreaterThanOrEqual(2);
+		const fallbackWarnings = result.warnings.filter(
+			({ kind }) =>
+				kind === "local_index_fallback" || kind === "remote_hydrate_failed",
+		);
+		expect(fallbackWarnings).toEqual([
+			expect.objectContaining({ kind: "local_index_fallback" }),
+		]);
+		store.close();
+	});
+
 	test("human context rendering includes skip markers for omitted spans", async () => {
 		const store = await seededStore({ fresh: true });
 		store.writePage({

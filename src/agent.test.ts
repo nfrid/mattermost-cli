@@ -170,6 +170,68 @@ describe("agent projection", () => {
 		);
 		store.close();
 	});
+
+	test("surfaces packing completeness hints and related tracker keys", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const longRoot = ROOT;
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: longRoot,
+					message: "TECHSUPP-109 kickoff; also see BTBOLD-238",
+					create_at: 10,
+				}),
+				...Array.from({ length: 10 }, (_, index) =>
+					postFixture({
+						id: `${String.fromCharCode(98 + index)}${"b".repeat(25)}`,
+						root_id: longRoot,
+						message: `decision detail ${index + 1} for the rollout`,
+						create_at: 20 + index,
+					}),
+				),
+			],
+		});
+		const context = await getMattermostContext(
+			{ subject: "TECHSUPP-109", channels: ["payments"], local: true },
+			{
+				config: configFixture({
+					budgets: {
+						...configFixture().budgets,
+						defaultPerThreadCharacters: 220,
+						defaultMaxCharacters: 220,
+						defaultMaxThreads: 1,
+					},
+				}),
+				store,
+				now: () => 1_000,
+			},
+		);
+		const result = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		);
+		expect(result).toMatchObject({
+			command: "context",
+			subject: "TECHSUPP-109",
+			relatedTickets: ["BTBOLD-238"],
+		});
+		const thread = (
+			result as {
+				threads: Array<{
+					recommendFull?: boolean;
+					largestSkip?: number;
+					omittedRatio?: number;
+					omitted: { posts: number };
+				}>;
+			}
+		).threads[0];
+		expect(thread?.omitted.posts).toBeGreaterThan(0);
+		expect(thread?.recommendFull).toBe(true);
+		expect(thread?.largestSkip).toBeGreaterThanOrEqual(5);
+		expect(thread?.omittedRatio).toBeGreaterThan(0);
+		store.close();
+	});
 });
 
 async function seededStore(

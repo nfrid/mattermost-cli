@@ -347,7 +347,7 @@ exports[`schema version 1 command contracts locks populated deterministic search
     "threads": [
       {
         "budget": {
-          "limit": 500,
+          "limit": 1000,
           "measurement": "unicode_code_points_in_rendered_post",
           "used": 197,
         },

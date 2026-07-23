@@ -7,6 +7,7 @@ import {
 	type EngineeringEntity,
 	type EngineeringEntityKind,
 	extractEngineeringEntities,
+	extractTicketKeys,
 } from "./entities.ts";
 import { DatabaseError } from "./errors.ts";
 import type {
@@ -1453,13 +1454,7 @@ export function buildFtsQuery(
 }
 
 function discoveredTicketKeys(message: string): string[] {
-	return [
-		...new Set(
-			(message.match(/\b[A-Z][A-Z0-9]+-\d+\b/gi) ?? []).map((key) =>
-				key.toUpperCase(),
-			),
-		),
-	];
+	return extractTicketKeys(message);
 }
 
 function rowToPost(row: Record<string, unknown>): IndexedPost {

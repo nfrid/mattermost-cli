@@ -36,6 +36,15 @@ const USERNAME_PATTERN = /(?:^|\s)@([A-Za-z0-9._-]{2,64})\b/g;
 const NAMED_RELATION_PATTERN =
 	/(?:^|[\s(])(repo(?:sitory)?|репозитор(?:ий|ия)|service|сервис)\s*[:=]?\s*([A-Za-z0-9][A-Za-z0-9_./-]{1,100})/giu;
 
+/** Unique tracker keys like `BTB-2080` / `TECHSUPP-109` (uppercase, sorted). */
+export function extractTicketKeys(text: string): string[] {
+	return [
+		...new Set(
+			(text.match(TICKET_PATTERN) ?? []).map((key) => key.toUpperCase()),
+		),
+	].sort((left, right) => left.localeCompare(right));
+}
+
 export function extractEngineeringEntities(text: string): EngineeringEntity[] {
 	const entities: EngineeringEntity[] = [];
 	const urls = text.match(URL_PATTERN) ?? [];
@@ -56,8 +65,8 @@ export function extractEngineeringEntities(text: string): EngineeringEntity[] {
 			// The URL itself remains useful even if URL parsing rejects it.
 		}
 	}
-	for (const value of text.match(TICKET_PATTERN) ?? []) {
-		addEntity(entities, "ticket", value.toUpperCase());
+	for (const value of extractTicketKeys(text)) {
+		addEntity(entities, "ticket", value);
 	}
 	for (const value of text.match(COMMIT_PATTERN) ?? []) {
 		addEntity(entities, "commit", value);

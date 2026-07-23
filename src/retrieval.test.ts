@@ -1681,6 +1681,71 @@ describe("routing and ranking", () => {
 		).toContain("thin_thread");
 		store.close();
 	});
+
+	test("demotes multi-ticket bulletin roots below focused ticket threads", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture("payments", "channel-payments");
+		const bulletinRoot = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const combatRoot = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
+		store.writePage({
+			conversation: payments,
+			posts: [
+				postFixture({
+					id: bulletinRoot,
+					channel_id: payments.id,
+					message:
+						"На завтра: BTB-2080 BTB-1870 BTB-1999 CLIENTS-1090 TECHSUPP-50",
+					create_at: 10,
+				}),
+				postFixture({
+					id: combatRoot,
+					channel_id: payments.id,
+					message: "BTB-2080 payment timeout in checkout",
+					create_at: 20,
+				}),
+				postFixture({
+					id: "cccccccccccccccccccccccccc",
+					root_id: combatRoot,
+					channel_id: payments.id,
+					message:
+						"We reproduced the race in the worker and will patch the retry path",
+					create_at: 30,
+				}),
+				postFixture({
+					id: "dddddddddddddddddddddddddd",
+					root_id: combatRoot,
+					channel_id: payments.id,
+					message: "Looks good after the polish pass, shipping next",
+					create_at: 40,
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject("BTB-2080");
+		const candidates = searchThreads(
+			store,
+			subject,
+			resolveProbes(subject),
+			routing,
+		);
+		expect(candidates.map(({ threadId }) => threadId)).toEqual([
+			combatRoot,
+			bulletinRoot,
+		]);
+		expect(
+			candidates.find(({ threadId }) => threadId === bulletinRoot)?.reasons,
+		).toContain("multi_ticket_root");
+		expect(
+			candidates.find(({ threadId }) => threadId === combatRoot)?.reasons,
+		).not.toContain("multi_ticket_root");
+		store.close();
+	});
 });
 
 function seedConversation(

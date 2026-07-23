@@ -282,6 +282,7 @@ function createProgram(
 			`max ranked candidates to return (default ${DEFAULT_SEARCH_LIMIT})`,
 			(value) => Number(value),
 		)
+		.option("--local", "perform no network calls (search is always local)")
 		.option("--no-widen", "disable one-time routing fallback")
 		.option(
 			"--include-automation",
@@ -418,6 +419,7 @@ async function executeCommand(
 					before: commandOptions.before,
 					hasFile: commandOptions.hasFile,
 					file: commandOptions.file,
+					local: commandOptions.local,
 					noWiden: commandOptions.widen === false,
 					includeAutomation: commandOptions.includeAutomation,
 					limit: commandOptions.limit,

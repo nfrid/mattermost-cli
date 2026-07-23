@@ -1,3 +1,5 @@
+import { extractTicketKeys } from "./entities.ts";
+
 export interface EvidenceAttachment {
 	id: string;
 	postId: string;
@@ -66,12 +68,27 @@ export interface PackThreadOptions {
 	 * clusters so micro-windows merge. Default 2.
 	 */
 	clusterMergeGap?: number;
+	/**
+	 * After priority selection, spend leftover budget on the largest internal
+	 * skip between selected clusters. Default true.
+	 */
+	gapFill?: boolean;
+	/**
+	 * Prefer attachment / code-fence / long / multi-ticket posts and the densest
+	 * activity window before the short latest-post priority. Default true.
+	 */
+	structuralAnchors?: boolean;
 	limit: number;
 	full?: boolean;
 }
 
 const DEFAULT_NEIGHBORHOOD_RADIUS = 2;
 const DEFAULT_CLUSTER_MERGE_GAP = 2;
+/** High-priority tail posts before gap-fill; remainder may fill later. */
+const LATEST_PRIORITY_COUNT = 3;
+const STRUCTURAL_LONG_MESSAGE_UNITS = 400;
+const DENSE_WINDOW_MS = 60 * 60 * 1000;
+const DENSE_WINDOW_MIN_POSTS = 3;
 
 export function packThread(
 	threadId: string,
@@ -140,11 +157,14 @@ export function packThread(
 			add(mergeIds, "cluster_merge");
 		}
 
+		if (options.structuralAnchors !== false) {
+			add(structuralAnchorIds(chronological), "structural_anchors");
+			add(densestWindowIds(chronological), "densest_window");
+		}
+
+		// Keep only a short high-priority tail so gap-fill can reclaim the middle.
 		add(
-			chronological
-				.slice()
-				.reverse()
-				.map(({ id }) => id),
+			chronological.slice(-LATEST_PRIORITY_COUNT).reverse().map(({ id }) => id),
 			"latest_posts",
 		);
 	}
@@ -161,6 +181,31 @@ export function packThread(
 		if (used + units > limit) continue;
 		selected.add(id);
 		used += units;
+	}
+
+	if (!options.full && options.gapFill !== false) {
+		const filled = fillLargestInternalGaps(
+			chronological,
+			byId,
+			selected,
+			used,
+			limit,
+		);
+		used = filled.used;
+		if (filled.added) strategies.push("gap_fill");
+	}
+
+	if (!options.full) {
+		let extended = false;
+		for (const post of chronological.slice().reverse()) {
+			if (selected.has(post.id)) continue;
+			const units = renderedPostUnits(post);
+			if (used + units > limit) continue;
+			selected.add(post.id);
+			used += units;
+			extended = true;
+		}
+		if (extended) strategies.push("latest_posts_extended");
 	}
 
 	const returned = chronological
@@ -243,6 +288,17 @@ export function buildTimeline(
 	return timeline;
 }
 
+/** Largest contiguous omitted span in a packed timeline. */
+export function largestTimelineSkip(
+	timeline: readonly PackTimelineItem[],
+): number {
+	let largest = 0;
+	for (const item of timeline) {
+		if (item.kind === "skip") largest = Math.max(largest, item.skip.posts);
+	}
+	return largest;
+}
+
 function clusterMergeIds(
 	chronological: readonly EvidencePost[],
 	alreadyOrdered: readonly string[],
@@ -267,6 +323,130 @@ function clusterMergeIds(
 		}
 	}
 	return fill;
+}
+
+/**
+ * Spend leftover budget on the largest skip between already-selected clusters,
+ * preferring structural posts, then posts that reconnect cluster edges.
+ */
+function fillLargestInternalGaps(
+	chronological: readonly EvidencePost[],
+	byId: ReadonlyMap<string, EvidencePost>,
+	selected: Set<string>,
+	used: number,
+	limit: number,
+): { used: number; added: boolean } {
+	let currentUsed = used;
+	let added = false;
+	while (currentUsed < limit) {
+		const gapIds = largestInternalGapIds(chronological, selected);
+		if (!gapIds.length) break;
+		const gapPosts = gapIds
+			.map((id) => byId.get(id))
+			.filter((post): post is EvidencePost => Boolean(post));
+		const preferred = [
+			...gapPosts.filter((post) => isStructuralPost(post)),
+			...edgeInwardOrder(gapIds)
+				.map((id) => byId.get(id))
+				.filter((post): post is EvidencePost => Boolean(post)),
+		];
+		const seen = new Set<string>();
+		let progressed = false;
+		for (const post of preferred) {
+			if (selected.has(post.id) || seen.has(post.id)) continue;
+			seen.add(post.id);
+			const units = renderedPostUnits(post);
+			if (currentUsed + units > limit) continue;
+			selected.add(post.id);
+			currentUsed += units;
+			added = true;
+			progressed = true;
+		}
+		if (!progressed) break;
+	}
+	return { used: currentUsed, added };
+}
+
+/** Unselected spans that sit between two selected posts (not leading/trailing). */
+function largestInternalGapIds(
+	chronological: readonly EvidencePost[],
+	selected: ReadonlySet<string>,
+): string[] {
+	const gaps: string[][] = [];
+	let current: string[] = [];
+	let seenSelected = false;
+	for (const post of chronological) {
+		if (selected.has(post.id)) {
+			if (seenSelected && current.length) gaps.push(current);
+			current = [];
+			seenSelected = true;
+			continue;
+		}
+		if (seenSelected) current.push(post.id);
+	}
+	if (!gaps.length) return [];
+	gaps.sort((left, right) => right.length - left.length);
+	return gaps[0] ?? [];
+}
+
+function edgeInwardOrder(ids: readonly string[]): string[] {
+	const ordered: string[] = [];
+	let left = 0;
+	let right = ids.length - 1;
+	while (left <= right) {
+		const leftId = ids[left];
+		if (leftId) ordered.push(leftId);
+		left += 1;
+		if (left > right) break;
+		const rightId = ids[right];
+		if (rightId) ordered.push(rightId);
+		right -= 1;
+	}
+	return ordered;
+}
+
+function structuralAnchorIds(
+	chronological: readonly EvidencePost[],
+): string[] {
+	return chronological
+		.filter((post) => isStructuralPost(post))
+		.map(({ id }) => id);
+}
+
+function isStructuralPost(post: EvidencePost): boolean {
+	if (post.attachments.some((attachment) => !attachment.deleteAt)) return true;
+	if (/```/.test(post.message)) return true;
+	if ([...post.message].length >= STRUCTURAL_LONG_MESSAGE_UNITS) return true;
+	if (extractTicketKeys(post.message).length >= 2) return true;
+	return false;
+}
+
+function densestWindowIds(chronological: readonly EvidencePost[]): string[] {
+	if (chronological.length < DENSE_WINDOW_MIN_POSTS) return [];
+	let bestStart = 0;
+	let bestEnd = 0;
+	let bestCount = 0;
+	let right = 0;
+	for (let left = 0; left < chronological.length; left += 1) {
+		const leftPost = chronological[left];
+		if (!leftPost) continue;
+		while (right < chronological.length) {
+			const rightPost = chronological[right];
+			if (!rightPost) break;
+			if (rightPost.createAt - leftPost.createAt > DENSE_WINDOW_MS) break;
+			right += 1;
+		}
+		const count = right - left;
+		if (count > bestCount) {
+			bestCount = count;
+			bestStart = left;
+			bestEnd = right;
+		}
+	}
+	if (bestCount < DENSE_WINDOW_MIN_POSTS) return [];
+	// A window that covers the whole thread is not a useful local anchor.
+	if (bestCount >= chronological.length) return [];
+	return chronological.slice(bestStart, bestEnd).map(({ id }) => id);
 }
 
 export function renderedPostUnits(post: EvidencePost): number {

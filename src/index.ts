@@ -68,6 +68,7 @@ export {
 	type EngineeringEntity,
 	type EngineeringEntityKind,
 	extractEngineeringEntities,
+	extractTicketKeys,
 } from "./entities.ts";
 export {
 	AppError,

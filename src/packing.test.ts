@@ -13,6 +13,8 @@ describe("thread packing", () => {
 			matchingPostIds: ["p2"],
 			neighborhoodRadius: 1,
 			clusterMergeGap: 0,
+			structuralAnchors: false,
+			gapFill: false,
 			limit: units,
 		});
 		expect(packed.selectionStrategy).toEqual([
@@ -47,6 +49,8 @@ describe("thread packing", () => {
 			matchingPostIds: ["p2", "p9"],
 			neighborhoodRadius: 1,
 			clusterMergeGap: 2,
+			structuralAnchors: false,
+			gapFill: false,
 			limit: units(0, 1, 2, 3, 8, 9, 10),
 		});
 		expect(limited.posts.map(({ id }) => id)).toEqual([
@@ -67,6 +71,8 @@ describe("thread packing", () => {
 			matchingPostIds: ["p2", "p6"],
 			neighborhoodRadius: 1,
 			clusterMergeGap: 2,
+			structuralAnchors: false,
+			gapFill: false,
 			limit: units(0, 1, 2, 3, 4, 5, 6, 7),
 		});
 		// windows [p1-p3] and [p5-p7]; gap p4 size 1 → merged before latest fill
@@ -89,6 +95,43 @@ describe("thread packing", () => {
 		]);
 		expect(near.timeline.filter((item) => item.kind === "skip")).toEqual([
 			{ kind: "skip", skip: { posts: 4, after: "p7" } },
+		]);
+	});
+
+	test("gap-fill spends leftover budget on the largest internal skip", () => {
+		const posts = Array.from({ length: 12 }, (_, index) =>
+			evidence(`p${index}`, index, `body-${index}`),
+		);
+		// Budget fits root + last three + several gap-edge posts, but not the full thread.
+		const limit =
+			renderedPostUnits(posts[0]!) +
+			renderedPostUnits(posts[9]!) +
+			renderedPostUnits(posts[10]!) +
+			renderedPostUnits(posts[11]!) +
+			renderedPostUnits(posts[1]!) +
+			renderedPostUnits(posts[2]!) +
+			renderedPostUnits(posts[8]!);
+		const packed = packThread("p0", posts, {
+			matchingPostIds: [],
+			neighborhoodRadius: 1,
+			clusterMergeGap: 0,
+			structuralAnchors: false,
+			gapFill: true,
+			limit,
+		});
+		expect(packed.selectionStrategy).toContain("gap_fill");
+		// Edge-inward reconnects root↔latest clusters before deep middle posts.
+		expect(packed.posts.map(({ id }) => id)).toEqual([
+			"p0",
+			"p1",
+			"p2",
+			"p8",
+			"p9",
+			"p10",
+			"p11",
+		]);
+		expect(packed.timeline.filter((item) => item.kind === "skip")).toEqual([
+			{ kind: "skip", skip: { posts: 5, after: "p2", before: "p8" } },
 		]);
 	});
 
