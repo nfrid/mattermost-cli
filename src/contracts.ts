@@ -130,6 +130,22 @@ const packedThreadSchema = z.object({
 	unreportedOmittedAttachments: z.number().int().nonnegative(),
 	budget: budgetSchema,
 	posts: z.array(postSchema),
+	timeline: z.array(
+		z.discriminatedUnion("kind", [
+			z.object({
+				kind: z.literal("post"),
+				post: postSchema,
+			}),
+			z.object({
+				kind: z.literal("skip"),
+				skip: z.object({
+					posts: z.number().int().positive(),
+					after: z.string().optional(),
+					before: z.string().optional(),
+				}),
+			}),
+		]),
+	),
 });
 const rankingReasonSchema = z.enum([
 	"direct_post",
@@ -160,6 +176,7 @@ const rankingReasonSchema = z.enum([
 	"query_expansion",
 	"multiple_probes_in_thread",
 	"substantive_thread_depth",
+	"thin_thread",
 	"rank_fusion",
 	"routing_explicit_channel",
 	"routing_scope",
@@ -471,7 +488,6 @@ const contextDataSchema = z.object({
 	complete: z.boolean(),
 	searchCoverageComplete: z.boolean().optional(),
 	selectedThreadsComplete: z.boolean().optional(),
-	detailLevel: z.enum(["compact", "expanded"]).optional(),
 	freshness: z.array(freshnessSchema),
 	unmatchedHints: z
 		.object({
@@ -526,6 +542,16 @@ export const contextResultV1Schema = successResult(
 	contextDataSchema,
 );
 export const threadResultV1Schema = successResult("thread", threadDataSchema);
+const fileDataSchema = z.object({
+	id: z.string(),
+	name: z.string(),
+	mimeType: z.string(),
+	size: z.number().int().nonnegative(),
+	path: z.string(),
+	postId: z.string(),
+	conversationId: z.string(),
+});
+export const fileResultV1Schema = successResult("file", fileDataSchema);
 export const failureResultV1Schema = z.object({
 	command: z.string(),
 	schemaVersion: z.literal(SCHEMA_VERSION),
@@ -555,6 +581,7 @@ export const commandResultV1Schema = z.union([
 	searchResultV1Schema,
 	contextResultV1Schema,
 	threadResultV1Schema,
+	fileResultV1Schema,
 	failureResultV1Schema,
 ]);
 
@@ -569,6 +596,7 @@ export type SyncCommandResultV1 = z.output<typeof syncResultV1Schema>;
 export type SearchCommandResultV1 = z.output<typeof searchResultV1Schema>;
 export type ContextCommandResultV1 = z.output<typeof contextResultV1Schema>;
 export type ThreadCommandResultV1 = z.output<typeof threadResultV1Schema>;
+export type FileCommandResultV1 = z.output<typeof fileResultV1Schema>;
 
 export function parseCommandResultV1(value: unknown): CommandResultV1 {
 	return commandResultV1Schema.parse(value);

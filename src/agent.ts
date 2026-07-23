@@ -4,14 +4,20 @@ import type {
 	SearchContextResult,
 	ThreadResult,
 } from "./context.ts";
-import type { EvidencePost, PackedPost, PackedThread } from "./packing.ts";
+import type {
+	EvidencePost,
+	PackedPost,
+	PackedThread,
+	PackTimelineItem,
+} from "./packing.ts";
 import type { CommandResult, Warning } from "./results.ts";
-import type { MattermostSubject, RankingReason } from "./retrieval.ts";
+import type { MattermostSubject } from "./retrieval.ts";
 
 export interface AgentFile {
+	id: string;
 	name: string;
-	mimeType: string;
-	size: number;
+	mimeType?: string;
+	size?: number;
 }
 
 export interface AgentMessage {
@@ -26,15 +32,24 @@ export interface AgentMessage {
 /** Consecutive posts from one author, collapsed to reduce envelope noise. */
 export interface AgentMessageGroup {
 	author: string;
-	displayName?: string;
-	from: string;
-	to?: string;
 	messages: AgentMessage[];
 }
+
+/** Omitted chronological span between returned posts. */
+export interface AgentSkip {
+	skip: {
+		posts: number;
+		after?: string;
+		before?: string;
+	};
+}
+
+export type AgentTimelineItem = AgentMessageGroup | AgentSkip;
 
 export interface AgentStatus {
 	freshness: "local" | "network";
 	searchComplete: boolean;
+	/** True when every returned thread has no packing omissions. */
 	threadsComplete: boolean;
 }
 
@@ -49,9 +64,8 @@ export interface AgentThread {
 	conversation: string;
 	kind: "channel" | "direct_message";
 	url: string;
-	why?: RankingReason[];
 	omitted: AgentOmission;
-	posts: AgentMessageGroup[];
+	posts: AgentTimelineItem[];
 	/** Prior DM root posts for short threads (not replies of this thread). */
 	surround?: AgentMessageGroup[];
 }
@@ -62,7 +76,6 @@ export interface AgentCandidate {
 	kind: "channel" | "direct_message";
 	url: string;
 	latestAt: string;
-	why: RankingReason[];
 	excerpts: string[];
 }
 
@@ -107,6 +120,12 @@ export function projectAgentResult(
 				result.data as ThreadResult,
 				result.warnings,
 			);
+		case "file":
+			return {
+				...envelope,
+				...(isRecord(result.data) ? result.data : { result: result.data }),
+				warnings: result.warnings,
+			};
 		default:
 			return {
 				...envelope,
@@ -153,7 +172,6 @@ function projectSearch(
 				kind: candidate.conversationKind,
 				url: candidate.link,
 				latestAt: iso(candidate.latestActivityAt),
-				why: meaningfulReasons(candidate.reasons),
 				excerpts: [...new Set(candidate.matches.map(({ excerpt }) => excerpt))],
 			}),
 		),
@@ -166,10 +184,12 @@ function projectThread(
 	data: ThreadResult,
 	warnings: Warning[],
 ): AgentCommandResult {
+	const packingComplete =
+		data.thread.omittedPosts === 0 && data.thread.totalOmittedAttachments === 0;
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
-		status: status(data.freshnessMode, true, data.complete),
+		status: status(data.freshnessMode, true, packingComplete),
 		thread: projectPackedThread(
 			data.thread,
 			data.conversation.alias,
@@ -188,7 +208,6 @@ function projectContextThread(thread: ContextThread): AgentThread {
 			thread.conversationKind,
 			thread.link,
 		),
-		why: meaningfulReasons(thread.reasons),
 		...(thread.surround?.length
 			? { surround: groupEvidencePosts(thread.surround) }
 			: {}),
@@ -214,23 +233,42 @@ function projectPackedThread(
 			attachments: thread.totalOmittedAttachments,
 			...(omittedNames.length ? { files: omittedNames } : {}),
 		},
-		posts: groupPackedPosts(thread.posts),
+		posts: projectTimeline(thread.timeline),
 	};
 }
 
-function groupPackedPosts(posts: readonly PackedPost[]): AgentMessageGroup[] {
-	return groupPosts(
-		posts.map((post) => ({
-			id: post.id,
-			author: post.authorUsername,
-			displayName: post.authorDisplayName,
-			createAt: post.createAt,
-			updateAt: post.updateAt,
-			deleteAt: post.deleteAt,
-			message: post.message,
-			attachments: post.attachments,
-		})),
-	);
+function projectTimeline(
+	timeline: readonly PackTimelineItem[],
+): AgentTimelineItem[] {
+	const items: AgentTimelineItem[] = [];
+	let openGroup: AgentMessageGroup | undefined;
+
+	const flushGroup = () => {
+		if (openGroup) {
+			items.push(openGroup);
+			openGroup = undefined;
+		}
+	};
+
+	for (const item of timeline) {
+		if (item.kind === "skip") {
+			flushGroup();
+			items.push({ skip: item.skip });
+			continue;
+		}
+		const message = projectMessage(item.post);
+		if (openGroup && openGroup.author === item.post.authorUsername) {
+			openGroup.messages.push(message);
+			continue;
+		}
+		flushGroup();
+		openGroup = {
+			author: item.post.authorUsername,
+			messages: [message],
+		};
+	}
+	flushGroup();
+	return items;
 }
 
 function groupEvidencePosts(
@@ -240,7 +278,6 @@ function groupEvidencePosts(
 		posts.map((post) => ({
 			id: post.id,
 			author: post.authorUsername,
-			displayName: post.authorDisplayName,
 			createAt: post.createAt,
 			updateAt: post.updateAt,
 			deleteAt: post.deleteAt,
@@ -254,7 +291,6 @@ function groupPosts(
 	posts: readonly {
 		id: string;
 		author: string;
-		displayName: string;
 		createAt: number;
 		updateAt: number;
 		deleteAt: number;
@@ -268,15 +304,10 @@ function groupPosts(
 		const previous = groups[groups.length - 1];
 		if (previous && previous.author === post.author) {
 			previous.messages.push(message);
-			previous.to = iso(post.createAt);
 			continue;
 		}
 		groups.push({
 			author: post.author,
-			...(post.displayName && post.displayName !== post.author
-				? { displayName: post.displayName }
-				: {}),
-			from: iso(post.createAt),
 			messages: [message],
 		});
 	}
@@ -291,10 +322,11 @@ function projectMessage(post: {
 	message: string;
 	attachments: PackedPost["attachments"];
 }): AgentMessage {
-	const files = post.attachments.map(({ name, mimeType, size }) => ({
-		name,
-		mimeType,
-		size,
+	const files = post.attachments.map((attachment) => ({
+		id: attachment.id,
+		name: attachment.name,
+		...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+		...(Number.isFinite(attachment.size) ? { size: attachment.size } : {}),
 	}));
 	return {
 		id: post.id,
@@ -316,13 +348,6 @@ function status(
 		searchComplete,
 		threadsComplete,
 	};
-}
-
-function meaningfulReasons(reasons: readonly RankingReason[]): RankingReason[] {
-	return reasons.filter(
-		(reason) =>
-			reason !== "conversation_priority" && reason !== "latest_activity",
-	);
 }
 
 function subjectValue(subject: MattermostSubject): string {

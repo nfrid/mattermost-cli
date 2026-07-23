@@ -25,6 +25,17 @@ export interface PackedPost extends EvidencePost {
 	renderedUnits: number;
 }
 
+/** Gap between returned posts in chronological thread order. */
+export interface PackSkip {
+	posts: number;
+	after?: string;
+	before?: string;
+}
+
+export type PackTimelineItem =
+	| { kind: "post"; post: PackedPost }
+	| { kind: "skip"; skip: PackSkip };
+
 export interface PackedThread {
 	threadId: string;
 	selectionStrategy: string[];
@@ -41,16 +52,26 @@ export interface PackedThread {
 		used: number;
 	};
 	posts: PackedPost[];
+	/** Chronological posts with explicit skip markers for omitted spans. */
+	timeline: PackTimelineItem[];
 }
 
 export interface PackThreadOptions {
 	matchingPostIds?: readonly string[];
 	aroundPostId?: string;
-	/** Inclusive neighbor distance around each match / aroundPostId. Default 8. */
+	/** Inclusive neighbor distance around each match / aroundPostId. Default 2. */
 	neighborhoodRadius?: number;
+	/**
+	 * Fill chronological gaps of at most this many posts between selected
+	 * clusters so micro-windows merge. Default 2.
+	 */
+	clusterMergeGap?: number;
 	limit: number;
 	full?: boolean;
 }
+
+const DEFAULT_NEIGHBORHOOD_RADIUS = 2;
+const DEFAULT_CLUSTER_MERGE_GAP = 2;
 
 export function packThread(
 	threadId: string,
@@ -90,7 +111,10 @@ export function packThread(
 			...(options.matchingPostIds ?? []),
 			...(options.aroundPostId ? [options.aroundPostId] : []),
 		];
-		const radius = Math.max(1, options.neighborhoodRadius ?? 8);
+		const radius = Math.max(
+			1,
+			options.neighborhoodRadius ?? DEFAULT_NEIGHBORHOOD_RADIUS,
+		);
 		for (let distance = 1; distance <= radius; distance += 1) {
 			const ring: string[] = [];
 			for (const target of neighborhoodTargets) {
@@ -105,16 +129,24 @@ export function packThread(
 				ring,
 				distance === 1 ? "match_neighborhoods" : "match_neighborhoods_extended",
 			);
-			if (distance === 1) {
-				add(
-					chronological
-						.slice()
-						.reverse()
-						.map(({ id }) => id),
-					"latest_posts",
-				);
-			}
 		}
+
+		const mergeGap = Math.max(
+			0,
+			options.clusterMergeGap ?? DEFAULT_CLUSTER_MERGE_GAP,
+		);
+		if (mergeGap > 0) {
+			const mergeIds = clusterMergeIds(chronological, order, mergeGap);
+			add(mergeIds, "cluster_merge");
+		}
+
+		add(
+			chronological
+				.slice()
+				.reverse()
+				.map(({ id }) => id),
+			"latest_posts",
+		);
 	}
 
 	const limit = options.full
@@ -130,6 +162,7 @@ export function packThread(
 		selected.add(id);
 		used += units;
 	}
+
 	const returned = chronological
 		.filter(({ id }) => selected.has(id))
 		.map((post) => ({ ...post, renderedUnits: renderedPostUnits(post) }));
@@ -164,7 +197,76 @@ export function packThread(
 			used,
 		},
 		posts: returned,
+		timeline: buildTimeline(chronological, selected, returned),
 	};
+}
+
+/** Build chronological timeline with skip markers for omitted spans. */
+export function buildTimeline(
+	chronological: readonly EvidencePost[],
+	selected: ReadonlySet<string>,
+	returned: readonly PackedPost[],
+): PackTimelineItem[] {
+	const byId = new Map(returned.map((post) => [post.id, post]));
+	const timeline: PackTimelineItem[] = [];
+	let skipCount = 0;
+	let skipAfter: string | undefined;
+	let lastEmittedId: string | undefined;
+
+	const flushSkip = (before?: string) => {
+		if (skipCount <= 0) return;
+		timeline.push({
+			kind: "skip",
+			skip: {
+				posts: skipCount,
+				...(skipAfter ? { after: skipAfter } : {}),
+				...(before ? { before } : {}),
+			},
+		});
+		skipCount = 0;
+		skipAfter = undefined;
+	};
+
+	for (const post of chronological) {
+		if (selected.has(post.id)) {
+			const packed = byId.get(post.id);
+			if (!packed) continue;
+			flushSkip(post.id);
+			timeline.push({ kind: "post", post: packed });
+			lastEmittedId = post.id;
+			continue;
+		}
+		if (skipCount === 0) skipAfter = lastEmittedId;
+		skipCount += 1;
+	}
+	flushSkip();
+	return timeline;
+}
+
+function clusterMergeIds(
+	chronological: readonly EvidencePost[],
+	alreadyOrdered: readonly string[],
+	mergeGap: number,
+): string[] {
+	const selected = new Set(alreadyOrdered);
+	const indices = chronological
+		.map((post, index) => (selected.has(post.id) ? index : -1))
+		.filter((index) => index >= 0);
+	const fill: string[] = [];
+	for (let cursor = 0; cursor < indices.length - 1; cursor += 1) {
+		const left = indices[cursor];
+		const right = indices[cursor + 1];
+		if (left === undefined || right === undefined) continue;
+		const gap = right - left - 1;
+		if (gap <= 0 || gap > mergeGap) continue;
+		for (let index = left + 1; index < right; index += 1) {
+			const post = chronological[index];
+			if (!post || selected.has(post.id)) continue;
+			fill.push(post.id);
+			selected.add(post.id);
+		}
+	}
+	return fill;
 }
 
 export function renderedPostUnits(post: EvidencePost): number {

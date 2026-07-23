@@ -177,6 +177,10 @@ export class MattermostClient {
 		);
 	}
 
+	async downloadFile(fileId: string): Promise<Uint8Array> {
+		return this.#requestBinary(`/files/${encodeURIComponent(fileId)}`);
+	}
+
 	private getJson<T>(
 		path: string,
 		schema: z.ZodType<T>,
@@ -191,6 +195,72 @@ export class MattermostClient {
 		body: unknown,
 	): Promise<T> {
 		return this.#requestJson("POST", path, schema, {}, body);
+	}
+
+	async #requestBinary(path: string): Promise<Uint8Array> {
+		const url = new URL(`${this.baseUrl}${path}`);
+		let response: Response;
+		try {
+			response = await this.fetchImplementation(url, {
+				method: "GET",
+				headers: {
+					Authorization: `Bearer ${this.token}`,
+				},
+				signal: AbortSignal.timeout(this.timeoutMs),
+			});
+		} catch (error) {
+			throw new MattermostApiError(
+				"Mattermost file download failed before receiving a response.",
+				0,
+				"",
+				"request_failed",
+				{ cause: error },
+			);
+		}
+
+		if (!response.ok) {
+			const tokenBytes = new TextEncoder().encode(this.token).length;
+			const { text } = await readResponseText(
+				response,
+				MAX_ERROR_BODY_CHARACTERS + tokenBytes,
+				true,
+			);
+			const responseBody = [...redactToken(text, this.token)]
+				.slice(0, MAX_ERROR_BODY_CHARACTERS)
+				.join("");
+			throw new MattermostApiError(
+				`Mattermost file download failed with ${response.status} ${response.statusText}.`,
+				response.status,
+				responseBody,
+			);
+		}
+
+		const declaredLength = Number(response.headers.get("content-length"));
+		if (
+			Number.isFinite(declaredLength) &&
+			declaredLength > MAX_RESPONSE_BODY_BYTES
+		) {
+			throw new MattermostApiError(
+				"Mattermost file exceeded the configured safety bound.",
+				response.status,
+				"",
+				"response_too_large",
+			);
+		}
+
+		const { bytes, truncated } = await readResponseBytes(
+			response,
+			MAX_RESPONSE_BODY_BYTES,
+		);
+		if (truncated) {
+			throw new MattermostApiError(
+				"Mattermost file exceeded the configured safety bound.",
+				response.status,
+				"",
+				"response_too_large",
+			);
+		}
+		return bytes;
 	}
 
 	async #requestJson<T>(
@@ -286,12 +356,11 @@ export class MattermostClient {
 	}
 }
 
-async function readResponseText(
+async function readResponseBytes(
 	response: Response,
 	maxBytes: number,
-	allowTruncate: boolean,
-): Promise<{ text: string; truncated: boolean }> {
-	if (!response.body) return { text: "", truncated: false };
+): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+	if (!response.body) return { bytes: new Uint8Array(), truncated: false };
 	const reader = response.body.getReader();
 	const chunks: Uint8Array[] = [];
 	let total = 0;
@@ -309,9 +378,6 @@ async function readResponseText(
 		chunks.push(value);
 		total += value.byteLength;
 	}
-	if (truncated && !allowTruncate) {
-		return { text: "", truncated: true };
-	}
 	const bytes = new Uint8Array(
 		chunks.reduce((length, chunk) => length + chunk.byteLength, 0),
 	);
@@ -319,6 +385,18 @@ async function readResponseText(
 	for (const chunk of chunks) {
 		bytes.set(chunk, offset);
 		offset += chunk.byteLength;
+	}
+	return { bytes, truncated };
+}
+
+async function readResponseText(
+	response: Response,
+	maxBytes: number,
+	allowTruncate: boolean,
+): Promise<{ text: string; truncated: boolean }> {
+	const { bytes, truncated } = await readResponseBytes(response, maxBytes);
+	if (truncated && !allowTruncate) {
+		return { text: "", truncated: true };
 	}
 	return { text: new TextDecoder().decode(bytes), truncated };
 }

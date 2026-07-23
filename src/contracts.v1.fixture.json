@@ -94,7 +94,6 @@
 			"complete": true,
 			"searchCoverageComplete": true,
 			"selectedThreadsComplete": false,
-			"detailLevel": "compact",
 			"freshness": [],
 			"unmatchedHints": { "scopes": [], "repositories": [] },
 			"searchedConversations": [],
@@ -155,9 +154,25 @@
 					"limit": 6000,
 					"used": 0
 				},
-				"posts": []
+				"posts": [],
+				"timeline": []
 			},
 			"warnings": []
+		},
+		"warnings": []
+	},
+	{
+		"command": "file",
+		"schemaVersion": 1,
+		"success": true,
+		"data": {
+			"id": "file-1",
+			"name": "synthetic.txt",
+			"mimeType": "text/plain",
+			"size": 42,
+			"path": "/tmp/mm-file-1-synthetic.txt",
+			"postId": "bbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"conversationId": "channel-1"
 		},
 		"warnings": []
 	},

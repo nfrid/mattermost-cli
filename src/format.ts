@@ -1,8 +1,10 @@
 import type {
 	ContextResult,
+	ContextThread,
 	SearchContextResult,
 	ThreadResult,
 } from "./context.ts";
+import type { FileDownloadResult } from "./file-download.ts";
 import type { PackedPost } from "./packing.ts";
 import type { CommandResult } from "./results.ts";
 import type {
@@ -51,6 +53,9 @@ export function formatHumanResult(result: CommandResult<unknown>): string {
 			break;
 		case "thread":
 			body = formatThread(result.data as ThreadResult);
+			break;
+		case "file":
+			body = formatFile(result.data as FileDownloadResult);
 			break;
 		default:
 			body = JSON.stringify(result.data, null, 2);
@@ -197,14 +202,6 @@ function formatContext(data: ContextResult): string {
 			`max threads ${styles.accent(String(data.budget.maxThreads))}`,
 		]),
 		...data.threads.flatMap((thread) => {
-			const displayedPosts =
-				data.detailLevel === "expanded"
-					? thread.posts
-					: compactThreadPosts(
-							thread.posts,
-							thread.matchingPostIds,
-							thread.threadId,
-						);
 			return [
 				`\n${joinParts([
 					formatConversation(thread.conversationKind, thread.conversationAlias),
@@ -222,13 +219,6 @@ function formatContext(data: ContextResult): string {
 					`omitted ${styles.warning(String(thread.omittedPosts))}`,
 					`attachments ${styles.accent(String(thread.returnedAttachments))} returned/${styles.warning(String(thread.totalOmittedAttachments))} omitted`,
 				]),
-				...(displayedPosts.length < thread.posts.length
-					? [
-							styles.hint(
-								`Compact human view: showing ${displayedPosts.length}/${thread.returnedPosts} returned posts; use --more for expanded rendering or --json for the complete packet.`,
-							),
-						]
-					: []),
 				joinParts([
 					formatField(
 						"Thread budget",
@@ -242,7 +232,7 @@ function formatContext(data: ContextResult): string {
 							`${styles.warning("Unreported omitted attachments:")} ${styles.warning(String(thread.unreportedOmittedAttachments))}`,
 						]
 					: []),
-				...displayedPosts.flatMap(formatPost),
+				...formatTimeline(thread.timeline),
 			];
 		}),
 	].join("\n");
@@ -313,20 +303,24 @@ function formatFilters(filters: {
 		: "";
 }
 
-function compactThreadPosts(
-	posts: readonly PackedPost[],
-	matchingPostIds: readonly string[],
-	threadId: string,
-): PackedPost[] {
-	if (posts.length <= 6) return [...posts];
-	const byId = new Map(posts.map((post) => [post.id, post]));
-	const selected = new Set<string>();
-	if (byId.has(threadId)) selected.add(threadId);
-	for (const id of matchingPostIds.slice(0, 2)) {
-		if (byId.has(id)) selected.add(id);
+function formatTimeline(timeline: ContextThread["timeline"]): string[] {
+	const lines: string[] = [];
+	for (const item of timeline) {
+		if (item.kind === "skip") {
+			lines.push(
+				styles.hint(
+					`… skipped ${item.skip.posts} message(s)${
+						item.skip.after || item.skip.before
+							? ` (${[item.skip.after ? `after ${item.skip.after}` : "", item.skip.before ? `before ${item.skip.before}` : ""].filter(Boolean).join(", ")})`
+							: ""
+					}`,
+				),
+			);
+			continue;
+		}
+		lines.push(...formatPost(item.post));
 	}
-	for (const post of posts.slice(-3)) selected.add(post.id);
-	return posts.filter(({ id }) => selected.has(id));
+	return lines;
 }
 
 function formatThread(data: ThreadResult): string {
@@ -362,8 +356,19 @@ function formatThread(data: ThreadResult): string {
 					`${styles.warning("Unreported omitted attachments:")} ${styles.warning(String(data.thread.unreportedOmittedAttachments))}`,
 				]
 			: []),
-		...data.thread.posts.flatMap(formatPost),
+		...formatTimeline(data.thread.timeline),
 	].join("\n");
+}
+
+function formatFile(data: FileDownloadResult): string {
+	return joinParts([
+		styles.success("Downloaded"),
+		styles.label(data.name),
+		styles.identifier(data.id),
+		styles.hint(data.mimeType),
+		`${styles.accent(String(data.size))} bytes`,
+		styles.link(data.path),
+	]);
 }
 
 function joinParts(parts: string[]): string {

@@ -18,7 +18,7 @@ const ROOT = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 const REPLY = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 describe("agent projection", () => {
-	test("projects context evidence as consecutive author groups", async () => {
+	test("projects context evidence as consecutive author groups with file ids", async () => {
 		const store = await seededStore();
 		const context = await getMattermostContext(
 			{
@@ -48,22 +48,10 @@ describe("agent projection", () => {
 					conversation: "payments",
 					kind: "channel",
 					url: `https://chat.example.test/_redirect/pl/${ROOT}`,
-					why: [
-						"subject_in_root",
-						"exact_phrase",
-						"exact_phrase_in_root",
-						"exact_phrase_in_reply",
-						"all_terms_in_thread",
-						"rank_fusion",
-						"routing_explicit_channel",
-					],
 					omitted: { posts: 0, attachments: 0 },
 					posts: [
 						{
 							author: "alice",
-							displayName: "Alice Example",
-							from: "1970-01-01T00:00:00.010Z",
-							to: "1970-01-01T00:00:00.020Z",
 							messages: [
 								{
 									id: ROOT,
@@ -76,6 +64,7 @@ describe("agent projection", () => {
 									at: "1970-01-01T00:00:00.020Z",
 									files: [
 										{
+											id: "file-1",
 											name: "trace.txt",
 											mimeType: "text/plain",
 											size: 42,
@@ -90,7 +79,7 @@ describe("agent projection", () => {
 			warnings: [],
 		});
 		expect(JSON.stringify(result)).not.toMatch(
-			/"data"|rootId|userId|renderedUnits|scoreVector|matchingPostIds/,
+			/"data"|rootId|userId|renderedUnits|scoreVector|matchingPostIds|displayName|"from"|"to"|"why"/,
 		);
 		store.close();
 	});
@@ -127,8 +116,6 @@ describe("agent projection", () => {
 				posts: [
 					{
 						author: "alice",
-						from: "1970-01-01T00:00:00.010Z",
-						to: "1970-01-01T00:00:00.020Z",
 						messages: [
 							{ id: ROOT, editedAt: "1970-01-01T00:00:00.030Z" },
 							{ id: REPLY, text: "", deleted: true },
@@ -137,11 +124,13 @@ describe("agent projection", () => {
 				],
 			},
 		});
-		expect(JSON.stringify(result)).not.toMatch(/"updateAt"|"deleteAt"/);
+		expect(JSON.stringify(result)).not.toMatch(
+			/"updateAt"|"deleteAt"|"from"|"to"|displayName|"why"/,
+		);
 		store.close();
 	});
 
-	test("projects compact search candidates without detailed freshness evidence", async () => {
+	test("projects compact search candidates without why or detailed freshness evidence", async () => {
 		const store = await seededStore({ stale: true, complete: false });
 		const search = await searchMattermost(
 			{
@@ -169,16 +158,6 @@ describe("agent projection", () => {
 					kind: "channel",
 					url: `https://chat.example.test/_redirect/pl/${ROOT}`,
 					latestAt: "1970-01-01T00:00:00.020Z",
-					why: [
-						"subject_in_root",
-						"exact_phrase",
-						"exact_phrase_in_root",
-						"exact_phrase_in_reply",
-						"all_terms_in_thread",
-						"exact_terms_near",
-						"rank_fusion",
-						"routing_explicit_channel",
-					],
 					excerpts: [
 						"synthetic payment evidence",
 						"payment evidence confirmed",
@@ -187,7 +166,7 @@ describe("agent projection", () => {
 			],
 		});
 		expect(JSON.stringify(result)).not.toMatch(
-			/rootPostId|conversationId|priority|scoreVector|postId|probes|evidenceIssues|"complete"/,
+			/rootPostId|conversationId|priority|scoreVector|postId|probes|evidenceIssues|"complete"|rank_fusion|routing_|"why"/,
 		);
 		store.close();
 	});

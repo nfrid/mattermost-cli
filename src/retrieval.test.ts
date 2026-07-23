@@ -1603,6 +1603,84 @@ describe("routing and ranking", () => {
 		});
 		store.close();
 	});
+
+	test("downranks thin URL/ticket stub threads below substantive discussion", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture("payments", "channel-payments");
+		const leads = {
+			...conversationFixture("leads", "dm-leads"),
+			kind: "direct_message" as const,
+		};
+		const stubRoot = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const discussionRoot = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
+		store.writePage({
+			conversation: leads,
+			posts: [
+				postFixture({
+					id: stubRoot,
+					channel_id: leads.id,
+					message: "https://tracker.example.test/PROJ-2112",
+					create_at: 50,
+				}),
+			],
+		});
+		store.writePage({
+			conversation: payments,
+			posts: [
+				postFixture({
+					id: discussionRoot,
+					channel_id: payments.id,
+					message: "Dark theme experiment kicked off in CRM today",
+					create_at: 10,
+				}),
+				postFixture({
+					id: "cccccccccccccccccccccccccc",
+					root_id: discussionRoot,
+					channel_id: payments.id,
+					message:
+						"We should keep tokens readable and avoid maxing contrast again",
+					create_at: 20,
+				}),
+				postFixture({
+					id: "dddddddddddddddddddddddddd",
+					root_id: discussionRoot,
+					channel_id: payments.id,
+					message:
+						"Tracked as https://tracker.example.test/PROJ-2112 for the rollout",
+					create_at: 30,
+				}),
+				postFixture({
+					id: "eeeeeeeeeeeeeeeeeeeeeeeeee",
+					root_id: discussionRoot,
+					channel_id: payments.id,
+					message: "Looks good enough to ship after another polish pass",
+					create_at: 40,
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject("PROJ-2112");
+		const candidates = searchThreads(
+			store,
+			subject,
+			resolveProbes(subject),
+			routing,
+		);
+		expect(candidates.map(({ threadId }) => threadId)).toEqual([
+			discussionRoot,
+			stubRoot,
+		]);
+		expect(
+			candidates.find(({ threadId }) => threadId === stubRoot)?.reasons,
+		).toContain("thin_thread");
+		store.close();
+	});
 });
 
 function seedConversation(

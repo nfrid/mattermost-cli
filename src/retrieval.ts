@@ -183,6 +183,7 @@ export type RankingReason =
 	| "query_expansion"
 	| "multiple_probes_in_thread"
 	| "substantive_thread_depth"
+	| "thin_thread"
 	| "rank_fusion"
 	| "routing_explicit_channel"
 	| "routing_scope"
@@ -229,6 +230,7 @@ export interface ThreadRankingEvidence {
 	threadPostCount?: number;
 	substantivePostCount?: number;
 	threadDepthScore?: number;
+	thinTicketStub?: boolean;
 	latestRelevantMatchAt: number | null;
 }
 
@@ -1386,6 +1388,8 @@ function candidateFromGroup(
 	if ((rankingEvidence.threadDepthScore ?? 0) > 0) {
 		reasons.push("substantive_thread_depth");
 	}
+	const thinTicketStub = Boolean(rankingEvidence.thinTicketStub);
+	if (thinTicketStub) reasons.push("thin_thread");
 	if (fusionScore) reasons.push("rank_fusion");
 	reasons.push(routeReason(conversation));
 	if (conversation.priority) reasons.push("conversation_priority");
@@ -1408,10 +1412,16 @@ function candidateFromGroup(
 		priority: conversation.priority,
 		scoreVector: scoreVector({
 			explicitTicketRelationship: explicitRelationship ? 1 : 0,
-			ticketInRoot: rootHasTicket ? 1 : 0,
-			ticketInReply: replyHasTicket ? 1 : 0,
-			subjectInRoot: rankingEvidence.subjectInRoot ? 1 : 0,
-			exactPhraseInRoot: rankingEvidence.exactPhraseInRootCount,
+			// Thin URL/ticket stubs keep reply-tier ticket signal so substantive
+			// discussions outrank single-link DMs that only paste the ticket.
+			ticketInRoot: rootHasTicket && !thinTicketStub ? 1 : 0,
+			ticketInReply:
+				replyHasTicket || (rootHasTicket && thinTicketStub) ? 1 : 0,
+			subjectInRoot:
+				rankingEvidence.subjectInRoot && !thinTicketStub ? 1 : 0,
+			exactPhraseInRoot: thinTicketStub
+				? 0
+				: rankingEvidence.exactPhraseInRootCount,
 			proximityTier: proximityTier(rankingEvidence.proximityKind),
 			proximityWindow: proximityWindowRank(rankingEvidence),
 			fullProbeCoverage:
@@ -1421,10 +1431,15 @@ function candidateFromGroup(
 			matchedProbeCount: rankingEvidence.matchedProbeCount,
 			structuredMatchCount: structuredMatches.length,
 			routing: routeWeight(conversation),
-			threadDepth: rankingEvidence.threadDepthScore ?? 0,
+			// Negative depth demotes thin stubs before fusion/recency ties.
+			threadDepth: thinTicketStub
+				? -1
+				: (rankingEvidence.threadDepthScore ?? 0),
 			fusion: fusionScore,
 			matchedTermCount: rankingEvidence.matchedTermCount,
-			exactPhraseInReply: rankingEvidence.exactPhraseInReplyCount,
+			exactPhraseInReply:
+				rankingEvidence.exactPhraseInReplyCount +
+				(thinTicketStub ? rankingEvidence.exactPhraseInRootCount : 0),
 			conversationPriority: conversation.priority,
 			latestRelevantMatchAt: rankingEvidence.latestRelevantMatchAt ?? 0,
 			latestActivityAt,
@@ -1568,6 +1583,8 @@ export function evaluateThreadEvidence(
 		substantivePostCount >= MIN_SUBSTANTIVE_THREAD_POSTS
 			? substantivePostCount
 			: 0;
+	const ticketKey = subject.kind === "ticket" ? subject.ticketKey : undefined;
+	const thinTicketStub = isThinTicketStub(thread, ticketKey);
 	const subjectPhrases =
 		subject.kind === "text"
 			? probes[0]?.phrases.length
@@ -1622,6 +1639,7 @@ export function evaluateThreadEvidence(
 		threadPostCount: thread.length,
 		substantivePostCount,
 		threadDepthScore,
+		thinTicketStub,
 		latestRelevantMatchAt: relevantPosts.length
 			? Math.max(
 					...relevantPosts.map((post) =>
@@ -1643,6 +1661,27 @@ function boundedSubstantivePostCount(
 		if (count === MAX_SUBSTANTIVE_THREAD_DEPTH) break;
 	}
 	return count;
+}
+
+/** Short ticket threads whose residual text is mostly URLs / the ticket key. */
+function isThinTicketStub(
+	thread: readonly Pick<IndexedPost, "message">[],
+	ticketKey?: string,
+): boolean {
+	if (!ticketKey) return false;
+	if (boundedSubstantivePostCount(thread) >= MIN_SUBSTANTIVE_THREAD_POSTS) {
+		return false;
+	}
+	const residualTokens = thread.flatMap(({ message }) => {
+		let cleaned = message.replace(/https?:\/\/\S+/gi, " ");
+		cleaned = cleaned.replace(new RegExp(escapeRegExp(ticketKey), "gi"), " ");
+		return cleaned.match(/[\p{L}\p{N}]+/gu) ?? [];
+	});
+	return residualTokens.length <= 4;
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 interface ProximityToken {

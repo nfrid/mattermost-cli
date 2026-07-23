@@ -7,6 +7,11 @@ import {
 	searchMattermost,
 	type ThreadInput,
 } from "./context.ts";
+import {
+	asFileDownloadClient,
+	downloadMattermostFile,
+	type FileDownloadInput,
+} from "./file-download.ts";
 import { freshenLockPath, withFileLock } from "./lock.ts";
 import {
 	MattermostClient,
@@ -108,6 +113,28 @@ export async function threadCommand(
 	return commandSuccess("thread", data, data.warnings);
 }
 
+export async function fileCommand(
+	config: MattermostConfig,
+	input: FileDownloadInput,
+	dependencies: CommandDependencies = {},
+): Promise<CommandResult<unknown>> {
+	const store = await MattermostStore.open(config.databasePath, {
+		concepts: config.concepts,
+	});
+	try {
+		const data = await downloadMattermostFile(input, {
+			config,
+			store,
+			client: input.local
+				? undefined
+				: asFileDownloadClient(createClient(config, dependencies)),
+		});
+		return commandSuccess("file", data);
+	} finally {
+		store.close();
+	}
+}
+
 export async function syncCommand(
 	config: MattermostConfig,
 	options: Pick<SyncOptions, "aliases" | "full"> = {},
@@ -151,5 +178,8 @@ function createClient(
 	config: MattermostConfig,
 	dependencies: CommandDependencies,
 ): MattermostClient {
-	return new MattermostClient(config, dependencies);
+	return new MattermostClient(config, {
+		fetch: dependencies.fetch,
+		timeoutMs: dependencies.timeoutMs,
+	});
 }

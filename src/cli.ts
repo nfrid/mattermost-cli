@@ -7,6 +7,7 @@ import {
 	channelsCommand,
 	contextCommand,
 	doctorCommand,
+	fileCommand,
 	searchCommand,
 	syncCommand,
 	threadCommand,
@@ -14,6 +15,7 @@ import {
 	whoamiCommand,
 } from "./commands.ts";
 import { type LoadConfigOptions, loadMattermostConfig } from "./config.ts";
+import { DEFAULT_SEARCH_LIMIT } from "./context.ts";
 import { parseCommandResultV1 } from "./contracts.ts";
 import { formatHumanResult } from "./format.ts";
 import {
@@ -54,6 +56,7 @@ interface GlobalOptions {
 interface CommandOptions {
 	subject?: string;
 	target?: string;
+	fileId?: string;
 	ticket?: string;
 	query?: string[];
 	repository?: string[];
@@ -64,14 +67,15 @@ interface CommandOptions {
 	before?: string;
 	hasFile?: boolean;
 	file?: string;
+	out?: string;
 	fresh?: boolean;
 	local?: boolean;
-	more?: boolean;
 	remoteSearch?: boolean;
 	widen?: boolean;
 	full?: boolean;
 	around?: string;
 	includeAutomation?: boolean;
+	limit?: number;
 }
 
 export async function runCli(
@@ -231,7 +235,6 @@ function createProgram(
 				"request bounded Mattermost server-side search fallback",
 			).conflicts("local"),
 		)
-		.option("--more", "use expanded budgets and human rendering")
 		.option("--no-widen", "disable one-time routing fallback")
 		.option(
 			"--include-automation",
@@ -274,6 +277,11 @@ function createProgram(
 		.option("--before <date>", "require a post before this date")
 		.option("--has-file", "require an attachment in the thread")
 		.option("--file <pattern>", "require an attachment filename substring")
+		.option(
+			"--limit <n>",
+			`max ranked candidates to return (default ${DEFAULT_SEARCH_LIMIT})`,
+			(value) => Number(value),
+		)
 		.option("--no-widen", "disable one-time routing fallback")
 		.option(
 			"--include-automation",
@@ -292,7 +300,7 @@ function createProgram(
 		.description("Retrieve one configured Mattermost thread.")
 		.argument("<target>", "post ID or permalink")
 		.option("--local", "perform no network calls")
-		.option("--more", "use the expanded per-thread budget")
+		.option("--fresh", "force a remote thread refresh when possible")
 		.option("--full", "return the complete selected thread")
 		.option("--around <post-id>", "prioritize a neighborhood around one post")
 		.addHelpText("after", GLOBAL_HELP)
@@ -300,6 +308,21 @@ function createProgram(
 			await run("thread", program.opts<GlobalOptions>(), {
 				...thread.opts<CommandOptions>(),
 				target,
+			});
+		});
+
+	const file = program
+		.command("file")
+		.description(
+			"Download one attachment from a configured conversation into a local path.",
+		)
+		.argument("<file-id>", "Mattermost file id from context/thread evidence")
+		.option("--out <path>", "destination path (default: /tmp/mm-<id>-<name>)")
+		.addHelpText("after", GLOBAL_HELP)
+		.action(async (fileId: string) => {
+			await run("file", program.opts<GlobalOptions>(), {
+				...file.opts<CommandOptions>(),
+				fileId,
 			});
 		});
 
@@ -376,7 +399,6 @@ async function executeCommand(
 						file: commandOptions.file,
 						fresh: commandOptions.fresh,
 						local: commandOptions.local,
-						more: commandOptions.more,
 						remoteSearch: commandOptions.remoteSearch,
 						noWiden: commandOptions.widen === false,
 						includeAutomation: commandOptions.includeAutomation,
@@ -398,6 +420,7 @@ async function executeCommand(
 					file: commandOptions.file,
 					noWiden: commandOptions.widen === false,
 					includeAutomation: commandOptions.includeAutomation,
+					limit: commandOptions.limit,
 				});
 			case "thread":
 				if (!commandOptions.target)
@@ -407,9 +430,19 @@ async function executeCommand(
 					{
 						target: commandOptions.target,
 						local: commandOptions.local,
-						more: commandOptions.more,
+						fresh: commandOptions.fresh,
 						full: commandOptions.full,
 						around: commandOptions.around,
+					},
+					dependencies,
+				);
+			case "file":
+				if (!commandOptions.fileId) throw new Error("File id is required.");
+				return await fileCommand(
+					config,
+					{
+						fileId: commandOptions.fileId,
+						out: commandOptions.out,
 					},
 					dependencies,
 				);

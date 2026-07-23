@@ -21,7 +21,7 @@ describe("standalone security boundaries", () => {
 		);
 	});
 
-	test("the Mattermost client exposes read metadata only", () => {
+	test("the Mattermost client exposes named read operations only", () => {
 		const methods = Object.getOwnPropertyNames(MattermostClient.prototype);
 		for (const forbidden of [
 			"request",
@@ -30,12 +30,12 @@ describe("standalone security boundaries", () => {
 			"patch",
 			"delete",
 			"react",
-			"downloadFile",
 			"getFile",
 		]) {
 			expect(methods).not.toContain(forbidden);
 		}
 		expect(methods).toContain("getFileInfo");
+		expect(methods).toContain("downloadFile");
 		expect(methods).toContain("searchTeamPosts");
 	});
 

@@ -6,6 +6,7 @@ import {
 	searchMattermost,
 } from "./context.ts";
 import { formatHumanResult } from "./format.ts";
+import { MattermostApiError } from "./mattermost/client.ts";
 import type {
 	MattermostChannel,
 	MattermostFileInfo,
@@ -53,7 +54,6 @@ describe("context pipeline", () => {
 		expect(result.complete).toBe(false);
 		expect(result.searchCoverageComplete).toBe(false);
 		expect(result.selectedThreadsComplete).toBe(true);
-		expect(result.detailLevel).toBe("compact");
 		expect(result.unmatchedHints.repositories).toEqual(["unknown-service"]);
 		expect(result.warnings.map(({ kind }) => kind)).toEqual(
 			expect.arrayContaining([
@@ -106,6 +106,36 @@ describe("context pipeline", () => {
 				}),
 			]),
 		);
+		store.close();
+	});
+
+	test("limits ranked search candidates to the requested top-N", async () => {
+		const store = await seededStore({ fresh: true });
+		for (let index = 0; index < 12; index += 1) {
+			const rootId = `root${String(index).padStart(22, "0")}`;
+			store.writePage({
+				conversation: conversationFixture("payments", "channel-payments"),
+				posts: [
+					postFixture({
+						id: rootId,
+						channel_id: "channel-payments",
+						message: `payment timeout variant ${index}`,
+						create_at: 100 + index,
+					}),
+				],
+			});
+		}
+		const limited = await searchMattermost(
+			{ subject: "payment timeout", channels: ["payments"], limit: 3 },
+			{ config: configFixture(), store, now: () => 100 },
+		);
+		expect(limited.candidates).toHaveLength(3);
+		const defaults = await searchMattermost(
+			{ subject: "payment timeout", channels: ["payments"] },
+			{ config: configFixture(), store, now: () => 100 },
+		);
+		expect(defaults.candidates.length).toBeLessThanOrEqual(10);
+		expect(defaults.candidates.length).toBeGreaterThanOrEqual(3);
 		store.close();
 	});
 
@@ -356,10 +386,8 @@ describe("context pipeline", () => {
 				defaultMaxCharacters: 10_000,
 				defaultPerThreadCharacters: 500,
 				defaultMaxThreads: 20,
-				moreMaxCharacters: 20_000,
-				morePerThreadCharacters: 1_000,
-				moreMaxThreads: 20,
-				matchNeighborhoodRadius: 8,
+				matchNeighborhoodRadius: 2,
+				clusterMergeGap: 2,
 				conversationSurroundRoots: 5,
 				shortThreadMaxReplies: 2,
 			},
@@ -417,7 +445,29 @@ describe("context pipeline", () => {
 		store.close();
 	});
 
-	test("uses compact default human rendering and expands it with --more", async () => {
+	test("keeps local evidence when forced hydrate fails with Mattermost API error", async () => {
+		const store = await seededStore({ fresh: true });
+		const client = new FakeContextClient();
+		client.getThread = async (postId: string) => {
+			client.threadRequests.push(postId);
+			throw new MattermostApiError(
+				"Mattermost API request failed with 403 Forbidden.",
+				403,
+				"forbidden",
+			);
+		};
+		const result = await getMattermostContext(
+			{ subject: "payment timeout", channels: ["payments"], fresh: true },
+			{ config: configFixture(), store, client, now: () => 100 },
+		);
+		expect(result.threads[0]?.threadId).toBe(ROOT);
+		expect(result.warnings).toContainEqual(
+			expect.objectContaining({ kind: "remote_hydrate_failed" }),
+		);
+		store.close();
+	});
+
+	test("human context rendering includes skip markers for omitted spans", async () => {
 		const store = await seededStore({ fresh: true });
 		store.writePage({
 			conversation: conversationFixture("payments", "channel-payments"),
@@ -431,32 +481,25 @@ describe("context pipeline", () => {
 				}),
 			),
 		});
-		const dependencies = { config: configFixture(), store, now: () => 100 };
-		const compact = await getMattermostContext(
+		const result = await getMattermostContext(
 			{ subject: "payment timeout", channels: ["payments"], local: true },
-			dependencies,
-		);
-		const expanded = await getMattermostContext(
 			{
-				subject: "payment timeout",
-				channels: ["payments"],
-				local: true,
-				more: true,
+				config: configFixture({
+					budgets: {
+						...configFixture().budgets,
+						defaultPerThreadCharacters: 180,
+						defaultMaxCharacters: 180,
+					},
+				}),
+				store,
+				now: () => 100,
 			},
-			dependencies,
 		);
-		const compactText = formatHumanResult(
-			commandSuccess("context", compact, compact.warnings),
+		const text = formatHumanResult(
+			commandSuccess("context", result, result.warnings),
 		);
-		const expandedText = formatHumanResult(
-			commandSuccess("context", expanded, expanded.warnings),
-		);
-
-		expect(compactText).toContain("Compact human view:");
-		expect(compactText).not.toContain("middle discussion 1");
-		expect(compactText).toContain("middle discussion 6");
-		expect(expandedText).not.toContain("Compact human view:");
-		expect(expandedText).toContain("middle discussion 1");
+		expect(result.threads[0]?.omittedPosts ?? 0).toBeGreaterThan(0);
+		expect(text).toMatch(/skipped \d+ message/);
 		store.close();
 	});
 
@@ -802,10 +845,8 @@ describe("context pipeline", () => {
 				defaultMaxCharacters: 140,
 				defaultPerThreadCharacters: 100,
 				defaultMaxThreads: 3,
-				moreMaxCharacters: 280,
-				morePerThreadCharacters: 200,
-				moreMaxThreads: 6,
-				matchNeighborhoodRadius: 8,
+				matchNeighborhoodRadius: 2,
+				clusterMergeGap: 2,
 				conversationSurroundRoots: 5,
 				shortThreadMaxReplies: 2,
 			},
@@ -824,10 +865,10 @@ describe("context pipeline", () => {
 });
 
 describe("thread command API", () => {
-	test("supports around, more, full, and local thread retrieval", async () => {
+	test("supports around, full, and local thread retrieval", async () => {
 		const store = await seededStore();
 		const selected = await getMattermostThread(
-			{ target: REPLY, local: true, around: REPLY, more: true },
+			{ target: REPLY, local: true, around: REPLY },
 			{ config: configFixture(), store },
 		);
 		expect(selected.thread.threadId).toBe(ROOT);
@@ -837,6 +878,118 @@ describe("thread command API", () => {
 			{ config: configFixture(), store },
 		);
 		expect(full.thread.returnedPosts).toBe(full.thread.totalPosts);
+		store.close();
+	});
+
+	test("uses fresh local evidence without forcing remote hydrate", async () => {
+		const store = await seededStore({ fresh: true });
+		const client = new FakeContextClient();
+		client.getThread = async () => {
+			throw new MattermostApiError(
+				"Mattermost API request failed with 403 Forbidden.",
+				403,
+				"forbidden",
+			);
+		};
+		const result = await getMattermostThread(
+			{ target: REPLY },
+			{ config: configFixture(), store, client, now: () => 100 },
+		);
+		expect(result.thread.threadId).toBe(ROOT);
+		expect(result.freshnessMode).toBe("local");
+		expect(result.warnings.map(({ kind }) => kind)).not.toContain(
+			"remote_hydrate_failed",
+		);
+		expect(client.threadRequests).toEqual([]);
+		store.close();
+	});
+
+	test("degrades to local thread evidence when remote hydrate fails", async () => {
+		const store = await seededStore({ fresh: true });
+		const client = new FakeContextClient();
+		client.posts.set(
+			REPLY,
+			postFixture({
+				id: REPLY,
+				root_id: ROOT,
+				channel_id: "channel-payments",
+				message: "payment timeout reply",
+				create_at: 20,
+			}),
+		);
+		client.getThread = async (postId: string) => {
+			client.threadRequests.push(postId);
+			throw new MattermostApiError(
+				"Mattermost API request failed with 403 Forbidden.",
+				403,
+				"forbidden",
+			);
+		};
+		const result = await getMattermostThread(
+			{ target: REPLY, fresh: true },
+			{ config: configFixture(), store, client, now: () => 100 },
+		);
+		expect(result.thread.threadId).toBe(ROOT);
+		expect(result.warnings).toContainEqual(
+			expect.objectContaining({ kind: "remote_hydrate_failed" }),
+		);
+		expect(client.threadRequests).toEqual([ROOT]);
+		store.close();
+	});
+
+	test("remote hydrate keeps already-indexed attachments without refetching file info", async () => {
+		const fileId = "fileabcdefghijklmnopqrstuv";
+		const store = await MattermostStore.open(":memory:");
+		const rootPost = postFixture({
+			id: ROOT,
+			channel_id: "channel-payments",
+			message: "если у нас есть 3 логики",
+			file_ids: [fileId],
+			create_at: 10,
+			update_at: 10,
+		});
+		const knownFile: MattermostFileInfo = {
+			id: fileId,
+			user_id: "user-1",
+			post_id: ROOT,
+			create_at: 10,
+			update_at: 10,
+			delete_at: 0,
+			name: "image.png",
+			extension: "png",
+			size: 42,
+			mime_type: "image/png",
+		};
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			users: [userFixture()],
+			files: [knownFile],
+			posts: [rootPost],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: ROOT,
+				newestPostAt: 10,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 100,
+				coverageComplete: true,
+			},
+		});
+		const client = new FakeContextClient();
+		client.posts.set(ROOT, rootPost);
+		client.thread = list(rootPost);
+		const result = await getMattermostThread(
+			{ target: ROOT, full: true, fresh: true },
+			{ config: configFixture(), store, client, now: () => 100 },
+		);
+		expect(client.threadRequests).toEqual([ROOT]);
+		expect(client.fileInfoRequests).toEqual([]);
+		expect(result.thread.posts[0]?.attachments).toEqual([
+			expect.objectContaining({
+				id: fileId,
+				name: "image.png",
+				mimeType: "image/png",
+			}),
+		]);
 		store.close();
 	});
 });
@@ -927,6 +1080,7 @@ class FakeContextClient implements ContextClient {
 	}> = [];
 	readonly channelRequests: string[] = [];
 	readonly threadRequests: string[] = [];
+	readonly fileInfoRequests: string[] = [];
 	readonly threads = new Map<string, MattermostPostList>();
 	thread: MattermostPostList = list();
 
@@ -963,6 +1117,7 @@ class FakeContextClient implements ContextClient {
 	}
 
 	async getFileInfo(fileId: string): Promise<MattermostFileInfo> {
+		this.fileInfoRequests.push(fileId);
 		return {
 			id: fileId,
 			user_id: "user-1",

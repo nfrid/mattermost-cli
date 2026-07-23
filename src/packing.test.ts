@@ -12,6 +12,7 @@ describe("thread packing", () => {
 		const packed = packThread("p0", posts, {
 			matchingPostIds: ["p2"],
 			neighborhoodRadius: 1,
+			clusterMergeGap: 0,
 			limit: units,
 		});
 		expect(packed.selectionStrategy).toEqual([
@@ -23,6 +24,72 @@ describe("thread packing", () => {
 		expect(packed.posts.map(({ id }) => id)).toEqual(["p0", "p1", "p2", "p3"]);
 		expect(packed.returnedPosts).toBe(4);
 		expect(packed.omittedPosts).toBe(2);
+		expect(packed.timeline).toEqual([
+			{ kind: "post", post: expect.objectContaining({ id: "p0" }) },
+			{ kind: "post", post: expect.objectContaining({ id: "p1" }) },
+			{ kind: "post", post: expect.objectContaining({ id: "p2" }) },
+			{ kind: "post", post: expect.objectContaining({ id: "p3" }) },
+			{ kind: "skip", skip: { posts: 2, after: "p3" } },
+		]);
+	});
+
+	test("emits skip markers between selected clusters and merges tiny gaps", () => {
+		const posts = Array.from({ length: 12 }, (_, index) =>
+			evidence(`p${index}`, index),
+		);
+		const units = (...indexes: number[]) =>
+			indexes.reduce((sum, index) => {
+				const post = posts.at(index);
+				if (!post) throw new Error(`missing post ${index}`);
+				return sum + renderedPostUnits(post);
+			}, 0);
+		const limited = packThread("p0", posts, {
+			matchingPostIds: ["p2", "p9"],
+			neighborhoodRadius: 1,
+			clusterMergeGap: 2,
+			limit: units(0, 1, 2, 3, 8, 9, 10),
+		});
+		expect(limited.posts.map(({ id }) => id)).toEqual([
+			"p0",
+			"p1",
+			"p2",
+			"p3",
+			"p8",
+			"p9",
+			"p10",
+		]);
+		expect(limited.timeline.filter((item) => item.kind === "skip")).toEqual([
+			{ kind: "skip", skip: { posts: 4, after: "p3", before: "p8" } },
+			{ kind: "skip", skip: { posts: 1, after: "p10" } },
+		]);
+
+		const near = packThread("p0", posts, {
+			matchingPostIds: ["p2", "p6"],
+			neighborhoodRadius: 1,
+			clusterMergeGap: 2,
+			limit: units(0, 1, 2, 3, 4, 5, 6, 7),
+		});
+		// windows [p1-p3] and [p5-p7]; gap p4 size 1 → merged before latest fill
+		expect(near.selectionStrategy).toEqual([
+			"root",
+			"matching_posts",
+			"match_neighborhoods",
+			"cluster_merge",
+			"latest_posts",
+		]);
+		expect(near.posts.map(({ id }) => id)).toEqual([
+			"p0",
+			"p1",
+			"p2",
+			"p3",
+			"p4",
+			"p5",
+			"p6",
+			"p7",
+		]);
+		expect(near.timeline.filter((item) => item.kind === "skip")).toEqual([
+			{ kind: "skip", skip: { posts: 4, after: "p7" } },
+		]);
 	});
 
 	test("full returns every message while normal packing omits an oversized message whole", () => {
@@ -49,6 +116,10 @@ describe("thread packing", () => {
 		expect(selected.omittedAttachments).toEqual([]);
 		expect(selected.unreportedOmittedAttachments).toBe(1);
 		expect(selected.budget.used).toBe(renderedPostUnits(root));
+		expect(selected.timeline).toEqual([
+			{ kind: "post", post: expect.objectContaining({ id: "root" }) },
+			{ kind: "skip", skip: { posts: 1, after: "root" } },
+		]);
 
 		const full = packThread("root", [root, oversized], {
 			limit: 1,
@@ -56,6 +127,7 @@ describe("thread packing", () => {
 		});
 		expect(full.returnedPosts).toBe(2);
 		expect(full.omittedPosts).toBe(0);
+		expect(full.timeline.every((item) => item.kind === "post")).toBe(true);
 	});
 
 	test("bounds omitted attachment metadata and reports unrepresented counts", () => {

@@ -264,7 +264,6 @@ describe("CLI output", () => {
 				explicitChannelPolicy: "restrict",
 				searchCoverageComplete: false,
 				selectedThreadsComplete: true,
-				detailLevel: "compact",
 				threads: [
 					{
 						threadId: rootId,

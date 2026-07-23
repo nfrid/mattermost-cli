@@ -5,8 +5,10 @@ export {
 	type AgentMessage,
 	type AgentMessageGroup,
 	type AgentOmission,
+	type AgentSkip,
 	type AgentStatus,
 	type AgentThread,
+	type AgentTimelineItem,
 	projectAgentResult,
 } from "./agent.ts";
 export {
@@ -49,7 +51,9 @@ export {
 	contextResultV1Schema,
 	type DoctorResultV1,
 	doctorResultV1Schema,
+	type FileCommandResultV1,
 	failureResultV1Schema,
+	fileResultV1Schema,
 	parseCommandResultV1,
 	type SearchCommandResultV1,
 	type SyncCommandResultV1,
@@ -87,11 +91,14 @@ export type {
 	MattermostUser,
 } from "./mattermost/schemas.ts";
 export {
+	buildTimeline,
 	type EvidenceAttachment,
 	type EvidencePost,
 	type PackedPost,
 	type PackedThread,
+	type PackSkip,
 	type PackThreadOptions,
+	type PackTimelineItem,
 	packThread,
 	renderedAttachmentUnits,
 	renderedPostUnits,

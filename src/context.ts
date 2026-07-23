@@ -1,17 +1,15 @@
 import { mapWithConcurrency } from "./concurrency.ts";
 import type { MattermostConfig } from "./config.ts";
 import { loadMattermostConfig } from "./config.ts";
-import { ConfigError } from "./errors.ts";
+import { AppError, ConfigError } from "./errors.ts";
 import { freshenLockPath, withFileLock } from "./lock.ts";
-import { MattermostClient } from "./mattermost/client.ts";
+import { MattermostApiError, MattermostClient } from "./mattermost/client.ts";
 import type {
-	MattermostFileInfo,
 	MattermostPost,
 	MattermostPostList,
 	MattermostUser,
 } from "./mattermost/schemas.ts";
 import {
-	type EvidenceAttachment,
 	type EvidencePost,
 	type PackedThread,
 	packThread,
@@ -55,6 +53,7 @@ import {
 } from "./storage.ts";
 import {
 	inspectFreshness,
+	ReconciliationError,
 	type SyncClient,
 	syncConfiguredConversations,
 } from "./sync.ts";
@@ -65,6 +64,8 @@ const MAX_REMOTE_POSTS_PER_PROBE = 20;
 const MAX_REMOTE_CANDIDATE_THREADS = 12;
 /** Soft cap on conversations refreshed in one context call (unless --fresh). */
 const MAX_CONTEXT_FRESHEN_CONVERSATIONS = 8;
+/** Default top-N for local `search` after ranking. */
+export const DEFAULT_SEARCH_LIMIT = 10;
 
 export interface SearchFilterInput {
 	from?: string;
@@ -92,7 +93,6 @@ export interface ContextInput extends SearchFilterInput {
 	channels?: readonly string[];
 	fresh?: boolean;
 	local?: boolean;
-	more?: boolean;
 	noWiden?: boolean;
 	remoteSearch?: boolean;
 	includeAutomation?: boolean;
@@ -115,12 +115,15 @@ export interface SearchInput
 		| "before"
 		| "hasFile"
 		| "file"
-	> {}
+	> {
+	/** Max ranked candidates to return (default {@link DEFAULT_SEARCH_LIMIT}). */
+	limit?: number;
+}
 
 export interface ThreadInput {
 	target: string;
 	local?: boolean;
-	more?: boolean;
+	fresh?: boolean;
 	full?: boolean;
 	around?: string;
 }
@@ -184,7 +187,6 @@ export interface ContextResult {
 	complete: boolean;
 	searchCoverageComplete: boolean;
 	selectedThreadsComplete: boolean;
-	detailLevel: "compact" | "expanded";
 	freshness: FreshnessEvidence[];
 	unmatchedHints: RoutingResult["unmatchedHints"];
 	searchedConversations: Array<{
@@ -314,6 +316,10 @@ export async function getMattermostContext(
 				store,
 				client,
 				new Set(all.map(({ id }) => id)),
+				{
+					preferLocal: !input.fresh,
+					warnings: freshenWarnings,
+				},
 			);
 			const conversation = all.find(({ id }) => id === direct.conversationId);
 			if (!conversation) {
@@ -436,17 +442,11 @@ export async function getMattermostContext(
 			});
 		}
 
-		const budgets = input.more
-			? {
-					maxCharacters: config.budgets.moreMaxCharacters,
-					perThreadCharacters: config.budgets.morePerThreadCharacters,
-					maxThreads: config.budgets.moreMaxThreads,
-				}
-			: {
-					maxCharacters: config.budgets.defaultMaxCharacters,
-					perThreadCharacters: config.budgets.defaultPerThreadCharacters,
-					maxThreads: config.budgets.defaultMaxThreads,
-				};
+		const budgets = {
+			maxCharacters: config.budgets.defaultMaxCharacters,
+			perThreadCharacters: config.budgets.defaultPerThreadCharacters,
+			maxThreads: config.budgets.defaultMaxThreads,
+		};
 		let remaining = budgets.maxCharacters;
 		const threads: ContextThread[] = [];
 		const matchedProbeValues = new Set<string>();
@@ -471,6 +471,7 @@ export async function getMattermostContext(
 							!initiallyFreshIds.has(candidate.conversationId),
 						freshnessSeconds: config.freshnessSeconds,
 						now: observedAt,
+						warnings: freshenWarnings,
 					},
 				);
 				for (const value of matchingProbeValues(evidence, probes)) {
@@ -505,6 +506,7 @@ export async function getMattermostContext(
 				const packed = packThread(candidate.threadId, evidence, {
 					matchingPostIds: currentMatchingPostIds,
 					neighborhoodRadius: config.budgets.matchNeighborhoodRadius,
+					clusterMergeGap: config.budgets.clusterMergeGap,
 					limit: Math.min(budgets.perThreadCharacters, remaining),
 				});
 				remaining -= packed.budget.used;
@@ -670,7 +672,6 @@ export async function getMattermostContext(
 			complete: searchCoverageComplete,
 			searchCoverageComplete,
 			selectedThreadsComplete,
-			detailLevel: input.more ? "expanded" : "compact",
 			freshness,
 			unmatchedHints: routing.unmatchedHints,
 			searchedConversations: searchedConversations.map((conversation) => ({
@@ -825,12 +826,16 @@ export async function searchMattermost(
 		const searchCoverageComplete =
 			!searchIncomplete.value &&
 			freshness.every((item) => item.coverageComplete && !item.stale);
+		const requestedLimit = input.limit ?? DEFAULT_SEARCH_LIMIT;
+		const limit = Number.isFinite(requestedLimit)
+			? Math.max(1, Math.floor(requestedLimit))
+			: DEFAULT_SEARCH_LIMIT;
 		return {
 			subject,
 			probes,
 			filters: resolvedFilters.output,
 			routing,
-			candidates: candidates.map((candidate) => ({
+			candidates: candidates.slice(0, limit).map((candidate) => ({
 				...candidate,
 				link: postLink(config, candidate.rootPostId),
 			})),
@@ -866,11 +871,17 @@ export async function getMattermostThread(
 			? undefined
 			: (providedClient ?? new MattermostClient(config));
 		const all = resolveContextConversations(config, store);
+		const warnings: Warning[] = [];
+		const observedAt = dependencies.now?.() ?? Date.now();
 		const target = await resolveDirectTarget(
 			subject.postId,
 			store,
 			client,
 			new Set(all.map(({ id }) => id)),
+			{
+				preferLocal: !input.fresh,
+				warnings,
+			},
 		);
 		const conversation = all.find(({ id }) => id === target.conversationId);
 		if (!conversation) {
@@ -879,6 +890,14 @@ export async function getMattermostThread(
 				"conversation_not_allowed",
 			);
 		}
+		const initiallyFresh = !inspectFreshness(
+			config,
+			store,
+			[conversation],
+			observedAt,
+		).some(({ stale }) => stale);
+		const usedRemote =
+			Boolean(client) && (Boolean(input.fresh) || !initiallyFresh);
 		const evidence = await hydrateThread(
 			target.rootId || target.id,
 			conversation,
@@ -886,23 +905,20 @@ export async function getMattermostThread(
 			client,
 			target.id,
 			{
-				forceRemote: Boolean(!input.local),
+				forceRemote: Boolean(input.fresh) || !initiallyFresh,
 				freshnessSeconds: config.freshnessSeconds,
-				now: dependencies.now?.() ?? Date.now(),
+				now: observedAt,
+				warnings,
 			},
 		);
-		const limit = input.more
-			? config.budgets.morePerThreadCharacters
-			: config.budgets.defaultPerThreadCharacters;
 		const packed = packThread(target.rootId || target.id, evidence, {
 			matchingPostIds: [target.id],
 			aroundPostId: input.around,
 			neighborhoodRadius: config.budgets.matchNeighborhoodRadius,
-			limit,
+			clusterMergeGap: config.budgets.clusterMergeGap,
+			limit: config.budgets.defaultPerThreadCharacters,
 			full: input.full,
 		});
-		const warnings: Warning[] = [];
-		const observedAt = dependencies.now?.() ?? Date.now();
 		const localFreshness = freshnessEvidence(
 			config,
 			store,
@@ -915,22 +931,28 @@ export async function getMattermostThread(
 				"routing_failed",
 			);
 		}
-		const freshness = input.local
-			? localFreshness
-			: {
-					...localFreshness,
-					observedAt,
-					ageSeconds: 0,
-					stale: false,
-					coverageComplete: true,
-				};
-		if (input.local && freshness.stale) {
+		const degradedToLocal = warnings.some(
+			({ kind }) =>
+				kind === "remote_hydrate_failed" || kind === "remote_resolve_failed",
+		);
+		const freshness =
+			input.local || !usedRemote || degradedToLocal
+				? localFreshness
+				: {
+						...localFreshness,
+						observedAt,
+						ageSeconds: 0,
+						stale: false,
+						coverageComplete: true,
+					};
+		const stayedLocal = input.local || !usedRemote || degradedToLocal;
+		if (stayedLocal && freshness.stale) {
 			warnings.push({
 				kind: "stale_local_index",
 				message: "Local thread evidence is stale.",
 			});
 		}
-		if (input.local && !freshness.coverageComplete) {
+		if (stayedLocal && !freshness.coverageComplete) {
 			warnings.push({
 				kind: "incomplete_history",
 				message: "Local thread evidence comes from cutoff-bounded history.",
@@ -938,9 +960,10 @@ export async function getMattermostThread(
 		}
 		return {
 			subject,
-			freshnessMode: input.local ? "local" : "network",
-			complete:
-				!input.local || (!freshness.stale && freshness.coverageComplete),
+			freshnessMode: stayedLocal ? "local" : "network",
+			complete: stayedLocal
+				? !freshness.stale && freshness.coverageComplete
+				: true,
 			freshness,
 			conversation: {
 				id: conversation.id,
@@ -1073,7 +1096,19 @@ async function freshen(
 	if (!aliases.length) return;
 
 	const run = async () => {
-		await syncConfiguredConversations(config, client, store, { aliases });
+		try {
+			await syncConfiguredConversations(config, client, store, { aliases });
+		} catch (error) {
+			if (isRecoverableRemoteError(error)) {
+				warnings.push({
+					kind: "remote_freshen_failed",
+					message:
+						"Network reconciliation failed; continuing with local evidence.",
+				});
+				return;
+			}
+			throw error;
+		}
 	};
 	const lockPath = freshenLockPath(config.databasePath);
 	if (!lockPath) {
@@ -1180,13 +1215,12 @@ async function resolveDirectTarget(
 	store: MattermostStore,
 	client?: ContextClient,
 	allowedConversationIds?: ReadonlySet<string>,
+	options: {
+		preferLocal?: boolean;
+		warnings?: Warning[];
+	} = {},
 ): Promise<IndexedPost> {
 	const local = store.getPost(postId);
-	if (!client) {
-		if (!local)
-			throw new ConfigError(`Post ${postId} is not indexed.`, "post_not_found");
-		return local;
-	}
 	if (
 		local &&
 		allowedConversationIds &&
@@ -1197,7 +1231,26 @@ async function resolveDirectTarget(
 			"conversation_not_allowed",
 		);
 	}
-	return indexedPost(await client.getPost(postId));
+	if (!client) {
+		if (!local)
+			throw new ConfigError(`Post ${postId} is not indexed.`, "post_not_found");
+		return local;
+	}
+	if (options.preferLocal && local) return local;
+
+	try {
+		return indexedPost(await client.getPost(postId));
+	} catch (error) {
+		if (isRecoverableRemoteError(error) && local) {
+			options.warnings?.push({
+				kind: "remote_resolve_failed",
+				message:
+					"Mattermost post fetch failed; using the locally indexed post.",
+			});
+			return local;
+		}
+		throw error;
+	}
 }
 
 async function hydrateThread(
@@ -1210,6 +1263,7 @@ async function hydrateThread(
 		forceRemote?: boolean;
 		freshnessSeconds?: number;
 		now?: number;
+		warnings?: Warning[];
 	} = {},
 ): Promise<EvidencePost[]> {
 	const localPosts = store.getThread(rootPostId);
@@ -1259,32 +1313,56 @@ async function hydrateThread(
 		return localEvidence(store, localPosts);
 	}
 
-	const response = await client.getThread(rootPostId);
-	const posts = response.order
-		.map((id) => response.posts[id])
-		.filter((post): post is MattermostPost => post !== undefined);
-	assertThreadBoundary(
-		posts.map((post) => ({
-			id: post.id,
-			rootId: post.root_id,
-			conversationId: post.channel_id,
-		})),
-		conversation.id,
-		rootPostId,
-		requiredPostId,
-	);
-	const userIds = [...new Set(posts.map(({ user_id }) => user_id))];
-	const fileIds = [...new Set(posts.flatMap(({ file_ids }) => file_ids))];
-	const knownFiles = new Set(
-		store.getFilesForPosts(posts.map(({ id }) => id)).map(({ id }) => id),
-	);
-	const missingFileIds = fileIds.filter((fileId) => !knownFiles.has(fileId));
-	const [users, files] = await Promise.all([
-		client.getUsersByIds(userIds),
-		mapWithConcurrency(missingFileIds, (fileId) => client.getFileInfo(fileId)),
-	]);
-	store.writePage({ conversation, posts, users, files });
-	return remoteEvidence(posts, users, files);
+	try {
+		const response = await client.getThread(rootPostId);
+		const posts = response.order
+			.map((id) => response.posts[id])
+			.filter((post): post is MattermostPost => post !== undefined);
+		assertThreadBoundary(
+			posts.map((post) => ({
+				id: post.id,
+				rootId: post.root_id,
+				conversationId: post.channel_id,
+			})),
+			conversation.id,
+			rootPostId,
+			requiredPostId,
+		);
+		const userIds = [...new Set(posts.map(({ user_id }) => user_id))];
+		const fileIds = [...new Set(posts.flatMap(({ file_ids }) => file_ids))];
+		const knownFiles = new Set(
+			store.getFilesForPosts(posts.map(({ id }) => id)).map(({ id }) => id),
+		);
+		const missingFileIds = fileIds.filter((fileId) => !knownFiles.has(fileId));
+		const [users, files] = await Promise.all([
+			client.getUsersByIds(userIds),
+			mapWithConcurrency(missingFileIds, (fileId) =>
+				client.getFileInfo(fileId),
+			),
+		]);
+		store.writePage({ conversation, posts, users, files });
+		// Index is the source of truth so known files skipped by missingFileIds stay in evidence.
+		return localEvidence(store, store.getThread(rootPostId));
+	} catch (error) {
+		if (isRecoverableRemoteError(error) && localUsable) {
+			options.warnings?.push({
+				kind: "remote_hydrate_failed",
+				message:
+					"Mattermost thread fetch failed; using locally indexed thread evidence.",
+			});
+			return localEvidence(store, localPosts);
+		}
+		throw error;
+	}
+}
+
+function isRecoverableRemoteError(error: unknown): boolean {
+	if (error instanceof MattermostApiError) return true;
+	if (error instanceof ReconciliationError) return true;
+	if (error instanceof AppError) {
+		return error.source === "mattermost" || error.source === "sync";
+	}
+	return false;
 }
 
 function resolveConversationSurround(
@@ -1352,31 +1430,6 @@ function localEvidence(
 	);
 	const files = store.getFilesForPosts(posts.map(({ id }) => id));
 	return posts.map((post) => evidencePost(post, users.get(post.userId), files));
-}
-
-function remoteEvidence(
-	posts: readonly MattermostPost[],
-	users: readonly MattermostUser[],
-	files: readonly MattermostFileInfo[],
-): EvidencePost[] {
-	const userMap = new Map(users.map((user) => [user.id, user]));
-	return posts.map((post) => {
-		const user = userMap.get(post.user_id);
-		return {
-			id: post.id,
-			rootId: post.root_id,
-			userId: post.user_id,
-			authorUsername: user?.username ?? `unknown:${post.user_id}`,
-			authorDisplayName: displayName(user),
-			createAt: post.create_at,
-			updateAt: post.update_at,
-			deleteAt: post.delete_at,
-			message: post.delete_at ? "" : post.message,
-			attachments: files
-				.filter((file) => file.post_id === post.id)
-				.map(remoteAttachment),
-		};
-	});
 }
 
 function evidencePost(
@@ -1493,6 +1546,10 @@ function reevaluateCandidate(
 	if (rankingEvidence.matchedProbeCount > 1) {
 		reasons.push("multiple_probes_in_thread");
 	}
+	if ((rankingEvidence.threadDepthScore ?? 0) > 0) {
+		reasons.push("substantive_thread_depth");
+	}
+	if (rankingEvidence.thinTicketStub) reasons.push("thin_thread");
 	if (candidate.fusionScore) reasons.push("rank_fusion");
 	const routingReason = candidate.reasons.find((reason) =>
 		reason.startsWith("routing_"),
@@ -1734,15 +1791,6 @@ function containsExactText(message: string, value: string): boolean {
 	return containsNormalizedExactText(message, value);
 }
 
-function displayName(user: MattermostUser | undefined): string {
-	if (!user) return "Unknown user";
-	return (
-		[user.first_name, user.last_name].filter(Boolean).join(" ") ||
-		user.nickname ||
-		user.username
-	);
-}
-
 function localDisplayName(user: IndexedUser | undefined): string {
 	if (!user) return "Unknown user";
 	return (
@@ -1750,18 +1798,6 @@ function localDisplayName(user: IndexedUser | undefined): string {
 		user.nickname ||
 		user.username
 	);
-}
-
-function remoteAttachment(file: MattermostFileInfo): EvidenceAttachment {
-	return {
-		id: file.id,
-		postId: file.post_id,
-		name: file.name,
-		extension: file.extension,
-		size: file.size,
-		mimeType: file.mime_type,
-		deleteAt: file.delete_at,
-	};
 }
 
 function postLink(config: MattermostConfig, postId: string): string {

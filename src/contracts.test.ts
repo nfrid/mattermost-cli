@@ -31,9 +31,10 @@ describe("schema version 1 command contracts", () => {
 			"search",
 			"context",
 			"thread",
+			"file",
 			"context",
 		]);
-		expect(parsed.filter(({ success }) => success)).toHaveLength(8);
+		expect(parsed.filter(({ success }) => success)).toHaveLength(9);
 		expect(parsed.filter(({ success }) => !success)).toHaveLength(1);
 	});
 

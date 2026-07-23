@@ -4,7 +4,7 @@ Standalone, read-only Mattermost retrieval and indexing. V1 provides authenticat
 
 ## Security model
 
-The HTTP client exposes named read operations only: bounded `GET` requests and one bounded Mattermost post-search `POST`. It cannot post messages, edit, react, delete, or download attachment contents, and it does not export a generic HTTP helper. Explicitly configured channels and DMs are enforced again at sync, local-search, routing, and thread-hydration boundaries.
+The HTTP client exposes named read operations only: bounded `GET` requests, one bounded Mattermost post-search `POST`, and an explicit attachment download used by `mm file`. It cannot post messages, edit, react, or delete, and it does not export a generic HTTP helper. Explicitly configured channels and DMs are enforced again at sync, local-search, routing, thread-hydration, and file-download boundaries.
 
 Mattermost PATs inherit the permissions of their user; they do not provide fine-grained scopes. Create a PAT under the Mattermost profile security settings only if PATs are enabled, use the least-privileged suitable account, and configure only conversations this tool needs. Never put a PAT in command arguments, committed files, logs, or issue text.
 
@@ -51,7 +51,8 @@ Edit `.mattermost/config.json`. Channels and direct messages are separate allowl
   },
   "suppressAuthors": ["legacy-integration"],
   "budgets": {
-    "matchNeighborhoodRadius": 8,
+    "matchNeighborhoodRadius": 2,
+    "clusterMergeGap": 2,
     "conversationSurroundRoots": 5,
     "shortThreadMaxReplies": 2
   },
@@ -120,17 +121,18 @@ bun run src/bin.ts context PROJ-123
 bun run src/bin.ts context --query 'deployment timeout' --repository example-service
 bun run src/bin.ts context 'incident' --channel engineering --fresh
 bun run src/bin.ts context 'incident' --local --no-widen
-bun run src/bin.ts context 'incident' --more
 bun run src/bin.ts context PROJ-123 --include-automation
-bun run src/bin.ts thread <post-id-or-permalink> --more
+bun run src/bin.ts thread <post-id-or-permalink>
 bun run src/bin.ts thread <post-id-or-permalink> --full
+bun run src/bin.ts file <file-id>
+bun run src/bin.ts file <file-id> --out /tmp/evidence.png
 ```
 
 Repeated `--query`, `--repository`, `--scope`, and `--channel` options are supported. Queries are independent ranking/retrieval signals, not mandatory filters: a ticket relationship or other stronger evidence can still select a candidate with no textual query match, and the result emits an `unmatched_retrieval_probe` warning when that happens. Unknown repository or scope metadata hints emit `unmapped_routing_hint` rather than being ignored silently. Package callers can additionally pass typed `probes` for ticket titles/descriptions, repositories, file paths, symbols, errors, services, and participants; probe kinds are retained in match, structured-match, fusion, and remote-search diagnostics.
 
 Unreplied bot or automation roots (Mattermost `is_bot`, post `from_bot`/`from_webhook` props, or usernames listed in `suppressAuthors`) are omitted from `context`/`search` unless `--include-automation` is set. Bot roots that already have human replies remain eligible.
 
-For short direct-message threads, `context` may attach prior root posts from the same DM as `surround` so a late ticket link still carries the preceding problem discussion. Intra-thread packing expands a match neighborhood (default radius 8) while still preferring latest posts after the immediate ±1 ring.
+For short direct-message threads, `context` may attach prior root posts from the same DM as `surround` so a late ticket link still carries the preceding problem discussion. Bounded packing keeps the root, matching posts, a tight match neighborhood (default radius 2), and a latest-post fill, then merges clusters separated by at most `clusterMergeGap` posts. Returned packets include an explicit chronological `timeline` with skip markers for omitted spans so consumers can see where evidence was dropped.
 
 Local search uses a soft wall-clock deadline and may emit `search_deadline` with partial evidence. Concurrent freshen/sync processes take a database-adjacent lockfile; a waiter that cannot acquire it emits `freshen_lock_busy` and continues with local evidence. SQLite opens with `busy_timeout` and WAL `synchronous=NORMAL`. Context freshen is targeted (ticket-related / matched / capped stale set) rather than refreshing the entire allowlist on every call.
 
@@ -160,14 +162,17 @@ Explicit `--channel` aliases are a hard V1 allowlist: sync, local search, wideni
 - Conversation identity for retrieval comes from configured channel/DM IDs (and the local index); Mattermost is not asked to resolve every allowlisted conversation on each `context` call. Sync/freshen still validates identities for the conversations it actually refreshes.
 - When routed local coverage remains stale or cutoff-bounded, `context` may use Mattermost’s bounded native post search after local retrieval; `--remote-search` requests it explicitly.
 - Remote search uses only the named read-only team post-search operation—no generic HTTP helper is exposed. It runs at most four independent probes, accepts at most 20 posts per probe and 12 thread roots, rejects posts outside the currently routed configured conversations before hydration, and reports failures without discarding usable local evidence.
-- `--fresh` forces routed reconciliation.
+- When Mattermost post/thread fetch or freshen/sync fails with an API/network error but usable local evidence already exists, `context` and `thread` continue with that local evidence and emit `remote_resolve_failed`, `remote_hydrate_failed`, or `remote_freshen_failed` warnings instead of aborting the whole command.
+- `--fresh` forces routed reconciliation / remote thread refresh when possible.
 - `--local` performs zero network calls and conflicts with `--remote-search`.
-- `search` is always local discovery, includes a permalink per candidate, and reports search coverage; use `context` before relying on a result.
-- Default human `context` output shows a compact root/match/latest view while JSON retains the complete bounded packet.
-- `--more` increases bounded packet limits and expands human rendering.
+- `search` is always local discovery, includes a permalink per candidate, defaults to the top 10 ranked candidates (`--limit <n>` overrides), and reports search coverage; use `context` before relying on a result.
+- Short URL/ticket-stub threads are retained but downranked below substantive discussion with the same ticket (`thin_thread` in `--json` reasons).
+- Default `context` / `thread` output is a dense bounded packet with chronological skip markers for omitted spans.
+- `thread` follows the same freshness policy as `context`: fresh local threads stay local unless `--fresh` forces a remote refresh.
 - Only the deliberately selected `thread --full` returns an unbudgeted complete thread.
+- `file <file-id>` downloads one attachment from a configured conversation to `/tmp/mm-<id>-<name>` (or `--out <path>`). Contents are never downloaded automatically during context/sync.
 
-Messages are never split or silently truncated. Packing omits whole messages and reports global/per-thread budget use, returned/omitted post counts, and returned/omitted/unreported attachment metadata counts. Attachment contents are never downloaded automatically.
+Messages are never split or silently truncated. Packing omits whole messages, inserts skip markers in the timeline, and reports global/per-thread budget use, returned/omitted post counts, and returned/omitted/unreported attachment metadata counts. Attachment contents are never downloaded automatically; use `mm file <id>` for an explicit, allowlisted download.
 
 Historical chat is evidence, not automatically current product truth. Reconcile it with the issue tracker, code, documentation, and newer authoritative sources.
 
@@ -187,7 +192,7 @@ Add `--json` to emit exactly one minified JSON document on stdout. Use `--pretty
 
 Failures replace `data` with a stable error containing `source`, `kind`, and `message`. Retrieval contracts include freshness mode/timestamps, `searchCoverageComplete`, `selectedThreadsComplete` for context packets, searched conversations and routing evidence (including unmatched hints), explicit-channel/widening state, deterministic ranking reasons/order, candidate permalinks, budgets, and omission counts. Context packets also expose whether bounded remote search was requested or performed, its trigger, per-probe accepted counts, failures, and `remote_search` selection reasons. The legacy `complete` field remains an alias for search coverage in V1.
 
-Use `--agent` for a minified agent-oriented projection of the same validated result. It flattens successful command data into the top-level envelope and, for `context`, `search`, and `thread`, replaces retrieval internals with a normalized subject, completeness status, semantic selection reasons, ISO timestamps, consecutive same-author message groups (`posts[].messages[]` with stable post ids), optional DM `surround` groups, permalinks, and omission counts. Agents should parse `--agent` JSON rather than treating it as prose. Detailed per-conversation freshness evidence remains available in `--json`; `--agent` retains only aggregate completeness status and relevant warnings. Warnings appear only once at the top level. `--agent` conflicts with `--json` and `--pretty`.
+Use `--agent` for a minified agent-oriented projection of the same validated result. It flattens successful command data into the top-level envelope and, for `context`, `search`, and `thread`, replaces retrieval internals with a normalized subject, completeness status (`status.threadsComplete` means packing has no omitted posts/attachments), ISO message timestamps (`messages[].at` / `editedAt`), consecutive same-author message groups interleaved with `{ "skip": { "posts", "after?", "before?" } }` markers, permalinks, omission counts, and attachment `files[].id` / `name` (plus `mimeType` / `size` when known). Optional DM `surround` groups remain available. Ranking `why` reasons stay in `--json` only; agent ranking order encodes strength. Agents should parse `--agent` JSON rather than treating it as prose. Detailed per-conversation freshness evidence remains available in `--json`; `--agent` retains only aggregate completeness status and relevant warnings. Warnings appear only once at the top level. `--agent` conflicts with `--json` and `--pretty`.
 
 Zod schemas and inferred TypeScript types for every command are exported from the package, including `commandResultV1Schema`, command-specific `*ResultV1Schema` values, and `parseCommandResultV1`. Complete synthetic V1 golden documents live in `src/contracts.v1.fixture.json`.
 
@@ -249,8 +254,8 @@ A failed sync or migration does not advance a successful freshness checkpoint. T
 
 1. Run `doctor` when local health or credentials are uncertain.
 2. Prefer one constrained `context` call with ticket/repository/scope/channel hints.
-3. Read freshness, completeness, routing, budget, and omission metadata.
-4. Use `thread --more` or `thread --full` only for a selected thread.
+3. Read freshness, completeness, skip markers, budget, and omission metadata.
+4. Use `thread --full` only for a selected incomplete thread; use `file <id>` for attachments of interest.
 5. Treat chat as historical evidence and reconcile it with the issue tracker, code, and newer sources.
 
 The CLI is fully functional without a daemon. WebSockets and operating-system credential-store integration are possible future enhancements.

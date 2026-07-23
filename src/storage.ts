@@ -762,6 +762,30 @@ WHERE pf.post_id IN (${placeholders}) ORDER BY f.post_id, f.id`)
 			}));
 	}
 
+	getFileById(
+		fileId: string,
+	): (IndexedFile & { conversationId: string }) | null {
+		const row = this.database
+			.query<Record<string, unknown>, [string]>(`
+SELECT f.*, p.conversation_id AS conversation_id
+FROM files f
+JOIN posts p ON p.id = f.post_id
+WHERE f.id = ?
+LIMIT 1`)
+			.get(fileId);
+		if (!row) return null;
+		return {
+			id: String(row.id),
+			postId: String(row.post_id),
+			name: String(row.name),
+			extension: String(row.extension),
+			size: Number(row.size),
+			mimeType: String(row.mime_type),
+			deleteAt: Number(row.delete_at),
+			conversationId: String(row.conversation_id),
+		};
+	}
+
 	getTicketRelationships(ticketKey?: string): TicketThreadRelationship[] {
 		const rows = ticketKey
 			? this.database
