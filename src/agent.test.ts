@@ -42,12 +42,25 @@ describe("agent projection", () => {
 				searchComplete: true,
 				threadsComplete: true,
 			},
+			coverage: expect.objectContaining({
+				trust: "high",
+				search: expect.objectContaining({
+					complete: true,
+					conversationsSearched: 1,
+					conversationsWithHits: 1,
+				}),
+				packing: expect.objectContaining({
+					threadsComplete: true,
+					omittedPosts: 0,
+				}),
+			}),
 			threads: [
 				{
 					threadId: ROOT,
 					conversation: "payments",
 					kind: "channel",
 					url: `https://chat.example.test/_redirect/pl/${ROOT}`,
+					role: "primary",
 					omitted: { posts: 0, attachments: 0 },
 					posts: [
 						{
@@ -214,15 +227,27 @@ describe("agent projection", () => {
 		expect(result).toMatchObject({
 			command: "context",
 			subject: "TECHSUPP-109",
-			relatedTickets: ["BTBOLD-238"],
+			coverage: expect.objectContaining({
+				trust: expect.stringMatching(/partial|low/),
+				packing: expect.objectContaining({
+					recommendFullThreadIds: expect.arrayContaining([longRoot]),
+				}),
+			}),
+			relatedTickets: [
+				expect.objectContaining({
+					key: "BTBOLD-238",
+					hydrated: false,
+				}),
+			],
 		});
 		const thread = (
-			result as {
+			result as unknown as {
 				threads: Array<{
 					recommendFull?: boolean;
 					largestSkip?: number;
 					omittedRatio?: number;
 					omitted: { posts: number };
+					ticketDensity?: number;
 				}>;
 			}
 		).threads[0];
@@ -230,6 +255,7 @@ describe("agent projection", () => {
 		expect(thread?.recommendFull).toBe(true);
 		expect(thread?.largestSkip).toBeGreaterThanOrEqual(5);
 		expect(thread?.omittedRatio).toBeGreaterThan(0);
+		expect(thread?.ticketDensity).toBeGreaterThanOrEqual(0);
 		store.close();
 	});
 });

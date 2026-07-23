@@ -200,6 +200,113 @@ describe("thread packing", () => {
 		const emoji = evidence("emoji", 0, "😀");
 		expect(renderedPostUnits(emoji)).toBe(renderedPostUnits(plain));
 	});
+
+	test("prefers subject-ticket windows and labels outside skips", () => {
+		const posts = [
+			evidence("p0", 0, "TECHSUPP-109 announce"),
+			...Array.from({ length: 4 }, (_, index) =>
+				evidence(`n${index}`, index + 1, `near ${index}`),
+			),
+			...Array.from({ length: 12 }, (_, index) =>
+				evidence(`g${index}`, index + 5, `offtopic ${index}`),
+			),
+			evidence("p1", 17, "TECHSUPP-109 thanks"),
+			evidence("p2", 18, "latest ack"),
+		];
+		const packed = packThread("p0", posts, {
+			subjectTicketKey: "TECHSUPP-109",
+			matchingPostIds: ["p0"],
+			ticketNeighborhoodRadius: 2,
+			neighborhoodRadius: 1,
+			clusterMergeGap: 1,
+			structuralAnchors: false,
+			gapFill: true,
+			limit: posts
+				.filter(({ id }) => !id.startsWith("g") || id === "g0")
+				.reduce((sum, post) => sum + renderedPostUnits(post), 0),
+		});
+		expect(packed.selectionStrategy).toContain("ticket_mentions");
+		// Middle offtopic posts stay out; edges near the second ticket mention may enter.
+		expect(packed.posts.some(({ id }) => id === "g5")).toBe(false);
+		expect(
+			packed.timeline.some(
+				(item) =>
+					item.kind === "skip" &&
+					(item.skip.reason === "outside_ticket_window" ||
+						item.skip.reason === "omitted_gap"),
+			),
+		).toBe(true);
+	});
+
+	test("does not gap-fill or densest-pack off-topic chatter on multi-topic threads", () => {
+		const posts = [
+			evidence("p0", 0, "dark theme?"),
+			...Array.from({ length: 12 }, (_, index) =>
+				evidence(`h${index}`, index + 1, `hermes pi chatter ${index}`),
+			),
+			evidence("p1", 13, "BTB-2112 link and decision"),
+			evidence("p2", 14, "BTB-2112 follow-up"),
+			evidence("p3", 15, "thanks"),
+		];
+		const packed = packThread("p0", posts, {
+			subjectTicketKey: "BTB-2112",
+			matchingPostIds: ["p1"],
+			ticketNeighborhoodRadius: 1,
+			neighborhoodRadius: 1,
+			clusterMergeGap: 1,
+			structuralAnchors: true,
+			gapFill: true,
+			limit: 50_000,
+		});
+		// Near-ticket edge posts may enter the window; deep offtopic chatter must not.
+		expect(packed.posts.some(({ id }) => id === "h3")).toBe(false);
+		expect(packed.posts.some(({ id }) => id === "h6")).toBe(false);
+		expect(packed.posts.map(({ id }) => id)).toContain("p1");
+		expect(
+			packed.timeline.some(
+				(item) =>
+					item.kind === "skip" &&
+					item.skip.reason === "outside_ticket_window" &&
+					item.skip.posts >= 8,
+			),
+		).toBe(true);
+	});
+
+	test("short mode keeps root, ticket/file anchors, and latest without gap-fill", () => {
+		const posts = [
+			evidence("p0", 0, "TECHSUPP-109 root"),
+			...Array.from({ length: 8 }, (_, index) =>
+				evidence(`m${index}`, index + 1, `middle ${index}`),
+			),
+			evidence("p3", 9, "file drop"),
+			evidence("p4", 10, "tail"),
+		];
+		const filePost = posts.find((post) => post.id === "p3");
+		if (!filePost) throw new Error("missing file post");
+		filePost.attachments = [
+			{
+				id: "file-1",
+				postId: "p3",
+				name: "schema.png",
+				extension: "png",
+				size: 10,
+				mimeType: "image/png",
+				deleteAt: 0,
+			},
+		];
+		const packed = packThread("p0", posts, {
+			subjectTicketKey: "TECHSUPP-109",
+			matchingPostIds: [],
+			ticketNeighborhoodRadius: 0,
+			neighborhoodRadius: 1,
+			mode: "short",
+			structuralAnchors: true,
+			limit: 10_000,
+		});
+		expect(packed.selectionStrategy).not.toContain("gap_fill");
+		expect(packed.selectionStrategy).not.toContain("densest_window");
+		expect(packed.posts.map(({ id }) => id)).toEqual(["p0", "p3", "p4"]);
+	});
 });
 
 function evidence(

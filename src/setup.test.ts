@@ -27,6 +27,7 @@ const config = {
 		defaultPerThreadCharacters: 6_000,
 		defaultMaxThreads: 3,
 		matchNeighborhoodRadius: 2,
+		ticketNeighborhoodRadius: 8,
 		clusterMergeGap: 2,
 		conversationSurroundRoots: 5,
 		shortThreadMaxReplies: 2,

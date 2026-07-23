@@ -1,6 +1,8 @@
 import { mapWithConcurrency } from "./concurrency.ts";
 import type { MattermostConfig } from "./config.ts";
 import { loadMattermostConfig } from "./config.ts";
+import { buildCoverage, type CoverageEvidence } from "./coverage.ts";
+import { extractTicketKeys } from "./entities.ts";
 import { AppError, ConfigError } from "./errors.ts";
 import { freshenLockPath, withFileLock } from "./lock.ts";
 import { MattermostApiError, MattermostClient } from "./mattermost/client.ts";
@@ -9,11 +11,7 @@ import type {
 	MattermostPostList,
 	MattermostUser,
 } from "./mattermost/schemas.ts";
-import {
-	type EvidencePost,
-	type PackedThread,
-	packThread,
-} from "./packing.ts";
+import { type EvidencePost, type PackedThread, packThread } from "./packing.ts";
 import { matchesQueryExpansion } from "./query-expansion.ts";
 import type { Warning } from "./results.ts";
 import {
@@ -58,6 +56,10 @@ import {
 	syncConfiguredConversations,
 } from "./sync.ts";
 import { containsNormalizedExactText, containsNormalizedText } from "./text.ts";
+import {
+	segmentThreadByTicketProximity,
+	type TicketSegment,
+} from "./ticket-segments.ts";
 
 const MAX_REMOTE_SEARCH_PROBES = 4;
 const MAX_REMOTE_POSTS_PER_PROBE = 20;
@@ -66,6 +68,13 @@ const MAX_REMOTE_CANDIDATE_THREADS = 12;
 const MAX_CONTEXT_FRESHEN_CONVERSATIONS = 8;
 /** Default top-N for local `search` after ranking. */
 export const DEFAULT_SEARCH_LIMIT = 10;
+/** Top-K related ticket keys for one-hop pointers. */
+const RELATED_TICKET_HOP_LIMIT = 3;
+/** Soft cap for short mode; root-anchored single threads may use more. */
+const SHORT_MAX_CHARACTERS = 6_000;
+const SHORT_PER_THREAD_CHARACTERS = 2_500;
+/** Short packing budget for one root-anchored primary support thread. */
+const SHORT_ROOT_ANCHORED_PER_THREAD = 4_500;
 
 export interface SearchFilterInput {
 	from?: string;
@@ -96,6 +105,8 @@ export interface ContextInput extends SearchFilterInput {
 	noWiden?: boolean;
 	remoteSearch?: boolean;
 	includeAutomation?: boolean;
+	/** Use the short evidence-card packing budget. */
+	short?: boolean;
 }
 
 export interface SearchInput
@@ -163,6 +174,10 @@ export interface ContextThread extends PackedThread {
 	link: string;
 	/** Prior root posts from the same DM conversation for short threads. */
 	surround?: EvidencePost[];
+	ticketDensity?: number;
+	nearestTicketDistance?: number | null;
+	rootAnchoredFocused?: boolean;
+	segments?: TicketSegment[];
 }
 
 export interface RemoteSearchEvidence {
@@ -177,6 +192,28 @@ export interface RemoteSearchEvidence {
 	}>;
 	candidateThreads: number;
 	failures: number;
+}
+
+export interface SelectionEvidence {
+	candidateThreads: number;
+	returnedThreads: number;
+	droppedThin: number;
+	droppedByBudget: number;
+	droppedNoMatch: number;
+}
+
+/** One-hop related ticket pointer (not a full nested context). */
+export interface RelatedTicketPointer {
+	key: string;
+	mentions: number;
+	threadId?: string;
+	url?: string;
+	conversation?: string;
+	latestAt?: number;
+	excerpt?: string;
+	/** Selected subject thread that contributed the strongest mention. */
+	sourceThreadId?: string;
+	hydrated: false;
 }
 
 export interface ContextResult {
@@ -198,6 +235,9 @@ export interface ContextResult {
 	}>;
 	explicitChannelPolicy: "restrict";
 	widening: { allowed: boolean; performed: boolean };
+	selection: SelectionEvidence;
+	relatedTickets: RelatedTicketPointer[];
+	coverage: CoverageEvidence;
 	threads: ContextThread[];
 	budget: {
 		measurement: "unicode_code_points_in_rendered_post";
@@ -206,6 +246,8 @@ export interface ContextResult {
 		maxThreads: number;
 	};
 	warnings: Warning[];
+	/** True when context used the short evidence-card packing budget. */
+	short?: boolean;
 }
 
 export interface SearchContextResult extends Omit<SearchResult, "candidates"> {
@@ -289,6 +331,7 @@ export async function getMattermostContext(
 		const threadCache = new Map<string, IndexedPost[]>();
 		const deadlineAt = searchDeadlineAt();
 		const observedAt = dependencies.now?.() ?? Date.now();
+		let freshenedConversationCount = 0;
 		const initiallyFreshIds = new Set(
 			inspectFreshness(config, store, all, observedAt)
 				.filter(({ stale }) => !stale)
@@ -392,6 +435,7 @@ export async function getMattermostContext(
 				Boolean(input.fresh),
 				observedAt,
 			);
+			freshenedConversationCount = freshenTargets.length;
 			await freshen(
 				config,
 				store,
@@ -444,8 +488,15 @@ export async function getMattermostContext(
 		}
 
 		const budgets = {
-			maxCharacters: config.budgets.defaultMaxCharacters,
-			perThreadCharacters: config.budgets.defaultPerThreadCharacters,
+			maxCharacters: input.short
+				? Math.min(config.budgets.defaultMaxCharacters, SHORT_MAX_CHARACTERS)
+				: config.budgets.defaultMaxCharacters,
+			perThreadCharacters: input.short
+				? Math.min(
+						config.budgets.defaultPerThreadCharacters,
+						SHORT_PER_THREAD_CHARACTERS,
+					)
+				: config.budgets.defaultPerThreadCharacters,
 			maxThreads: config.budgets.defaultMaxThreads,
 		};
 		// When only one or two strong threads fit, give each a larger share so
@@ -455,7 +506,7 @@ export async function getMattermostContext(
 			budgets.maxThreads,
 		);
 		const perThreadCharacters =
-			expectedThreadCount <= 2
+			!input.short && expectedThreadCount <= 2
 				? Math.max(
 						budgets.perThreadCharacters,
 						Math.floor(budgets.maxCharacters / expectedThreadCount),
@@ -464,11 +515,25 @@ export async function getMattermostContext(
 		let remaining = budgets.maxCharacters;
 		const threads: ContextThread[] = [];
 		const matchedProbeValues = new Set<string>();
+		const selection: SelectionEvidence = {
+			candidateThreads: candidates.length,
+			returnedThreads: 0,
+			droppedThin: 0,
+			droppedByBudget: 0,
+			droppedNoMatch: 0,
+		};
 		const hydrateCandidates = async (
 			candidateList: readonly ThreadCandidate[],
 		): Promise<void> => {
 			for (const candidate of candidateList) {
-				if (threads.length >= budgets.maxThreads || remaining <= 0) break;
+				if (threads.length >= budgets.maxThreads) {
+					selection.droppedByBudget += 1;
+					continue;
+				}
+				if (remaining <= 0) {
+					selection.droppedByBudget += 1;
+					continue;
+				}
 				const conversation = all.find(
 					({ id }) => id === candidate.conversationId,
 				);
@@ -509,6 +574,7 @@ export async function getMattermostContext(
 					!currentMatchingPostIds.length &&
 					!candidate.reasons.includes("explicit_ticket_relationship")
 				) {
+					selection.droppedNoMatch += 1;
 					continue;
 				}
 				const currentRanking = reevaluateCandidate(
@@ -517,11 +583,34 @@ export async function getMattermostContext(
 					subject,
 					probes,
 				);
+				const subjectTicketKey =
+					subject.kind === "ticket" ? subject.ticketKey : undefined;
+				const ticketMetrics = subjectTicketKey
+					? segmentThreadByTicketProximity(evidence, {
+							subjectTicket: subjectTicketKey,
+							matchingPostIds: currentMatchingPostIds,
+							ticketRadius: config.budgets.ticketNeighborhoodRadius,
+							matchRadius: config.budgets.matchNeighborhoodRadius,
+							clusterMergeGap: config.budgets.clusterMergeGap,
+						})
+					: undefined;
 				const packed = packThread(candidate.threadId, evidence, {
 					matchingPostIds: currentMatchingPostIds,
 					neighborhoodRadius: config.budgets.matchNeighborhoodRadius,
+					ticketNeighborhoodRadius: config.budgets.ticketNeighborhoodRadius,
+					subjectTicketKey,
 					clusterMergeGap: config.budgets.clusterMergeGap,
-					limit: Math.min(perThreadCharacters, remaining),
+					mode: input.short ? "short" : "default",
+					gapFill: !input.short,
+					limit: Math.min(
+						input.short && ticketMetrics?.rootAnchoredFocused
+							? Math.max(
+									perThreadCharacters,
+									SHORT_ROOT_ANCHORED_PER_THREAD,
+								)
+							: perThreadCharacters,
+						remaining,
+					),
 				});
 				remaining -= packed.budget.used;
 				const surround = resolveConversationSurround(
@@ -541,6 +630,14 @@ export async function getMattermostContext(
 					latestActivityAt: currentRanking.latestActivityAt,
 					link: postLink(config, candidate.rootPostId),
 					...(surround.length ? { surround } : {}),
+					...(ticketMetrics
+						? {
+								ticketDensity: ticketMetrics.ticketDensity,
+								nearestTicketDistance: ticketMetrics.nearestTicketDistance,
+								rootAnchoredFocused: ticketMetrics.rootAnchoredFocused,
+								segments: ticketMetrics.segments,
+							}
+						: {}),
 				});
 			}
 		};
@@ -680,6 +777,36 @@ export async function getMattermostContext(
 				(thread) =>
 					thread.omittedPosts === 0 && thread.totalOmittedAttachments === 0,
 			);
+		selection.candidateThreads = Math.max(
+			selection.candidateThreads,
+			candidates.length,
+		);
+		selection.returnedThreads = threads.length;
+		const selectedIds = new Set(threads.map(({ threadId }) => threadId));
+		selection.droppedThin = candidates.filter(
+			(candidate) =>
+				!selectedIds.has(candidate.threadId) &&
+				candidate.reasons.includes("thin_thread"),
+		).length;
+		const relatedTickets = resolveRelatedTicketPointers({
+			config,
+			store,
+			threads,
+			subjectTicket: subject.kind === "ticket" ? subject.ticketKey : undefined,
+			allowlist: new Set(searchedConversations.map(({ id }) => id)),
+		});
+		const coverage = buildCoverage({
+			searchCoverageComplete,
+			selectedThreadsComplete,
+			freshnessMode: input.local ? "local" : input.fresh ? "forced" : "network",
+			freshness,
+			searchedConversations,
+			threads,
+			remoteSearch,
+			selection,
+			warnings,
+			freshenedConversationCount,
+		});
 		return {
 			subject,
 			probes,
@@ -702,6 +829,9 @@ export async function getMattermostContext(
 				allowed: !input.channels?.length && !input.noWiden,
 				performed: performedWidening,
 			},
+			selection,
+			relatedTickets,
+			coverage,
 			threads,
 			budget: {
 				measurement: "unicode_code_points_in_rendered_post",
@@ -710,6 +840,7 @@ export async function getMattermostContext(
 				maxThreads: budgets.maxThreads,
 			},
 			warnings,
+			...(input.short ? { short: true } : {}),
 		};
 	});
 }
@@ -1769,7 +1900,9 @@ function routingHintWarnings(routing: RoutingResult): Warning[] {
 }
 
 /** Collapse repeated soft-degrade hydrate/resolve/freshen warnings into one signal. */
-function consolidateLocalFallbackWarnings(warnings: readonly Warning[]): Warning[] {
+function consolidateLocalFallbackWarnings(
+	warnings: readonly Warning[],
+): Warning[] {
 	const fallbackKinds = new Set([
 		"remote_hydrate_failed",
 		"remote_resolve_failed",
@@ -1786,6 +1919,201 @@ function consolidateLocalFallbackWarnings(warnings: readonly Warning[]): Warning
 		...warnings.filter(({ kind }) => !fallbackKinds.has(kind)),
 	];
 }
+
+/**
+ * Build one-hop related ticket pointers from already-selected subject threads.
+ * Local lookup only: best thread per key, no remote/freshen.
+ */
+function resolveRelatedTicketPointers(input: {
+	config: MattermostConfig;
+	store: MattermostStore;
+	threads: readonly ContextThread[];
+	subjectTicket?: string;
+	allowlist: ReadonlySet<string>;
+}): RelatedTicketPointer[] {
+	const subject = input.subjectTicket?.toUpperCase();
+	const MULTI_TICKET_BULLETIN_MIN = 3;
+	type Mention = {
+		key: string;
+		postId: string;
+		threadId: string;
+		threadRank: number;
+		conversationId: string;
+		conversationAlias: string;
+		createAt: number;
+		excerpt: string;
+		inWindow: boolean;
+		multiTicketBulletin: boolean;
+	};
+	const mentions: Mention[] = [];
+	for (const [threadRank, thread] of input.threads.entries()) {
+		const rootKeys = extractTicketKeys(thread.posts[0]?.message ?? "");
+		const windowIds = new Set(
+			(thread.segments ?? [])
+				.filter(
+					(segment) =>
+						segment.reason === "ticket_window" ||
+						segment.reason === "match_window",
+				)
+				.flatMap((segment) => {
+					const ids: string[] = [];
+					let inside = false;
+					for (const post of thread.posts) {
+						if (post.id === segment.startPostId) inside = true;
+						if (inside) ids.push(post.id);
+						if (post.id === segment.endPostId) inside = false;
+					}
+					return ids;
+				}),
+		);
+		for (const post of thread.posts) {
+			const postKeys = extractTicketKeys(post.message);
+			const multiTicketBulletin =
+				postKeys.length >= MULTI_TICKET_BULLETIN_MIN ||
+				(post.id === thread.threadId &&
+					rootKeys.length >= MULTI_TICKET_BULLETIN_MIN);
+			for (const key of postKeys) {
+				if (key === subject) continue;
+				mentions.push({
+					key,
+					postId: post.id,
+					threadId: thread.threadId,
+					threadRank,
+					conversationId: thread.conversationId,
+					conversationAlias: thread.conversationAlias,
+					createAt: post.createAt,
+					excerpt: post.message.slice(0, 160),
+					inWindow:
+						windowIds.has(post.id) ||
+						thread.matchingPostIds.includes(post.id),
+					multiTicketBulletin,
+				});
+			}
+		}
+	}
+	if (!mentions.length) return [];
+
+	const byKey = new Map<string, Mention[]>();
+	for (const mention of mentions) {
+		const list = byKey.get(mention.key) ?? [];
+		list.push(mention);
+		byKey.set(mention.key, list);
+	}
+
+	const rankedKeys = [...byKey.entries()]
+		.map(([key, list]) => {
+			const inWindow = list.filter((item) => item.inWindow).length;
+			const bulletinOnly = list.every((item) => item.multiTicketBulletin);
+			const bestThreadRank = Math.min(...list.map((item) => item.threadRank));
+			const fromPrimary = bestThreadRank === 0;
+			const latestAt = Math.max(...list.map((item) => item.createAt));
+			const ordered = [...list].sort(
+				(left, right) =>
+					Number(left.multiTicketBulletin) - Number(right.multiTicketBulletin) ||
+					left.threadRank - right.threadRank ||
+					Number(right.inWindow) - Number(left.inWindow) ||
+					left.createAt - right.createAt,
+			);
+			const first = ordered[0];
+			if (!first) return null;
+			return {
+				key,
+				mentions: list.length,
+				inWindow,
+				bulletinOnly,
+				fromPrimary,
+				bestThreadRank,
+				latestAt,
+				first,
+			};
+		})
+		.filter(
+			(
+				entry,
+			): entry is {
+				key: string;
+				mentions: number;
+				inWindow: number;
+				bulletinOnly: boolean;
+				fromPrimary: boolean;
+				bestThreadRank: number;
+				latestAt: number;
+				first: Mention;
+			} => entry !== null,
+		)
+		.sort(
+			(left, right) =>
+				Number(left.bulletinOnly) - Number(right.bulletinOnly) ||
+				Number(right.fromPrimary) - Number(left.fromPrimary) ||
+				left.bestThreadRank - right.bestThreadRank ||
+				right.inWindow - left.inWindow ||
+				right.mentions - left.mentions ||
+				right.latestAt - left.latestAt ||
+				left.key.localeCompare(right.key),
+		);
+	const focused = rankedKeys.filter((entry) => !entry.bulletinOnly);
+	const hopKeys =
+		focused.length >= 2
+			? focused.slice(0, RELATED_TICKET_HOP_LIMIT)
+			: [
+					...focused,
+					...rankedKeys
+						.filter((entry) => entry.bulletinOnly)
+						.slice(0, RELATED_TICKET_HOP_LIMIT - focused.length),
+				];
+
+	const pointers: RelatedTicketPointer[] = [];
+	for (const entry of hopKeys) {
+		const relationships = input.store.getTicketRelationships(entry.key);
+		const allowlisted = relationships.filter((relationship) => {
+			const thread = input.store.getThread(relationship.threadId);
+			const conversationId = thread[0]?.conversationId;
+			return conversationId ? input.allowlist.has(conversationId) : false;
+		});
+		const bestThreadId =
+			allowlisted[0]?.threadId ??
+			(input.allowlist.has(entry.first.conversationId)
+				? entry.first.threadId
+				: undefined);
+		if (!bestThreadId) {
+			pointers.push({
+				key: entry.key,
+				mentions: entry.mentions,
+				sourceThreadId: entry.first.threadId,
+				hydrated: false,
+				excerpt: entry.first.excerpt,
+			});
+			continue;
+		}
+		const posts = input.store.getThread(bestThreadId);
+		const root = posts.find((post) => post.id === bestThreadId) ?? posts[0];
+		const hit =
+			posts.find((post) =>
+				extractTicketKeys(post.message).includes(entry.key),
+			) ?? root;
+		const conversationId = root?.conversationId;
+		const conversation = conversationId
+			? input.store.listConversations().find(({ id }) => id === conversationId)
+			: undefined;
+		const latestAt = posts.reduce(
+			(max, post) => Math.max(max, post.createAt, post.updateAt),
+			0,
+		);
+		pointers.push({
+			key: entry.key,
+			mentions: entry.mentions,
+			threadId: bestThreadId,
+			url: postLink(input.config, bestThreadId),
+			...(conversation ? { conversation: conversation.alias } : {}),
+			...(latestAt ? { latestAt } : {}),
+			excerpt: (hit?.message ?? entry.first.excerpt).slice(0, 160),
+			sourceThreadId: entry.first.threadId,
+			hydrated: false,
+		});
+	}
+	return pointers;
+}
+
 
 function probeWarnings(
 	probes: readonly RetrievalProbe[],

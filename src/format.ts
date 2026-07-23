@@ -180,6 +180,19 @@ function formatContext(data: ContextResult): string {
 						data.remoteSearch?.requested ? "unavailable" : "not used",
 					),
 		),
+		...(data.coverage
+			? [
+					joinParts([
+						formatField("Coverage trust", styles.accent(data.coverage.trust)),
+						formatField(
+							"gaps",
+							data.coverage.gaps.length
+								? styles.warning(data.coverage.gaps.join(", "))
+								: styles.hint("none"),
+						),
+					]),
+				]
+			: []),
 		joinParts([
 			formatField(
 				"Widened",

@@ -1,4 +1,8 @@
 import { extractTicketKeys } from "./entities.ts";
+import {
+	segmentThreadByTicketProximity,
+	ticketWindowPostIds,
+} from "./ticket-segments.ts";
 
 export interface EvidenceAttachment {
 	id: string;
@@ -27,11 +31,14 @@ export interface PackedPost extends EvidencePost {
 	renderedUnits: number;
 }
 
+export type PackSkipReason = "outside_ticket_window" | "omitted_gap" | "budget";
+
 /** Gap between returned posts in chronological thread order. */
 export interface PackSkip {
 	posts: number;
 	after?: string;
 	before?: string;
+	reason?: PackSkipReason;
 }
 
 export type PackTimelineItem =
@@ -64,28 +71,42 @@ export interface PackThreadOptions {
 	/** Inclusive neighbor distance around each match / aroundPostId. Default 2. */
 	neighborhoodRadius?: number;
 	/**
+	 * Inclusive neighbor distance around subject-ticket mentions. Defaults to a
+	 * larger radius than {@link neighborhoodRadius} (8).
+	 */
+	ticketNeighborhoodRadius?: number;
+	/** Subject tracker key used for ticket-window packing bias. */
+	subjectTicketKey?: string;
+	/**
 	 * Fill chronological gaps of at most this many posts between selected
 	 * clusters so micro-windows merge. Default 2.
 	 */
 	clusterMergeGap?: number;
 	/**
 	 * After priority selection, spend leftover budget on the largest internal
-	 * skip between selected clusters. Default true.
+	 * skip between selected clusters. Default true for default mode; false for
+	 * short mode. When a subject ticket is set, gap-fill prefers ticket windows
+	 * and does not spend budget on off-topic gaps first.
 	 */
 	gapFill?: boolean;
 	/**
 	 * Prefer attachment / code-fence / long / multi-ticket posts and the densest
-	 * activity window before the short latest-post priority. Default true.
+	 * activity window before the short latest-post priority. Default true;
+	 * short mode keeps files / multi-ticket / fences only.
 	 */
 	structuralAnchors?: boolean;
+	/** Packing projection mode. Short keeps root + ticket/file/latest anchors. */
+	mode?: "default" | "short";
 	limit: number;
 	full?: boolean;
 }
 
 const DEFAULT_NEIGHBORHOOD_RADIUS = 2;
+const DEFAULT_TICKET_NEIGHBORHOOD_RADIUS = 8;
 const DEFAULT_CLUSTER_MERGE_GAP = 2;
 /** High-priority tail posts before gap-fill; remainder may fill later. */
 const LATEST_PRIORITY_COUNT = 3;
+const SHORT_LATEST_PRIORITY_COUNT = 2;
 const STRUCTURAL_LONG_MESSAGE_UNITS = 400;
 const DENSE_WINDOW_MS = 60 * 60 * 1000;
 const DENSE_WINDOW_MIN_POSTS = 3;
@@ -112,6 +133,38 @@ export function packThread(
 		}
 		if (added) strategies.push(strategy);
 	};
+	const shortMode = options.mode === "short";
+	const subjectTicket = options.subjectTicketKey?.toUpperCase();
+	const matchRadius = Math.max(
+		1,
+		options.neighborhoodRadius ?? DEFAULT_NEIGHBORHOOD_RADIUS,
+	);
+	const ticketRadius =
+		options.ticketNeighborhoodRadius !== undefined
+			? Math.max(0, options.ticketNeighborhoodRadius)
+			: Math.max(matchRadius, DEFAULT_TICKET_NEIGHBORHOOD_RADIUS);
+	const mergeGap = Math.max(
+		0,
+		options.clusterMergeGap ?? DEFAULT_CLUSTER_MERGE_GAP,
+	);
+	const ticketMetrics = subjectTicket
+		? segmentThreadByTicketProximity(chronological, {
+				subjectTicket,
+				matchingPostIds: options.matchingPostIds,
+				ticketRadius,
+				matchRadius,
+				clusterMergeGap: mergeGap,
+			})
+		: undefined;
+	const inTicketWindow = subjectTicket
+		? ticketWindowPostIds(chronological, {
+				subjectTicket,
+				matchingPostIds: options.matchingPostIds,
+				ticketRadius,
+				matchRadius,
+				clusterMergeGap: mergeGap,
+			})
+		: undefined;
 
 	if (options.full) {
 		add(
@@ -123,16 +176,34 @@ export function packThread(
 			chronological.slice(0, 1).map(({ id }) => id),
 			"root",
 		);
+
+		if (subjectTicket && ticketMetrics?.ticketHitPostIds.length) {
+			add(ticketMetrics.ticketHitPostIds, "ticket_mentions");
+			for (let distance = 1; distance <= ticketRadius; distance += 1) {
+				const ring: string[] = [];
+				for (const target of ticketMetrics.ticketHitPostIds) {
+					const index = chronological.findIndex(({ id }) => id === target);
+					if (index < 0) continue;
+					const before = chronological[index - distance]?.id;
+					const after = chronological[index + distance]?.id;
+					if (before) ring.push(before);
+					if (after) ring.push(after);
+				}
+				add(
+					ring,
+					distance === 1
+						? "ticket_neighborhoods"
+						: "ticket_neighborhoods_extended",
+				);
+			}
+		}
+
 		add(options.matchingPostIds ?? [], "matching_posts");
 		const neighborhoodTargets = [
 			...(options.matchingPostIds ?? []),
 			...(options.aroundPostId ? [options.aroundPostId] : []),
 		];
-		const radius = Math.max(
-			1,
-			options.neighborhoodRadius ?? DEFAULT_NEIGHBORHOOD_RADIUS,
-		);
-		for (let distance = 1; distance <= radius; distance += 1) {
+		for (let distance = 1; distance <= matchRadius; distance += 1) {
 			const ring: string[] = [];
 			for (const target of neighborhoodTargets) {
 				const index = chronological.findIndex(({ id }) => id === target);
@@ -148,23 +219,49 @@ export function packThread(
 			);
 		}
 
-		const mergeGap = Math.max(
-			0,
-			options.clusterMergeGap ?? DEFAULT_CLUSTER_MERGE_GAP,
-		);
 		if (mergeGap > 0) {
 			const mergeIds = clusterMergeIds(chronological, order, mergeGap);
 			add(mergeIds, "cluster_merge");
 		}
 
-		if (options.structuralAnchors !== false) {
-			add(structuralAnchorIds(chronological), "structural_anchors");
-			add(densestWindowIds(chronological), "densest_window");
+		const allowStructural = options.structuralAnchors !== false;
+		if (allowStructural) {
+			if (shortMode) {
+				add(
+					structuralAnchorIds(chronological, { short: true }),
+					"structural_anchors",
+				);
+			} else {
+				const structural = structuralAnchorIds(chronological);
+				add(
+					inTicketWindow
+						? structural.filter(
+								(id) =>
+									inTicketWindow.has(id) ||
+									isFileOrFencePost(byId.get(id)),
+							)
+						: structural,
+					"structural_anchors",
+				);
+				const densest = densestWindowIds(chronological);
+				add(
+					inTicketWindow
+						? densest.filter((id) => inTicketWindow.has(id))
+						: densest,
+					"densest_window",
+				);
+			}
 		}
 
+		const latestCount = shortMode
+			? SHORT_LATEST_PRIORITY_COUNT
+			: LATEST_PRIORITY_COUNT;
 		// Keep only a short high-priority tail so gap-fill can reclaim the middle.
 		add(
-			chronological.slice(-LATEST_PRIORITY_COUNT).reverse().map(({ id }) => id),
+			chronological
+				.slice(-latestCount)
+				.reverse()
+				.map(({ id }) => id),
 			"latest_posts",
 		);
 	}
@@ -174,7 +271,27 @@ export function packThread(
 		: Math.max(0, options.limit);
 	let used = 0;
 	const selected = new Set<string>();
-	for (const id of order) {
+	const preferTicketWindows = Boolean(inTicketWindow) && !options.full;
+	const rootId = chronological[0]?.id;
+	const latestIds = new Set(
+		chronological.slice(-LATEST_PRIORITY_COUNT).map(({ id }) => id),
+	);
+	const prioritizedOrder =
+		preferTicketWindows && inTicketWindow
+			? [
+					...order.filter((id) => inTicketWindow.has(id)),
+					// Keep only intentional off-window anchors (root / files / fences /
+					// latest), never densest-window chatter from an off-topic gap.
+					...order.filter(
+						(id) =>
+							!inTicketWindow.has(id) &&
+							(id === rootId ||
+								isFileOrFencePost(byId.get(id)) ||
+								latestIds.has(id)),
+					),
+				]
+			: order;
+	for (const id of prioritizedOrder) {
 		const post = byId.get(id);
 		if (!post) continue;
 		const units = renderedPostUnits(post);
@@ -183,22 +300,26 @@ export function packThread(
 		used += units;
 	}
 
-	if (!options.full && options.gapFill !== false) {
+	const gapFillEnabled =
+		options.gapFill !== false && !options.full && !shortMode;
+	if (gapFillEnabled) {
 		const filled = fillLargestInternalGaps(
 			chronological,
 			byId,
 			selected,
 			used,
 			limit,
+			inTicketWindow,
 		);
 		used = filled.used;
 		if (filled.added) strategies.push("gap_fill");
 	}
 
-	if (!options.full) {
+	if (!options.full && !shortMode) {
 		let extended = false;
 		for (const post of chronological.slice().reverse()) {
 			if (selected.has(post.id)) continue;
+			if (inTicketWindow && !inTicketWindow.has(post.id)) continue;
 			const units = renderedPostUnits(post);
 			if (used + units > limit) continue;
 			selected.add(post.id);
@@ -242,7 +363,10 @@ export function packThread(
 			used,
 		},
 		posts: returned,
-		timeline: buildTimeline(chronological, selected, returned),
+		timeline: buildTimeline(chronological, selected, returned, {
+			ticketMetrics,
+			inTicketWindow,
+		}),
 	};
 }
 
@@ -251,11 +375,16 @@ export function buildTimeline(
 	chronological: readonly EvidencePost[],
 	selected: ReadonlySet<string>,
 	returned: readonly PackedPost[],
+	options: {
+		ticketMetrics?: ReturnType<typeof segmentThreadByTicketProximity>;
+		inTicketWindow?: ReadonlySet<string>;
+	} = {},
 ): PackTimelineItem[] {
 	const byId = new Map(returned.map((post) => [post.id, post]));
 	const timeline: PackTimelineItem[] = [];
 	let skipCount = 0;
 	let skipAfter: string | undefined;
+	let skipIds: string[] = [];
 	let lastEmittedId: string | undefined;
 
 	const flushSkip = (before?: string) => {
@@ -266,10 +395,14 @@ export function buildTimeline(
 				posts: skipCount,
 				...(skipAfter ? { after: skipAfter } : {}),
 				...(before ? { before } : {}),
+				...(classifySkipReason(skipIds, options)
+					? { reason: classifySkipReason(skipIds, options) }
+					: {}),
 			},
 		});
 		skipCount = 0;
 		skipAfter = undefined;
+		skipIds = [];
 	};
 
 	for (const post of chronological) {
@@ -283,6 +416,7 @@ export function buildTimeline(
 		}
 		if (skipCount === 0) skipAfter = lastEmittedId;
 		skipCount += 1;
+		skipIds.push(post.id);
 	}
 	flushSkip();
 	return timeline;
@@ -328,6 +462,7 @@ function clusterMergeIds(
 /**
  * Spend leftover budget on the largest skip between already-selected clusters,
  * preferring structural posts, then posts that reconnect cluster edges.
+ * When ticket windows are known, fill those gaps before off-topic spans.
  */
 function fillLargestInternalGaps(
 	chronological: readonly EvidencePost[],
@@ -335,11 +470,16 @@ function fillLargestInternalGaps(
 	selected: Set<string>,
 	used: number,
 	limit: number,
+	inTicketWindow?: ReadonlySet<string>,
 ): { used: number; added: boolean } {
 	let currentUsed = used;
 	let added = false;
 	while (currentUsed < limit) {
-		const gapIds = largestInternalGapIds(chronological, selected);
+		const gapIds = largestInternalGapIds(
+			chronological,
+			selected,
+			inTicketWindow,
+		);
 		if (!gapIds.length) break;
 		const gapPosts = gapIds
 			.map((id) => byId.get(id))
@@ -371,6 +511,7 @@ function fillLargestInternalGaps(
 function largestInternalGapIds(
 	chronological: readonly EvidencePost[],
 	selected: ReadonlySet<string>,
+	inTicketWindow?: ReadonlySet<string>,
 ): string[] {
 	const gaps: string[][] = [];
 	let current: string[] = [];
@@ -385,8 +526,47 @@ function largestInternalGapIds(
 		if (seenSelected) current.push(post.id);
 	}
 	if (!gaps.length) return [];
-	gaps.sort((left, right) => right.length - left.length);
-	return gaps[0] ?? [];
+	const ranked = [...gaps].sort((left, right) => {
+		if (inTicketWindow) {
+			const leftIn = left.filter((id) => inTicketWindow.has(id)).length;
+			const rightIn = right.filter((id) => inTicketWindow.has(id)).length;
+			if (leftIn !== rightIn) return rightIn - leftIn;
+		}
+		return right.length - left.length;
+	});
+	// Prefer a ticket-window gap; never gap-fill a fully off-topic span.
+	const preferred = ranked.find((gap) =>
+		inTicketWindow ? gap.some((id) => inTicketWindow.has(id)) : true,
+	);
+	if (!preferred?.length) return [];
+	if (!inTicketWindow) return preferred;
+	// Only spend budget on posts that actually sit inside the ticket window.
+	return preferred.filter((id) => inTicketWindow.has(id));
+}
+
+function classifySkipReason(
+	skipIds: readonly string[],
+	options: {
+		ticketMetrics?: ReturnType<typeof segmentThreadByTicketProximity>;
+		inTicketWindow?: ReadonlySet<string>;
+	},
+): PackSkipReason | undefined {
+	if (!skipIds.length) return undefined;
+	if (!options.inTicketWindow && !options.ticketMetrics) return undefined;
+	const omitted = options.ticketMetrics?.segments.find(
+		(segment) =>
+			segment.reason === "omitted_gap" &&
+			skipIds.includes(segment.startPostId) &&
+			skipIds.includes(segment.endPostId),
+	);
+	if (omitted) return "omitted_gap";
+	if (
+		options.inTicketWindow &&
+		skipIds.every((id) => !options.inTicketWindow?.has(id))
+	) {
+		return "outside_ticket_window";
+	}
+	return "budget";
 }
 
 function edgeInwardOrder(ids: readonly string[]): string[] {
@@ -407,17 +587,29 @@ function edgeInwardOrder(ids: readonly string[]): string[] {
 
 function structuralAnchorIds(
 	chronological: readonly EvidencePost[],
+	options: { short?: boolean } = {},
 ): string[] {
 	return chronological
-		.filter((post) => isStructuralPost(post))
+		.filter((post) => isStructuralPost(post, options))
 		.map(({ id }) => id);
 }
 
-function isStructuralPost(post: EvidencePost): boolean {
+function isStructuralPost(
+	post: EvidencePost,
+	options: { short?: boolean } = {},
+): boolean {
 	if (post.attachments.some((attachment) => !attachment.deleteAt)) return true;
 	if (/```/.test(post.message)) return true;
-	if ([...post.message].length >= STRUCTURAL_LONG_MESSAGE_UNITS) return true;
 	if (extractTicketKeys(post.message).length >= 2) return true;
+	if (options.short) return false;
+	if ([...post.message].length >= STRUCTURAL_LONG_MESSAGE_UNITS) return true;
+	return false;
+}
+
+function isFileOrFencePost(post: EvidencePost | undefined): boolean {
+	if (!post) return false;
+	if (post.attachments.some((attachment) => !attachment.deleteAt)) return true;
+	if (/```/.test(post.message)) return true;
 	return false;
 }
 

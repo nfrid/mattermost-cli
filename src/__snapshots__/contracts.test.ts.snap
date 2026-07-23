@@ -291,6 +291,43 @@ exports[`schema version 1 command contracts locks populated deterministic search
       "used": 197,
     },
     "complete": true,
+    "coverage": {
+      "freshness": {
+        "freshened": 0,
+        "localFallback": false,
+        "mode": "local",
+        "staleRouted": 0,
+      },
+      "gaps": [],
+      "packing": {
+        "largestSkip": 0,
+        "omittedPosts": 0,
+        "recommendFullThreadIds": [],
+        "threadsComplete": true,
+      },
+      "remoteSearch": {
+        "acceptedPosts": 0,
+        "candidateThreads": 0,
+        "failures": 0,
+        "performed": false,
+        "probes": 0,
+        "reason": "local_already_sufficient",
+      },
+      "search": {
+        "complete": true,
+        "conversationsSearched": 1,
+        "conversationsWithHits": 1,
+        "cutoffBoundedConversations": 0,
+        "deadlineHit": false,
+      },
+      "selection": {
+        "candidateThreads": 1,
+        "droppedByBudget": 0,
+        "droppedThin": 0,
+        "returnedThreads": 1,
+      },
+      "trust": "high",
+    },
     "explicitChannelPolicy": "restrict",
     "filters": {},
     "freshness": [
@@ -316,6 +353,7 @@ exports[`schema version 1 command contracts locks populated deterministic search
         "value": "payment evidence",
       },
     ],
+    "relatedTickets": [],
     "remoteSearch": {
       "candidateThreads": 0,
       "failures": 0,
@@ -339,6 +377,13 @@ exports[`schema version 1 command contracts locks populated deterministic search
       },
     ],
     "selectedThreadsComplete": true,
+    "selection": {
+      "candidateThreads": 1,
+      "droppedByBudget": 0,
+      "droppedNoMatch": 0,
+      "droppedThin": 0,
+      "returnedThreads": 1,
+    },
     "subject": {
       "kind": "text",
       "raw": "payment evidence",

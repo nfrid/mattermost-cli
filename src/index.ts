@@ -1,10 +1,14 @@
 export {
+	type AgentAnchor,
+	type AgentAnchorKind,
 	type AgentCandidate,
+	type AgentCluster,
 	type AgentCommandResult,
 	type AgentFile,
 	type AgentMessage,
 	type AgentMessageGroup,
 	type AgentOmission,
+	type AgentRelatedTicket,
 	type AgentSkip,
 	type AgentStatus,
 	type AgentThread,
@@ -31,11 +35,13 @@ export {
 	type FreshnessEvidence,
 	getMattermostContext,
 	getMattermostThread,
+	type RelatedTicketPointer,
 	type RemoteSearchEvidence,
 	type SearchContextResult,
 	type SearchFilterInput,
 	type SearchFilters,
 	type SearchInput,
+	type SelectionEvidence,
 	searchMattermost,
 	type ThreadInput,
 	type ThreadResult,
@@ -64,6 +70,13 @@ export {
 	type WhoamiResultV1,
 	whoamiResultV1Schema,
 } from "./contracts.ts";
+export {
+	buildCoverage,
+	type CoverageEvidence,
+	type CoverageGapCode,
+	type CoverageTrust,
+	shouldRecommendFull,
+} from "./coverage.ts";
 export {
 	type EngineeringEntity,
 	type EngineeringEntityKind,
@@ -98,6 +111,7 @@ export {
 	type PackedPost,
 	type PackedThread,
 	type PackSkip,
+	type PackSkipReason,
 	type PackThreadOptions,
 	type PackTimelineItem,
 	packThread,
@@ -185,6 +199,14 @@ export {
 	type SyncResult,
 	syncConfiguredConversations,
 } from "./sync.ts";
+export {
+	segmentThreadByTicketProximity,
+	type SegmentThreadOptions,
+	ticketWindowPostIds,
+	type TicketProximityMetrics,
+	type TicketSegment,
+	type TicketSegmentReason,
+} from "./ticket-segments.ts";
 export {
 	containsNormalizedText,
 	normalizeSearchText,

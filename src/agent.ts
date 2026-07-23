@@ -1,10 +1,12 @@
 import type {
 	ContextResult,
 	ContextThread,
+	RelatedTicketPointer,
 	SearchContextResult,
 	ThreadResult,
 } from "./context.ts";
-import { extractTicketKeys } from "./entities.ts";
+import { buildCoverage, shouldRecommendFull } from "./coverage.ts";
+import { extractEngineeringEntities, extractTicketKeys } from "./entities.ts";
 import type {
 	EvidencePost,
 	PackedPost,
@@ -14,6 +16,10 @@ import type {
 import { largestTimelineSkip } from "./packing.ts";
 import type { CommandResult, Warning } from "./results.ts";
 import type { MattermostSubject } from "./retrieval.ts";
+import {
+	segmentThreadByTicketProximity,
+	type TicketSegment,
+} from "./ticket-segments.ts";
 
 export interface AgentFile {
 	id: string;
@@ -43,6 +49,7 @@ export interface AgentSkip {
 		posts: number;
 		after?: string;
 		before?: string;
+		reason?: string;
 	};
 }
 
@@ -61,6 +68,44 @@ export interface AgentOmission {
 	files?: string[];
 }
 
+export interface AgentRelatedTicket {
+	key: string;
+	mentions: number;
+	threadId?: string;
+	url?: string;
+	conversation?: string;
+	latestAt?: string;
+	excerpt?: string;
+	sourceThreadId?: string;
+	hydrated: false;
+}
+
+export type AgentAnchorKind =
+	| "root"
+	| "ticket_mention"
+	| "match_hit"
+	| "file"
+	| "multi_ticket"
+	| "codeish"
+	| "latest";
+
+export interface AgentAnchor {
+	kind: AgentAnchorKind;
+	postId: string;
+	at: string;
+	text?: string;
+	matched?: string[];
+	files?: Array<{ id: string; name: string; mimeType?: string }>;
+}
+
+export interface AgentCluster {
+	startPostId: string;
+	endPostId: string;
+	posts: number;
+	reason: TicketSegment["reason"];
+	recommendHydrate?: boolean;
+}
+
 export interface AgentThread {
 	threadId: string;
 	conversation: string;
@@ -71,6 +116,13 @@ export interface AgentThread {
 	recommendFull?: boolean;
 	largestSkip?: number;
 	omittedRatio?: number;
+	role?: "primary" | "secondary";
+	span?: { firstAt: string; lastAt: string; totalPosts: number };
+	anchors?: AgentAnchor[];
+	clusters?: AgentCluster[];
+	relatedTicketsInThread?: string[];
+	ticketDensity?: number;
+	nearestTicketDistance?: number | null;
 	posts: AgentTimelineItem[];
 	/** Prior DM root posts for short threads (not replies of this thread). */
 	surround?: AgentMessageGroup[];
@@ -95,8 +147,7 @@ export type AgentCommandResult =
 	  }
 	| Extract<CommandResult<never>, { success: false }>;
 
-const RECOMMEND_FULL_MIN_OMITTED_RATIO = 0.25;
-const RECOMMEND_FULL_MIN_LARGEST_SKIP = 5;
+const SHORT_MESSAGE_LIMIT = 8;
 
 /** Build the compact agent view from the same validated result used by JSON output. */
 export function projectAgentResult(
@@ -149,10 +200,20 @@ function projectContext(
 	data: ContextResult,
 	warnings: Warning[],
 ): AgentCommandResult {
-	const relatedTickets = relatedTicketsFromThreads(
-		data.threads,
-		data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+	const relatedTickets = projectRelatedTickets(data.relatedTickets);
+	const short = Boolean(data.short);
+	const primaryIndex = pickPrimaryThreadIndex(data.threads);
+	const threads = data.threads.map((thread, index) =>
+		projectContextThread(thread, {
+			short,
+			role: index === primaryIndex ? "primary" : "secondary",
+			subjectTicket:
+				data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+		}),
 	);
+	const messages = short
+		? shortMessagesFromThreads(data.threads, primaryIndex, SHORT_MESSAGE_LIMIT)
+		: undefined;
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
@@ -161,11 +222,31 @@ function projectContext(
 			data.searchCoverageComplete,
 			data.selectedThreadsComplete,
 		),
+		coverage:
+			data.coverage ??
+			buildCoverage({
+				searchCoverageComplete: data.searchCoverageComplete,
+				selectedThreadsComplete: data.selectedThreadsComplete,
+				freshnessMode: data.freshnessMode,
+				freshness: data.freshness,
+				searchedConversations: data.searchedConversations,
+				threads: data.threads,
+				remoteSearch: data.remoteSearch,
+				selection: data.selection ?? {
+					candidateThreads: data.threads.length,
+					returnedThreads: data.threads.length,
+					droppedThin: 0,
+					droppedByBudget: 0,
+					droppedNoMatch: 0,
+				},
+				warnings,
+			}),
 		...(data.remoteSearch.performed || data.remoteSearch.requested
 			? { remoteSearch: data.remoteSearch }
 			: {}),
 		...(relatedTickets.length ? { relatedTickets } : {}),
-		threads: data.threads.map(projectContextThread),
+		...(messages?.length ? { messages } : {}),
+		threads,
 		warnings,
 	};
 }
@@ -219,15 +300,32 @@ function projectThread(
 	};
 }
 
-function projectContextThread(thread: ContextThread): AgentThread {
+function projectContextThread(
+	thread: ContextThread,
+	options: {
+		short: boolean;
+		role: "primary" | "secondary";
+		subjectTicket?: string;
+	},
+): AgentThread {
+	const base = projectPackedThread(
+		thread,
+		thread.conversationAlias,
+		thread.conversationKind,
+		thread.link,
+		{
+			short: options.short,
+			role: options.role,
+			subjectTicket: options.subjectTicket,
+			matchingPostIds: thread.matchingPostIds,
+			segments: thread.segments,
+			ticketDensity: thread.ticketDensity,
+			nearestTicketDistance: thread.nearestTicketDistance,
+		},
+	);
 	return {
-		...projectPackedThread(
-			thread,
-			thread.conversationAlias,
-			thread.conversationKind,
-			thread.link,
-		),
-		...(thread.surround?.length
+		...base,
+		...(thread.surround?.length && !options.short
 			? { surround: groupEvidencePosts(thread.surround) }
 			: {}),
 	};
@@ -238,12 +336,30 @@ function projectPackedThread(
 	conversation: string,
 	kind: "channel" | "direct_message",
 	url: string,
+	options: {
+		short?: boolean;
+		role?: "primary" | "secondary";
+		subjectTicket?: string;
+		matchingPostIds?: readonly string[];
+		segments?: TicketSegment[];
+		ticketDensity?: number;
+		nearestTicketDistance?: number | null;
+	} = {},
 ): AgentThread {
 	const omittedNames = [
 		...new Set(thread.omittedAttachments.map(({ name }) => name)),
 	];
 	const packingHints =
 		thread.omittedPosts > 0 ? packingCompletenessHints(thread) : undefined;
+	const clusters = compactClusters(options.segments);
+	const card = options.short
+		? evidenceCardFields(thread, {
+				role: options.role ?? "primary",
+				subjectTicket: options.subjectTicket,
+				matchingPostIds: options.matchingPostIds ?? [],
+				segments: options.segments,
+			})
+		: undefined;
 	return {
 		threadId: thread.threadId,
 		conversation,
@@ -255,8 +371,219 @@ function projectPackedThread(
 			...(omittedNames.length ? { files: omittedNames } : {}),
 		},
 		...(packingHints ?? {}),
+		...(options.ticketDensity !== undefined
+			? { ticketDensity: options.ticketDensity }
+			: {}),
+		...(options.nearestTicketDistance !== undefined
+			? { nearestTicketDistance: options.nearestTicketDistance }
+			: {}),
+		...(options.role ? { role: options.role } : {}),
+		...(!options.short && clusters?.length ? { clusters } : {}),
+		...(card ?? {}),
 		posts: projectTimeline(thread.timeline),
 	};
+}
+
+function compactClusters(
+	segments: TicketSegment[] | undefined,
+): AgentCluster[] | undefined {
+	if (!segments?.length) return undefined;
+	return segments.map((segment) => ({
+		startPostId: segment.startPostId,
+		endPostId: segment.endPostId,
+		posts: segment.posts,
+		reason: segment.reason,
+		...(segment.recommendHydrate ? { recommendHydrate: true } : {}),
+	}));
+}
+
+function evidenceCardFields(
+	thread: PackedThread,
+	options: {
+		role: "primary" | "secondary";
+		subjectTicket?: string;
+		matchingPostIds: readonly string[];
+		segments?: TicketSegment[];
+	},
+): Pick<
+	AgentThread,
+	"role" | "span" | "anchors" | "clusters" | "relatedTicketsInThread"
+> {
+	const chronological = [...thread.posts].sort(
+		(left, right) =>
+			left.createAt - right.createAt || left.id.localeCompare(right.id),
+	);
+	const first = chronological[0];
+	const last = chronological[chronological.length - 1];
+	const segments =
+		options.segments ??
+		(options.subjectTicket
+			? segmentThreadByTicketProximity(chronological, {
+					subjectTicket: options.subjectTicket,
+					matchingPostIds: options.matchingPostIds,
+				}).segments
+			: []);
+	const relatedTicketsInThread = finalizeRelatedTicketKeys(
+		new Set(chronological.flatMap((post) => extractTicketKeys(post.message))),
+		options.subjectTicket,
+	);
+	return {
+		role: options.role,
+		span: {
+			firstAt: iso(first?.createAt ?? 0),
+			lastAt: iso(last?.createAt ?? 0),
+			totalPosts: thread.totalPosts,
+		},
+		anchors: collectAnchors(chronological, {
+			subjectTicket: options.subjectTicket,
+			matchingPostIds: options.matchingPostIds,
+			rootId: thread.threadId,
+		}),
+		clusters: compactClusters(segments) ?? [],
+		relatedTicketsInThread,
+	};
+}
+
+function collectAnchors(
+	posts: readonly PackedPost[],
+	options: {
+		subjectTicket?: string;
+		matchingPostIds: readonly string[];
+		rootId: string;
+	},
+): AgentAnchor[] {
+	const anchors: AgentAnchor[] = [];
+	const seen = new Set<string>();
+	const push = (anchor: AgentAnchor) => {
+		const key = `${anchor.kind}:${anchor.postId}`;
+		if (seen.has(key)) return;
+		seen.add(key);
+		anchors.push(anchor);
+	};
+	const subject = options.subjectTicket?.toUpperCase();
+	const matchIds = new Set(options.matchingPostIds);
+	for (const [index, post] of posts.entries()) {
+		const keys = extractTicketKeys(post.message);
+		if (index === 0 || post.id === options.rootId) {
+			push({
+				kind: "root",
+				postId: post.id,
+				at: iso(post.createAt),
+				text: post.message.slice(0, 160),
+			});
+		}
+		if (subject && keys.includes(subject)) {
+			push({
+				kind: "ticket_mention",
+				postId: post.id,
+				at: iso(post.createAt),
+				text: post.message.slice(0, 160),
+			});
+		}
+		if (matchIds.has(post.id)) {
+			push({
+				kind: "match_hit",
+				postId: post.id,
+				at: iso(post.createAt),
+				text: post.message.slice(0, 160),
+				matched: subject ? [subject] : keys.slice(0, 3),
+			});
+		}
+		const liveFiles = post.attachments.filter((file) => !file.deleteAt);
+		if (liveFiles.length) {
+			push({
+				kind: "file",
+				postId: post.id,
+				at: iso(post.createAt),
+				files: liveFiles.map((file) => ({
+					id: file.id,
+					name: file.name,
+					...(file.mimeType ? { mimeType: file.mimeType } : {}),
+				})),
+			});
+		}
+		if (keys.length >= 2) {
+			push({
+				kind: "multi_ticket",
+				postId: post.id,
+				at: iso(post.createAt),
+				text: post.message.slice(0, 160),
+				matched: keys,
+			});
+		}
+		const entities = extractEngineeringEntities(post.message);
+		if (
+			/```/.test(post.message) ||
+			entities.some((entity) =>
+				["file_path", "symbol", "error_code"].includes(entity.kind),
+			)
+		) {
+			push({
+				kind: "codeish",
+				postId: post.id,
+				at: iso(post.createAt),
+				text: post.message.slice(0, 160),
+			});
+		}
+	}
+	const latest = posts[posts.length - 1];
+	if (latest) {
+		push({
+			kind: "latest",
+			postId: latest.id,
+			at: iso(latest.createAt),
+			text: latest.message.slice(0, 160),
+		});
+	}
+	return anchors;
+}
+
+function shortMessagesFromThreads(
+	threads: readonly ContextThread[],
+	primaryIndex: number,
+	limit: number,
+): AgentMessage[] {
+	const messages: AgentMessage[] = [];
+	const order = [
+		primaryIndex,
+		...threads.map((_, index) => index).filter((index) => index !== primaryIndex),
+	];
+	for (const index of order) {
+		const thread = threads[index];
+		if (!thread) continue;
+		for (const item of thread.timeline) {
+			if (item.kind !== "post") continue;
+			messages.push(projectMessage(item.post));
+			if (messages.length >= limit) return messages;
+		}
+	}
+	return messages;
+}
+
+/** Prefer substantive / deeper threads over thin announce stubs for `role: primary`. */
+function pickPrimaryThreadIndex(threads: readonly ContextThread[]): number {
+	if (threads.length <= 1) return 0;
+	let bestIndex = 0;
+	let bestScore = Number.NEGATIVE_INFINITY;
+	for (const [index, thread] of threads.entries()) {
+		const thin =
+			thread.reasons.includes("thin_thread") ||
+			thread.reasons.includes("multi_ticket_root");
+		const substantive = thread.reasons.includes("substantive_thread_depth")
+			? 20
+			: 0;
+		const score =
+			(thin ? -100 : 0) +
+			substantive +
+			thread.totalPosts +
+			Math.round((thread.ticketDensity ?? 0) * 5) -
+			thread.omittedPosts * 0.01;
+		if (score > bestScore) {
+			bestScore = score;
+			bestIndex = index;
+		}
+	}
+	return bestIndex;
 }
 
 function packingCompletenessHints(thread: PackedThread): {
@@ -270,42 +597,45 @@ function packingCompletenessHints(thread: PackedThread): {
 			? Math.round((thread.omittedPosts / thread.totalPosts) * 100) / 100
 			: 0;
 	return {
-		recommendFull:
-			omittedRatio >= RECOMMEND_FULL_MIN_OMITTED_RATIO ||
-			largestSkip >= RECOMMEND_FULL_MIN_LARGEST_SKIP,
+		recommendFull: shouldRecommendFull(thread),
 		largestSkip,
 		omittedRatio,
 	};
 }
 
-function relatedTicketsFromThreads(
-	threads: readonly ContextThread[],
-	subjectTicket?: string,
-): string[] {
-	const keys = new Set<string>();
-	for (const thread of threads) {
-		for (const post of thread.posts) {
-			for (const key of extractTicketKeys(post.message)) keys.add(key);
-		}
-		for (const post of thread.surround ?? []) {
-			for (const key of extractTicketKeys(post.message)) keys.add(key);
-		}
-	}
-	return finalizeRelatedTickets(keys, subjectTicket);
+function projectRelatedTickets(
+	pointers: readonly RelatedTicketPointer[] | undefined,
+): AgentRelatedTicket[] {
+	if (!pointers?.length) return [];
+	return pointers.map((pointer) => ({
+		key: pointer.key,
+		mentions: pointer.mentions,
+		...(pointer.threadId ? { threadId: pointer.threadId } : {}),
+		...(pointer.url ? { url: pointer.url } : {}),
+		...(pointer.conversation ? { conversation: pointer.conversation } : {}),
+		...(pointer.latestAt !== undefined
+			? { latestAt: iso(pointer.latestAt) }
+			: {}),
+		...(pointer.excerpt ? { excerpt: pointer.excerpt } : {}),
+		...(pointer.sourceThreadId
+			? { sourceThreadId: pointer.sourceThreadId }
+			: {}),
+		hydrated: false,
+	}));
 }
 
 function relatedTicketsFromPosts(
 	posts: readonly EvidencePost[],
 	subjectTicket?: string,
-): string[] {
-	const keys = new Set<string>();
-	for (const post of posts) {
-		for (const key of extractTicketKeys(post.message)) keys.add(key);
-	}
-	return finalizeRelatedTickets(keys, subjectTicket);
+): AgentRelatedTicket[] {
+	const keys = finalizeRelatedTicketKeys(
+		new Set(posts.flatMap((post) => extractTicketKeys(post.message))),
+		subjectTicket,
+	);
+	return keys.map((key) => ({ key, mentions: 1, hydrated: false as const }));
 }
 
-function finalizeRelatedTickets(
+function finalizeRelatedTicketKeys(
 	keys: ReadonlySet<string>,
 	subjectTicket?: string,
 ): string[] {

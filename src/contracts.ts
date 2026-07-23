@@ -142,6 +142,9 @@ const packedThreadSchema = z.object({
 					posts: z.number().int().positive(),
 					after: z.string().optional(),
 					before: z.string().optional(),
+					reason: z
+						.enum(["outside_ticket_window", "omitted_gap", "budget"])
+						.optional(),
 				}),
 			}),
 		]),
@@ -446,6 +449,25 @@ const contextThreadSchema = packedThreadSchema.extend({
 	matchingPostIds: z.array(z.string()),
 	latestActivityAt: z.number().int().nonnegative(),
 	link: z.string(),
+	ticketDensity: z.number().nonnegative().optional(),
+	nearestTicketDistance: z.number().int().nonnegative().nullable().optional(),
+	rootAnchoredFocused: z.boolean().optional(),
+	segments: z
+		.array(
+			z.object({
+				startPostId: z.string(),
+				endPostId: z.string(),
+				posts: z.number().int().positive(),
+				reason: z.enum([
+					"ticket_window",
+					"match_window",
+					"off_topic_gap",
+					"omitted_gap",
+				]),
+				recommendHydrate: z.boolean().optional(),
+			}),
+		)
+		.optional(),
 	surround: z
 		.array(
 			z.object({
@@ -480,6 +502,68 @@ const remoteSearchEvidenceSchema = z.object({
 	candidateThreads: z.number().int().nonnegative(),
 	failures: z.number().int().nonnegative(),
 });
+const selectionEvidenceSchema = z.object({
+	candidateThreads: z.number().int().nonnegative(),
+	returnedThreads: z.number().int().nonnegative(),
+	droppedThin: z.number().int().nonnegative(),
+	droppedByBudget: z.number().int().nonnegative(),
+	droppedNoMatch: z.number().int().nonnegative(),
+});
+const relatedTicketPointerSchema = z.object({
+	key: z.string(),
+	mentions: z.number().int().positive(),
+	threadId: z.string().optional(),
+	url: z.string().optional(),
+	conversation: z.string().optional(),
+	latestAt: z.number().int().nonnegative().optional(),
+	excerpt: z.string().optional(),
+	sourceThreadId: z.string().optional(),
+	hydrated: z.literal(false),
+});
+const coverageEvidenceSchema = z.object({
+	trust: z.enum(["high", "partial", "low"]),
+	search: z.object({
+		complete: z.boolean(),
+		conversationsSearched: z.number().int().nonnegative(),
+		conversationsWithHits: z.number().int().nonnegative(),
+		cutoffBoundedConversations: z.number().int().nonnegative(),
+		deadlineHit: z.boolean(),
+	}),
+	freshness: z.object({
+		mode: z.enum(["local", "network", "forced"]),
+		staleRouted: z.number().int().nonnegative(),
+		freshened: z.number().int().nonnegative(),
+		localFallback: z.boolean(),
+	}),
+	remoteSearch: z.object({
+		performed: z.boolean(),
+		reason: z
+			.enum([
+				"explicit",
+				"incomplete_local_coverage",
+				"stale_local_index",
+				"local_already_sufficient",
+			])
+			.nullable(),
+		probes: z.number().int().nonnegative(),
+		acceptedPosts: z.number().int().nonnegative(),
+		candidateThreads: z.number().int().nonnegative(),
+		failures: z.number().int().nonnegative(),
+	}),
+	selection: z.object({
+		candidateThreads: z.number().int().nonnegative(),
+		returnedThreads: z.number().int().nonnegative(),
+		droppedThin: z.number().int().nonnegative(),
+		droppedByBudget: z.number().int().nonnegative(),
+	}),
+	packing: z.object({
+		threadsComplete: z.boolean(),
+		omittedPosts: z.number().int().nonnegative(),
+		largestSkip: z.number().int().nonnegative(),
+		recommendFullThreadIds: z.array(z.string()),
+	}),
+	gaps: z.array(z.string()),
+});
 const contextDataSchema = z.object({
 	subject: subjectSchema,
 	probes: z.array(probeSchema),
@@ -499,9 +583,13 @@ const contextDataSchema = z.object({
 	searchedConversations: z.array(searchedConversationSchema),
 	explicitChannelPolicy: z.literal("restrict"),
 	widening: z.object({ allowed: z.boolean(), performed: z.boolean() }),
+	selection: selectionEvidenceSchema.optional(),
+	relatedTickets: z.array(relatedTicketPointerSchema).optional(),
+	coverage: coverageEvidenceSchema.optional(),
 	threads: z.array(contextThreadSchema),
 	budget: budgetSchema.extend({ maxThreads: z.number().int().positive() }),
 	warnings: z.array(warningSchema),
+	short: z.boolean().optional(),
 });
 const threadDataSchema = z.object({
 	subject: subjectSchema,

@@ -1,5 +1,5 @@
-import { extractTicketKeys } from "./entities.ts";
 import type { MattermostConfig, SearchConcepts } from "./config.ts";
+import { extractTicketKeys } from "./entities.ts";
 import { ConfigError } from "./errors.ts";
 import {
 	expandQueryTerms,
@@ -32,6 +32,7 @@ import {
 	normalizeSearchText,
 	STOP_WORDS,
 } from "./text.ts";
+import { segmentThreadByTicketProximity } from "./ticket-segments.ts";
 
 const POST_ID_PATTERN = /^[a-z0-9]{26}$/;
 const TICKET_PATTERN = /^[A-Z][A-Z0-9]+-\d+$/i;
@@ -48,6 +49,8 @@ const MIN_SUBSTANTIVE_POST_TOKENS = 6;
 const MIN_SUBSTANTIVE_THREAD_POSTS = 3;
 const MAX_SUBSTANTIVE_THREAD_DEPTH = 5;
 const NEAR_TOKEN_WINDOW = 8;
+const LOW_TICKET_DENSITY_THRESHOLD = 0.15;
+const LOW_TICKET_DENSITY_MIN_POSTS = 20;
 export const RRF_RANK_CONSTANT = 60;
 
 export type RankFusionSource =
@@ -234,6 +237,9 @@ export interface ThreadRankingEvidence {
 	threadDepthScore?: number;
 	thinTicketStub?: boolean;
 	multiTicketRoot?: boolean;
+	ticketDensity?: number;
+	nearestTicketDistance?: number | null;
+	rootAnchoredFocused?: boolean;
 	latestRelevantMatchAt: number | null;
 }
 
@@ -1400,6 +1406,33 @@ function candidateFromGroup(
 	if (conversation.priority) reasons.push("conversation_priority");
 	reasons.push("latest_activity");
 	const demoteRootTicket = thinTicketStub || multiTicketRoot;
+	const ticketDensity = rankingEvidence.ticketDensity ?? 0;
+	const rootAnchoredFocused = Boolean(rankingEvidence.rootAnchoredFocused);
+	const substantiveDepth = rankingEvidence.threadDepthScore ?? 0;
+	// Low density only hurts multi-topic threads. Root-anchored support chains
+	// (ticket only in the announce) are the opposite of off-topic.
+	const densityPenalty =
+		subject.kind === "ticket" &&
+		!demoteRootTicket &&
+		!rootAnchoredFocused &&
+		(rankingEvidence.threadPostCount ?? 0) >= LOW_TICKET_DENSITY_MIN_POSTS &&
+		ticketDensity < LOW_TICKET_DENSITY_THRESHOLD
+			? -2
+			: 0;
+	// Cap density boost by substantive depth so a 2-post announce with
+	// density=1 cannot outrank a long discussion thread.
+	const ticketProximityBoost =
+		subject.kind === "ticket" && !demoteRootTicket
+			? Math.min(
+					Math.round(ticketDensity * 10),
+					Math.max(1, substantiveDepth + 1),
+				) +
+				(rootAnchoredFocused ? 2 : 0) +
+				(rootHasTicket || rankingEvidence.nearestTicketDistance === 0
+					? 1
+					: 0) -
+				((rankingEvidence.nearestTicketDistance ?? 0) > 20 ? 1 : 0)
+			: 0;
 	return {
 		threadId,
 		rootPostId: root.id,
@@ -1423,8 +1456,7 @@ function candidateFromGroup(
 			ticketInRoot: rootHasTicket && !demoteRootTicket ? 1 : 0,
 			ticketInReply:
 				replyHasTicket || (rootHasTicket && demoteRootTicket) ? 1 : 0,
-			subjectInRoot:
-				rankingEvidence.subjectInRoot && !demoteRootTicket ? 1 : 0,
+			subjectInRoot: rankingEvidence.subjectInRoot && !demoteRootTicket ? 1 : 0,
 			exactPhraseInRoot: demoteRootTicket
 				? 0
 				: rankingEvidence.exactPhraseInRootCount,
@@ -1438,11 +1470,14 @@ function candidateFromGroup(
 			structuredMatchCount: structuredMatches.length,
 			routing: routeWeight(conversation),
 			// Negative depth demotes thin stubs / bulletins before fusion/recency.
+			// Ticket proximity folds into depth so long low-density threads lose.
 			threadDepth: demoteRootTicket
 				? multiTicketRoot
 					? -2
 					: -1
-				: (rankingEvidence.threadDepthScore ?? 0),
+				: (rankingEvidence.threadDepthScore ?? 0) +
+					ticketProximityBoost +
+					densityPenalty,
 			fusion: fusionScore,
 			matchedTermCount: rankingEvidence.matchedTermCount,
 			exactPhraseInReply:
@@ -1598,6 +1633,12 @@ export function evaluateThreadEvidence(
 		rootPostId,
 		ticketKey,
 	);
+	const ticketProximity = ticketKey
+		? segmentThreadByTicketProximity(thread, {
+				subjectTicket: ticketKey,
+				matchingPostIds: matches.map(({ postId }) => postId),
+			})
+		: undefined;
 	const subjectPhrases =
 		subject.kind === "text"
 			? probes[0]?.phrases.length
@@ -1654,6 +1695,13 @@ export function evaluateThreadEvidence(
 		threadDepthScore,
 		thinTicketStub,
 		multiTicketRoot,
+		...(ticketProximity
+			? {
+					ticketDensity: ticketProximity.ticketDensity,
+					nearestTicketDistance: ticketProximity.nearestTicketDistance,
+					rootAnchoredFocused: ticketProximity.rootAnchoredFocused,
+				}
+			: {}),
 		latestRelevantMatchAt: relevantPosts.length
 			? Math.max(
 					...relevantPosts.map((post) =>

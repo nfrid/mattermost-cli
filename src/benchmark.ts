@@ -424,6 +424,7 @@ function fixtureConfig(fixture: RetrievalBenchmarkFixture): MattermostConfig {
 			defaultPerThreadCharacters: 600,
 			defaultMaxThreads: 5,
 			matchNeighborhoodRadius: 2,
+			ticketNeighborhoodRadius: 8,
 			clusterMergeGap: 2,
 			conversationSurroundRoots: 5,
 			shortThreadMaxReplies: 2,

@@ -75,6 +75,7 @@ interface CommandOptions {
 	full?: boolean;
 	around?: string;
 	includeAutomation?: boolean;
+	short?: boolean;
 	limit?: number;
 }
 
@@ -240,6 +241,10 @@ function createProgram(
 			"--include-automation",
 			"include unreplied bot/automation root posts in results",
 		)
+		.option(
+			"--short",
+			"pack evidence cards with ticket windows and anchors instead of dense timelines",
+		)
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (subject?: string) => {
 			await run("context", program.opts<GlobalOptions>(), {
@@ -403,6 +408,7 @@ async function executeCommand(
 						remoteSearch: commandOptions.remoteSearch,
 						noWiden: commandOptions.widen === false,
 						includeAutomation: commandOptions.includeAutomation,
+						short: commandOptions.short,
 					},
 					dependencies,
 				);

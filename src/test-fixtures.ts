@@ -24,6 +24,7 @@ export function configFixture(
 			defaultPerThreadCharacters: 500,
 			defaultMaxThreads: 3,
 			matchNeighborhoodRadius: 2,
+			ticketNeighborhoodRadius: 8,
 			clusterMergeGap: 2,
 			conversationSurroundRoots: 5,
 			shortThreadMaxReplies: 2,
