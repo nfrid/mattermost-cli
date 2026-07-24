@@ -5,7 +5,7 @@ import type {
 	SearchContextResult,
 	ThreadResult,
 } from "../context/index.ts";
-import { buildCoverage, shouldRecommendFull } from "../evidence/coverage.ts";
+import { buildEvidence, shouldRecommendFull } from "../evidence/evidence.ts";
 import type {
 	EvidencePost,
 	PackedPost,
@@ -26,7 +26,11 @@ import {
 	POINTER_EXCERPT_LIMIT,
 	truncateExcerpt,
 } from "../search/match-utils.ts";
-import type { CommandResult, Warning } from "../shared/command-result.ts";
+import type {
+	CommandResult,
+	SCHEMA_VERSION,
+	Warning,
+} from "../shared/command-result.ts";
 import { isoTimestamp, subjectValue } from "./shared.ts";
 
 export interface AgentFile {
@@ -65,9 +69,6 @@ export type AgentTimelineItem = AgentMessageGroup | AgentSkip;
 
 export interface AgentStatus {
 	freshness: "local" | "network";
-	searchComplete: boolean;
-	/** True when every returned thread has no packing omissions. */
-	threadsComplete: boolean;
 }
 
 export interface AgentOmission {
@@ -148,7 +149,7 @@ export interface AgentCandidate {
 export type AgentCommandResult =
 	| {
 			command: string;
-			schemaVersion: 1;
+			schemaVersion: typeof SCHEMA_VERSION;
 			success: true;
 			warnings: Warning[];
 			[key: string]: unknown;
@@ -204,7 +205,11 @@ export function projectAgentResult(
 }
 
 function projectContext(
-	envelope: { command: string; schemaVersion: 1; success: true },
+	envelope: {
+		command: string;
+		schemaVersion: typeof SCHEMA_VERSION;
+		success: true;
+	},
 	data: ContextResult,
 	warnings: Warning[],
 ): AgentCommandResult {
@@ -225,14 +230,10 @@ function projectContext(
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
-		status: status(
-			data.freshnessMode,
-			data.searchCoverageComplete,
-			data.selectedThreadsComplete,
-		),
-		coverage:
-			data.coverage ??
-			buildCoverage({
+		status: status(data.freshnessMode),
+		evidence:
+			data.evidence ??
+			buildEvidence({
 				searchCoverageComplete: data.searchCoverageComplete,
 				selectedThreadsComplete: data.selectedThreadsComplete,
 				freshnessMode: data.freshnessMode,
@@ -246,6 +247,7 @@ function projectContext(
 					droppedThin: 0,
 					droppedByBudget: 0,
 					droppedNoMatch: 0,
+					droppedCandidates: [],
 				},
 				warnings,
 			}),
@@ -260,14 +262,18 @@ function projectContext(
 }
 
 function projectSearch(
-	envelope: { command: string; schemaVersion: 1; success: true },
+	envelope: {
+		command: string;
+		schemaVersion: typeof SCHEMA_VERSION;
+		success: true;
+	},
 	data: SearchContextResult,
 	warnings: Warning[],
 ): AgentCommandResult {
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
-		status: status(data.freshnessMode, data.searchCoverageComplete, false),
+		status: status(data.freshnessMode),
 		candidates: data.candidates.map(
 			(candidate): AgentCandidate => ({
 				threadId: candidate.threadId,
@@ -283,12 +289,14 @@ function projectSearch(
 }
 
 function projectThread(
-	envelope: { command: string; schemaVersion: 1; success: true },
+	envelope: {
+		command: string;
+		schemaVersion: typeof SCHEMA_VERSION;
+		success: true;
+	},
 	data: ThreadResult,
 	warnings: Warning[],
 ): AgentCommandResult {
-	const packingComplete =
-		data.thread.omittedPosts === 0 && data.thread.totalOmittedAttachments === 0;
 	const relatedTickets = relatedTicketsFromPosts(
 		data.thread.posts,
 		data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
@@ -296,7 +304,7 @@ function projectThread(
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
-		status: status(data.freshnessMode, true, packingComplete),
+		status: status(data.freshnessMode),
 		...(relatedTickets.length ? { relatedTickets } : {}),
 		thread: projectPackedThread(
 			data.thread,
@@ -758,15 +766,9 @@ function projectMessage(post: {
 	};
 }
 
-function status(
-	freshnessMode: "local" | "network" | "forced",
-	searchComplete: boolean,
-	threadsComplete: boolean,
-): AgentStatus {
+function status(freshnessMode: "local" | "network" | "forced"): AgentStatus {
 	return {
 		freshness: freshnessMode === "local" ? "local" : "network",
-		searchComplete,
-		threadsComplete,
 	};
 }
 

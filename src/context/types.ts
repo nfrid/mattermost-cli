@@ -1,11 +1,12 @@
 import type { MattermostConfig } from "../config/config.ts";
-import type { CoverageEvidence } from "../evidence/coverage.ts";
+import type { EvidenceStatus } from "../evidence/evidence.ts";
 import type { EvidencePost, PackedThread } from "../evidence/packing.ts";
 import type { TicketSegment } from "../evidence/ticket-segments.ts";
 import type { MattermostClient } from "../mattermost/client.ts";
 import type {
 	AgentProbeInput,
 	MattermostSubject,
+	RankingReason,
 	RetrievalProbe,
 	RoutedConversation,
 	RoutingResult,
@@ -147,6 +148,21 @@ export interface SelectionEvidence {
 	droppedThin: number;
 	droppedByBudget: number;
 	droppedNoMatch: number;
+	droppedCandidates: DroppedCandidate[];
+}
+
+export type DroppedCandidateReason = "budget" | "no_match" | "thin";
+
+/** Ranked candidate omitted from the context packet (no extra hydrate). */
+export interface DroppedCandidate {
+	threadId: string;
+	url: string;
+	conversationId: string;
+	conversationAlias: string;
+	conversationKind: ConversationRecord["kind"];
+	dropReason: DroppedCandidateReason;
+	reasons: RankingReason[];
+	excerpt?: string;
 }
 
 /** One-hop related ticket pointer (not a full nested context). */
@@ -184,7 +200,7 @@ export interface ContextResult {
 	widening: { allowed: boolean; performed: boolean };
 	selection: SelectionEvidence;
 	relatedTickets: RelatedTicketPointer[];
-	coverage: CoverageEvidence;
+	evidence: EvidenceStatus;
 	threads: ContextThread[];
 	budget: {
 		measurement: "unicode_code_points_in_rendered_post";

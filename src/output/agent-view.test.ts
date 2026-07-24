@@ -34,24 +34,22 @@ describe("agent projection", () => {
 
 		expect(result).toEqual({
 			command: "context",
-			schemaVersion: 1,
+			schemaVersion: 2,
 			success: true,
 			subject: "payment evidence",
 			status: {
 				freshness: "local",
-				searchComplete: true,
-				threadsComplete: true,
 			},
-			coverage: expect.objectContaining({
-				trust: "high",
-				search: expect.objectContaining({
-					complete: true,
-					conversationsSearched: 1,
-					conversationsWithHits: 1,
-				}),
+			evidence: expect.objectContaining({
+				adequacy: "usable",
+				currency: "local_only",
+				completeness: {
+					selectedThreads: "complete",
+					indexHistory: "full",
+				},
 				packing: expect.objectContaining({
-					threadsComplete: true,
 					omittedPosts: 0,
+					recommendFullThreadIds: [],
 				}),
 			}),
 			threads: [
@@ -119,8 +117,6 @@ describe("agent projection", () => {
 			subject: ROOT,
 			status: {
 				freshness: "local",
-				searchComplete: true,
-				threadsComplete: true,
 			},
 			thread: {
 				threadId: ROOT,
@@ -161,8 +157,6 @@ describe("agent projection", () => {
 			subject: "payment evidence",
 			status: {
 				freshness: "local",
-				searchComplete: false,
-				threadsComplete: false,
 			},
 			candidates: [
 				{
@@ -227,11 +221,20 @@ describe("agent projection", () => {
 		expect(result).toMatchObject({
 			command: "context",
 			subject: "TECHSUPP-109",
-			coverage: expect.objectContaining({
-				trust: expect.stringMatching(/partial|low/),
+			evidence: expect.objectContaining({
+				adequacy: "usable",
+				completeness: expect.objectContaining({
+					selectedThreads: "truncated",
+				}),
 				packing: expect.objectContaining({
 					recommendFullThreadIds: expect.arrayContaining([longRoot]),
 				}),
+				next: expect.arrayContaining([
+					expect.objectContaining({
+						action: "thread_full",
+						threadId: longRoot,
+					}),
+				]),
 			}),
 			relatedTickets: [
 				expect.objectContaining({

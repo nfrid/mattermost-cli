@@ -121,7 +121,14 @@ export function segmentThreadByTicketProximity(
 			coverage[index] = "ticket";
 		}
 	} else {
-		paintWindows(coverage, ticketHitIndexes, ticketRadius, "ticket");
+		// Multiple subject-ticket hits: keep the decision middle between them
+		// (firstHit-radius … lastHit+radius) instead of leaving an omitted_gap
+		// that packing refuses to fill. Single-hit keeps a radius island.
+		if (ticketHitIndexes.length >= 2) {
+			paintContinuousSpan(coverage, ticketHitIndexes, ticketRadius, "ticket");
+		} else {
+			paintWindows(coverage, ticketHitIndexes, ticketRadius, "ticket");
+		}
 		paintWindows(coverage, matchHitIndexes, matchRadius, "match");
 	}
 
@@ -204,11 +211,35 @@ function paintWindows(
 	for (const hit of hitIndexes) {
 		const start = Math.max(0, hit - radius);
 		const end = Math.min(coverage.length - 1, hit + radius);
-		for (let index = start; index <= end; index += 1) {
-			if (coverage[index] === "ticket") continue;
-			coverage[index] =
-				kind === "ticket" ? "ticket" : (coverage[index] ?? "match");
-		}
+		paintRange(coverage, start, end, kind);
+	}
+}
+
+/** Paint one inclusive span from the earliest hit−radius through latest hit+radius. */
+function paintContinuousSpan(
+	coverage: Array<"ticket" | "match" | undefined>,
+	hitIndexes: readonly number[],
+	radius: number,
+	kind: "ticket" | "match",
+): void {
+	if (!hitIndexes.length) return;
+	const first = Math.min(...hitIndexes);
+	const last = Math.max(...hitIndexes);
+	const start = Math.max(0, first - radius);
+	const end = Math.min(coverage.length - 1, last + radius);
+	paintRange(coverage, start, end, kind);
+}
+
+function paintRange(
+	coverage: Array<"ticket" | "match" | undefined>,
+	start: number,
+	end: number,
+	kind: "ticket" | "match",
+): void {
+	for (let index = start; index <= end; index += 1) {
+		if (coverage[index] === "ticket") continue;
+		coverage[index] =
+			kind === "ticket" ? "ticket" : (coverage[index] ?? "match");
 	}
 }
 

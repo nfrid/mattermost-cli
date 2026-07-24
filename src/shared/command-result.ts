@@ -1,7 +1,7 @@
 import { CommanderError } from "commander";
 import { AppError, type ErrorSource } from "./errors.ts";
 
-export const SCHEMA_VERSION = 1 as const;
+export const SCHEMA_VERSION = 2 as const;
 
 export interface Warning {
 	kind: string;

@@ -181,14 +181,25 @@ function formatContext(data: ContextResult): string {
 						data.remoteSearch?.requested ? "unavailable" : "not used",
 					),
 		),
-		...(data.coverage
+		...(data.evidence
 			? [
 					joinParts([
-						formatField("Coverage trust", styles.accent(data.coverage.trust)),
+						formatField("Evidence", styles.accent(data.evidence.adequacy)),
+						formatField("currency", styles.accent(data.evidence.currency)),
 						formatField(
-							"gaps",
-							data.coverage.gaps.length
-								? styles.warning(data.coverage.gaps.join(", "))
+							"threads",
+							styles.accent(data.evidence.completeness.selectedThreads),
+						),
+						formatField(
+							"index",
+							styles.accent(data.evidence.completeness.indexHistory),
+						),
+						formatField(
+							"next",
+							data.evidence.next.length
+								? styles.warning(
+										data.evidence.next.map(({ action }) => action).join(", "),
+									)
 								: styles.hint("none"),
 						),
 					]),

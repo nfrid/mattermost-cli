@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { segmentThreadByTicketProximity } from "./ticket-segments.ts";
+import {
+	segmentThreadByTicketProximity,
+	ticketWindowPostIds,
+} from "./ticket-segments.ts";
 
 describe("ticket proximity segmentation", () => {
-	test("builds ticket windows and marks large middle gaps as omitted_gap", () => {
+	test("bridges the span between multiple subject-ticket hits", () => {
 		const posts = [
+			{ id: "lead0", message: "unrelated kickoff" },
+			{ id: "lead1", message: "still unrelated" },
 			{ id: "p0", message: "BTB-2112 kickoff" },
 			...Array.from({ length: 5 }, (_, index) => ({
 				id: `a${index}`,
@@ -18,27 +23,76 @@ describe("ticket proximity segmentation", () => {
 				id: `b${index}`,
 				message: "closing notes",
 			})),
+			{ id: "tail0", message: "later unrelated" },
 		];
 		const metrics = segmentThreadByTicketProximity(posts, {
 			subjectTicket: "BTB-2112",
-			ticketRadius: 2,
+			// Radius 0 isolates the continuous first→last bridge from edge expansion.
+			ticketRadius: 0,
 			matchRadius: 1,
 			clusterMergeGap: 1,
 			omittedGapHydrateThreshold: 5,
 		});
-		expect(metrics.ticketInRoot).toBe(true);
+		expect(metrics.ticketInRoot).toBe(false);
 		expect(metrics.rootAnchoredFocused).toBe(false);
 		expect(metrics.ticketHitPostIds).toEqual(["p0", "p1"]);
-		expect(metrics.ticketDensity).toBeGreaterThan(0);
 		expect(
-			metrics.segments.some(
-				(segment) =>
-					segment.reason === "omitted_gap" && segment.recommendHydrate,
-			),
-		).toBe(true);
-		expect(
-			metrics.segments.some((segment) => segment.reason === "ticket_window"),
-		).toBe(true);
+			metrics.segments.some((segment) => segment.reason === "omitted_gap"),
+		).toBe(false);
+		expect(metrics.segments).toEqual([
+			expect.objectContaining({
+				reason: "off_topic_gap",
+				startPostId: "lead0",
+				endPostId: "lead1",
+			}),
+			expect.objectContaining({
+				reason: "ticket_window",
+				startPostId: "p0",
+				endPostId: "p1",
+			}),
+			expect.objectContaining({
+				reason: "off_topic_gap",
+				startPostId: "b0",
+				endPostId: "tail0",
+			}),
+		]);
+		const windowIds = ticketWindowPostIds(posts, {
+			subjectTicket: "BTB-2112",
+			ticketRadius: 0,
+		});
+		expect(windowIds.has("g5")).toBe(true);
+		expect(windowIds.has("lead0")).toBe(false);
+		expect(windowIds.has("tail0")).toBe(false);
+	});
+
+	test("keeps a radius island for a single subject-ticket hit", () => {
+		const posts = Array.from({ length: 15 }, (_, index) => ({
+			id: `p${index}`,
+			message: index === 7 ? "BTB-99 only hit" : "noise",
+		}));
+		const metrics = segmentThreadByTicketProximity(posts, {
+			subjectTicket: "BTB-99",
+			ticketRadius: 2,
+			matchRadius: 1,
+			clusterMergeGap: 0,
+		});
+		expect(metrics.ticketHitPostIds).toEqual(["p7"]);
+		expect(metrics.segments).toEqual([
+			expect.objectContaining({
+				reason: "off_topic_gap",
+				posts: 5,
+			}),
+			expect.objectContaining({
+				reason: "ticket_window",
+				startPostId: "p5",
+				endPostId: "p9",
+				posts: 5,
+			}),
+			expect.objectContaining({
+				reason: "off_topic_gap",
+				posts: 5,
+			}),
+		]);
 	});
 
 	test("treats non-ticket match hits with the smaller radius", () => {

@@ -1,7 +1,7 @@
 [
 	{
 		"command": "whoami",
-		"schemaVersion": 1,
+		"schemaVersion": 2,
 		"success": true,
 		"data": {
 			"id": "user-1",
@@ -12,35 +12,35 @@
 	},
 	{
 		"command": "channels",
-		"schemaVersion": 1,
+		"schemaVersion": 2,
 		"success": true,
 		"data": { "channels": [], "directMessages": [] },
 		"warnings": []
 	},
 	{
 		"command": "channels.validate",
-		"schemaVersion": 1,
+		"schemaVersion": 2,
 		"success": true,
 		"data": { "valid": true, "items": [], "configUpdated": false },
 		"warnings": []
 	},
 	{
 		"command": "doctor",
-		"schemaVersion": 1,
+		"schemaVersion": 2,
 		"success": true,
 		"data": { "healthy": true, "checks": [] },
 		"warnings": []
 	},
 	{
 		"command": "sync",
-		"schemaVersion": 1,
+		"schemaVersion": 2,
 		"success": true,
 		"data": { "conversations": [] },
 		"warnings": []
 	},
 	{
 		"command": "search",
-		"schemaVersion": 1,
+		"schemaVersion": 2,
 		"success": true,
 		"data": {
 			"subject": {
@@ -75,7 +75,7 @@
 	},
 	{
 		"command": "context",
-		"schemaVersion": 1,
+		"schemaVersion": 2,
 		"success": true,
 		"data": {
 			"subject": {
@@ -112,7 +112,7 @@
 	},
 	{
 		"command": "thread",
-		"schemaVersion": 1,
+		"schemaVersion": 2,
 		"success": true,
 		"data": {
 			"subject": {
@@ -163,7 +163,7 @@
 	},
 	{
 		"command": "file",
-		"schemaVersion": 1,
+		"schemaVersion": 2,
 		"success": true,
 		"data": {
 			"id": "file-1",
@@ -178,7 +178,7 @@
 	},
 	{
 		"command": "context",
-		"schemaVersion": 1,
+		"schemaVersion": 2,
 		"success": false,
 		"error": {
 			"source": "config",

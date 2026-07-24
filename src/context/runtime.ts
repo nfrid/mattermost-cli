@@ -1,6 +1,6 @@
 import type { MattermostConfig } from "../config/config.ts";
 import { loadMattermostConfig } from "../config/config.ts";
-import { buildCoverage, type CoverageEvidence } from "../evidence/coverage.ts";
+import { buildEvidence } from "../evidence/evidence.ts";
 import {
 	type EvidencePost,
 	type PackedThread,
@@ -114,7 +114,10 @@ import { assertRemoteSearchAllowed, prepareSearch } from "./prepare.ts";
 import { resolveRelatedTicketPointers } from "./related-tickets.ts";
 import { searchRemoteCandidates } from "./remote-search.ts";
 import { withResources } from "./resources.ts";
-import { selectionEvidence } from "./selection.ts";
+import {
+	buildDroppedCandidates,
+	orderCandidatesForThinReserve,
+} from "./selection.ts";
 import {
 	type ContextClient,
 	type ContextDependencies,
@@ -388,17 +391,21 @@ export async function getMattermostContext(
 		let remaining = budgets.maxCharacters;
 		const threads: ContextThread[] = [];
 		const matchedProbeValues = new Set<string>();
+		const noMatchIds = new Set<string>();
+		const seenCandidates = new Map<string, ThreadCandidate>();
 		const selection: SelectionEvidence = {
 			candidateThreads: candidates.length,
 			returnedThreads: 0,
 			droppedThin: 0,
 			droppedByBudget: 0,
 			droppedNoMatch: 0,
+			droppedCandidates: [],
 		};
 		const hydrateCandidates = async (
 			candidateList: readonly ThreadCandidate[],
 		): Promise<void> => {
 			for (const candidate of candidateList) {
+				seenCandidates.set(candidate.threadId, candidate);
 				if (threads.length >= budgets.maxThreads) {
 					selection.droppedByBudget += 1;
 					continue;
@@ -448,6 +455,7 @@ export async function getMattermostContext(
 					!candidate.reasons.includes("explicit_ticket_relationship")
 				) {
 					selection.droppedNoMatch += 1;
+					noMatchIds.add(candidate.threadId);
 					continue;
 				}
 				const currentRanking = reevaluateCandidate(
@@ -512,7 +520,9 @@ export async function getMattermostContext(
 				});
 			}
 		};
-		await hydrateCandidates(candidates);
+		await hydrateCandidates(
+			orderCandidatesForThinReserve(candidates, subject, budgets.maxThreads),
+		);
 		if (!threads.length && fallbackRouting && !performedWidening) {
 			const widened = widenedRouting(all, fallbackRouting);
 			if (widened.conversations.length) {
@@ -650,15 +660,23 @@ export async function getMattermostContext(
 			);
 		selection.candidateThreads = Math.max(
 			selection.candidateThreads,
+			seenCandidates.size,
 			candidates.length,
 		);
 		selection.returnedThreads = threads.length;
 		const selectedIds = new Set(threads.map(({ threadId }) => threadId));
-		selection.droppedThin = candidates.filter(
+		const seenList = [...seenCandidates.values()];
+		selection.droppedThin = seenList.filter(
 			(candidate) =>
 				!selectedIds.has(candidate.threadId) &&
 				candidate.reasons.includes("thin_thread"),
 		).length;
+		selection.droppedCandidates = buildDroppedCandidates({
+			candidates: seenList,
+			selectedIds,
+			noMatchIds,
+			config,
+		});
 		const relatedTickets = resolveRelatedTicketPointers({
 			config,
 			store,
@@ -666,7 +684,7 @@ export async function getMattermostContext(
 			subjectTicket: subject.kind === "ticket" ? subject.ticketKey : undefined,
 			allowlist: new Set(searchedConversations.map(({ id }) => id)),
 		});
-		const coverage = buildCoverage({
+		const evidence = buildEvidence({
 			searchCoverageComplete,
 			selectedThreadsComplete,
 			freshnessMode: input.local ? "local" : input.fresh ? "forced" : "network",
@@ -702,7 +720,7 @@ export async function getMattermostContext(
 			},
 			selection,
 			relatedTickets,
-			coverage,
+			evidence,
 			threads,
 			budget: {
 				measurement: "unicode_code_points_in_rendered_post",

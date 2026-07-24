@@ -203,42 +203,78 @@ describe("thread packing", () => {
 
 	test("prefers subject-ticket windows and labels outside skips", () => {
 		const posts = [
-			evidence("p0", 0, "TECHSUPP-109 announce"),
+			evidence("lead", 0, "unrelated preamble"),
+			evidence("p0", 1, "TECHSUPP-109 announce"),
 			...Array.from({ length: 4 }, (_, index) =>
-				evidence(`n${index}`, index + 1, `near ${index}`),
+				evidence(`n${index}`, index + 2, `near ${index}`),
 			),
 			...Array.from({ length: 12 }, (_, index) =>
-				evidence(`g${index}`, index + 5, `offtopic ${index}`),
+				evidence(`g${index}`, index + 6, `decision middle ${index}`),
 			),
-			evidence("p1", 17, "TECHSUPP-109 thanks"),
-			evidence("p2", 18, "latest ack"),
+			evidence("p1", 18, "TECHSUPP-109 thanks"),
+			evidence("p2", 19, "latest ack"),
 		];
-		const packed = packThread("p0", posts, {
+		const packed = packThread("lead", posts, {
 			subjectTicketKey: "TECHSUPP-109",
 			matchingPostIds: ["p0"],
-			ticketNeighborhoodRadius: 2,
+			ticketNeighborhoodRadius: 0,
 			neighborhoodRadius: 1,
 			clusterMergeGap: 1,
 			structuralAnchors: false,
 			gapFill: true,
-			limit: posts
-				.filter(({ id }) => !id.startsWith("g") || id === "g0")
-				.reduce((sum, post) => sum + renderedPostUnits(post), 0),
+			limit: 50_000,
 		});
 		expect(packed.selectionStrategy).toContain("ticket_mentions");
-		// Middle offtopic posts stay out; edges near the second ticket mention may enter.
-		expect(packed.posts.some(({ id }) => id === "g5")).toBe(false);
+		// Continuous first→last ticket span includes the decision middle.
+		expect(packed.posts.some(({ id }) => id === "g5")).toBe(true);
+		expect(packed.posts.some(({ id }) => id === "lead")).toBe(true);
 		expect(
 			packed.timeline.some(
 				(item) =>
-					item.kind === "skip" &&
-					(item.skip.reason === "outside_ticket_window" ||
-						item.skip.reason === "omitted_gap"),
+					item.kind === "skip" && item.skip.reason === "outside_ticket_window",
 			),
-		).toBe(true);
+		).toBe(false);
+		expect(packed.posts.map(({ id }) => id)).toContain("p0");
+		expect(packed.posts.map(({ id }) => id)).toContain("p1");
 	});
 
-	test("does not gap-fill or densest-pack off-topic chatter on multi-topic threads", () => {
+	test("gap-fills decision middle inside a continuous ticket span under budget", () => {
+		const posts = [
+			evidence("p0", 0, "TECHSUPP-109 start"),
+			...Array.from({ length: 20 }, (_, index) =>
+				evidence(`m${index}`, index + 1, `argument ${index}`),
+			),
+			evidence("p1", 21, "TECHSUPP-109 agreed"),
+		];
+		const unitsFor = (...indexes: number[]) =>
+			indexes.reduce((sum, index) => {
+				const post = posts.at(index);
+				if (!post) throw new Error(`missing post ${index}`);
+				return sum + renderedPostUnits(post);
+			}, 0);
+		const limit = unitsFor(0, 21, 1, 2, 19, 20);
+		const packed = packThread("p0", posts, {
+			subjectTicketKey: "TECHSUPP-109",
+			matchingPostIds: ["p0", "p1"],
+			ticketNeighborhoodRadius: 0,
+			neighborhoodRadius: 1,
+			clusterMergeGap: 0,
+			structuralAnchors: false,
+			gapFill: true,
+			limit,
+		});
+		expect(packed.selectionStrategy).toContain("gap_fill");
+		expect(packed.posts.map(({ id }) => id)).toContain("m0");
+		expect(packed.posts.map(({ id }) => id)).toContain("m19");
+		expect(
+			packed.timeline.some(
+				(item) =>
+					item.kind === "skip" && item.skip.reason === "outside_ticket_window",
+			),
+		).toBe(false);
+	});
+
+	test("does not gap-fill or densest-pack leading off-topic chatter before the first ticket hit", () => {
 		const posts = [
 			evidence("p0", 0, "dark theme?"),
 			...Array.from({ length: 12 }, (_, index) =>
@@ -258,7 +294,7 @@ describe("thread packing", () => {
 			gapFill: true,
 			limit: 50_000,
 		});
-		// Near-ticket edge posts may enter the window; deep offtopic chatter must not.
+		// Near-ticket edge posts may enter the window; deep leading offtopic must not.
 		expect(packed.posts.some(({ id }) => id === "h3")).toBe(false);
 		expect(packed.posts.some(({ id }) => id === "h6")).toBe(false);
 		expect(packed.posts.map(({ id }) => id)).toContain("p1");

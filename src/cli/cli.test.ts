@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import chalk from "chalk";
 import { MattermostStore } from "../store/index.ts";
 import {
 	conversationFixture,
@@ -19,6 +20,12 @@ afterEach(async () => {
 });
 
 describe("CLI output", () => {
+	// Human-output assertions expect plain text; chalk otherwise follows the
+	// parent terminal / FORCE_COLOR and injects ANSI into the same process.
+	beforeEach(() => {
+		chalk.level = 0;
+	});
+
 	test("emits exactly one JSON document for a successful command", async () => {
 		const projectRoot = await projectWithConfig();
 		const stdout = capture();
@@ -34,7 +41,7 @@ describe("CLI output", () => {
 		const document = JSON.parse(stdout.text);
 		expect(document).toMatchObject({
 			command: "channels",
-			schemaVersion: 1,
+			schemaVersion: 2,
 			success: true,
 		});
 		expect(document.data.directMessages).toEqual([
@@ -78,7 +85,7 @@ describe("CLI output", () => {
 		const document = JSON.parse(stdout.text);
 		expect(document).toMatchObject({
 			command: "channels",
-			schemaVersion: 1,
+			schemaVersion: 2,
 			success: true,
 		});
 		expect(stdout.text).toBe(`${JSON.stringify(document, null, 2)}\n`);
@@ -101,7 +108,7 @@ describe("CLI output", () => {
 		expect(stdout.text).toBe(`${JSON.stringify(document)}\n`);
 		expect(document).toMatchObject({
 			command: "channels",
-			schemaVersion: 1,
+			schemaVersion: 2,
 			success: true,
 			channels: expect.any(Array),
 			directMessages: expect.any(Array),
@@ -126,7 +133,7 @@ describe("CLI output", () => {
 		expect(exitCode).toBe(1);
 		expect(JSON.parse(stdout.text)).toMatchObject({
 			command: "channels",
-			schemaVersion: 1,
+			schemaVersion: 2,
 			success: false,
 			error: { source: "config", kind: "config_not_found" },
 		});
@@ -258,7 +265,7 @@ describe("CLI output", () => {
 		const document = JSON.parse(stdout.text);
 		expect(document).toMatchObject({
 			command: "context",
-			schemaVersion: 1,
+			schemaVersion: 2,
 			success: true,
 			data: {
 				explicitChannelPolicy: "restrict",
@@ -277,12 +284,15 @@ describe("CLI output", () => {
 		expect(stderr.text).toBe("");
 
 		const searchOutput = capture();
-		await runCli(["search", "payment timeout", "--channel", "payments"], {
-			projectRoot,
-			env: {},
-			stdout: searchOutput,
-			stderr: capture(),
-		});
+		await runCli(
+			["search", "payment timeout", "--channel", "payments", "--no-color"],
+			{
+				projectRoot,
+				env: {},
+				stdout: searchOutput,
+				stderr: capture(),
+			},
+		);
 		expect(searchOutput.text).toContain(
 			`#payments · https://chat.example.test/_redirect/pl/${rootId} · subject_in_root, exact_phrase, exact_phrase_in_root, all_terms_in_thread, exact_terms_near, rank_fusion, routing_explicit_channel, latest_activity`,
 		);
@@ -328,7 +338,7 @@ describe("CLI output", () => {
 	test("formats the same whoami result for human output", async () => {
 		const projectRoot = await projectWithConfig();
 		const stdout = capture();
-		const exitCode = await runCli(["whoami"], {
+		const exitCode = await runCli(["whoami", "--no-color"], {
 			projectRoot,
 			env: {},
 			stdout,

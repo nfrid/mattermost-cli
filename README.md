@@ -133,7 +133,7 @@ Repeated `--query`, `--repository`, `--scope`, and `--channel` options are suppo
 
 Unreplied bot or automation roots (Mattermost `is_bot`, post `from_bot`/`from_webhook` props, or usernames listed in `suppressAuthors`) are omitted from `context`/`search` unless `--include-automation` is set. Bot roots that already have human replies remain eligible.
 
-For short direct-message threads, `context` may attach prior root posts from the same DM as `surround` so a late ticket link still carries the preceding problem discussion. Bounded packing keeps the root, matching posts, a tight match neighborhood (default radius 2), short high-priority latest posts, optional structural/densest-window anchors, then merges clusters separated by at most `clusterMergeGap` posts and spends leftover budget on the largest internal skip (`gap_fill`). When only one or two candidate threads fit the packet, each receives a larger per-thread share of `defaultMaxCharacters`. Returned packets include an explicit chronological `timeline` with skip markers for omitted spans so consumers can see where evidence was dropped. Agent output adds `recommendFull` / `largestSkip` / `omittedRatio` when posts were omitted, plus top-level `relatedTickets` parsed from selected threads.
+For short direct-message threads, `context` may attach prior root posts from the same DM as `surround` so a late ticket link still carries the preceding problem discussion. Bounded packing keeps the root, matching posts, a tight match neighborhood (default radius 2), short high-priority latest posts, optional structural/densest-window anchors, then merges clusters separated by at most `clusterMergeGap` posts and spends leftover budget on the largest internal skip (`gap_fill`). When a subject ticket is mentioned more than once, packing treats the continuous span from the first hit through the last hit (plus neighborhood radius) as on-topic so decision middles are not labeled `omitted_gap` and refused by gap-fill. When only one or two candidate threads fit the packet, each receives a larger per-thread share of `defaultMaxCharacters`. For ticket subjects, selection reserves the last thread slot for the best thin ticket stub when stronger substantive threads would otherwise crowd it out. Returned packets include an explicit chronological `timeline` with skip markers for omitted spans so consumers can see where evidence was dropped. Agent output adds `recommendFull` / `largestSkip` / `omittedRatio` when posts were omitted, plus top-level `relatedTickets` parsed from selected threads and `evidence.selection.droppedCandidates` for omitted ranked hits.
 
 Local search uses a soft wall-clock deadline and may emit `search_deadline` with partial evidence. Concurrent freshen/sync processes take a database-adjacent lockfile; a waiter that cannot acquire it emits `freshen_lock_busy` and continues with local evidence. SQLite opens with `busy_timeout`, open/migrate retries while another process holds the write lock, and WAL `synchronous=NORMAL`. Context freshen is targeted (ticket-related / matched / capped stale set) rather than refreshing the entire allowlist on every call.
 
@@ -184,22 +184,22 @@ Add `--json` to emit exactly one minified JSON document on stdout. Use `--pretty
 ```json
 {
   "command": "context",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "success": true,
   "data": {},
   "warnings": []
 }
 ```
 
-Failures replace `data` with a stable error containing `source`, `kind`, and `message`. Retrieval contracts include freshness mode/timestamps, `searchCoverageComplete`, `selectedThreadsComplete` for context packets, searched conversations and routing evidence (including unmatched hints), explicit-channel/widening state, deterministic ranking reasons/order, candidate permalinks, budgets, and omission counts. Context packets also expose whether bounded remote search was requested or performed, its trigger, per-probe accepted counts, failures, and `remote_search` selection reasons, plus a compact `coverage` summary (`trust`, search/freshness/remote/selection/packing stats, and machine `gaps[]`), `selection` drop counts, one-hop `relatedTickets` pointers, and per-thread ticket-window fields (`ticketDensity`, `nearestTicketDistance`, `segments`). The legacy `complete` field remains an alias for search coverage in V1.
+Failures replace `data` with a stable error containing `source`, `kind`, and `message`. Retrieval contracts include freshness mode/timestamps, `searchCoverageComplete`, `selectedThreadsComplete` for context packets, searched conversations and routing evidence (including unmatched hints), explicit-channel/widening state, deterministic ranking reasons/order, candidate permalinks, budgets, and omission counts. Context packets also expose whether bounded remote search was requested or performed, its trigger, per-probe accepted counts, failures, and `remote_search` selection reasons, plus an `evidence` summary (`adequacy`, `currency`, `completeness`, actionable `next[]`, selection drop counts / `droppedCandidates[]`, and packing stats), `selection` drop counts, one-hop `relatedTickets` pointers, and per-thread ticket-window fields (`ticketDensity`, `nearestTicketDistance`, `segments`). The legacy `complete` field remains an alias for search coverage.
 
-Use `--agent` for a minified agent-oriented projection of the same validated result. It flattens successful command data into the top-level envelope and, for `context`, `search`, and `thread`, replaces retrieval internals with a normalized subject, completeness status (`status.threadsComplete` means packing has no omitted posts/attachments), ISO message timestamps (`messages[].at` / `editedAt`), consecutive same-author message groups interleaved with `{ "skip": { "posts", "after?", "before?", "reason?" } }` markers (`outside_ticket_window` / `omitted_gap` when ticket-window packing left a gap), permalinks, omission counts, packing hints (`recommendFull` / `largestSkip` / `omittedRatio` when posts were omitted), `coverage`, optional one-hop `relatedTickets` pointers (`hydrated: false`), and attachment `files[].id` / `name` (plus `mimeType` / `size` when known). Optional DM `surround` groups remain available. Pass `--short` on `context` for evidence cards (`anchors` / `clusters` / short top-level `messages`) under a tighter packing budget. Ranking `why` reasons stay in `--json` only; agent ranking order encodes strength. Agents should parse `--agent` JSON rather than treating it as prose. Detailed per-conversation freshness evidence remains available in `--json`; `--agent` retains only aggregate completeness status and relevant warnings. Warnings appear only once at the top level. `--agent` conflicts with `--json` and `--pretty`.
+Use `--agent` for a minified agent-oriented projection of the same validated result. It flattens successful command data into the top-level envelope and, for `context`, `search`, and `thread`, replaces retrieval internals with a normalized subject, slim `status.freshness`, ISO message timestamps (`messages[].at` / `editedAt`), consecutive same-author message groups interleaved with `{ "skip": { "posts", "after?", "before?", "reason?" } }` markers (`outside_ticket_window` / `omitted_gap` when ticket-window packing left a gap), permalinks, omission counts, packing hints (`recommendFull` / `largestSkip` / `omittedRatio` when posts were omitted), `evidence`, optional one-hop `relatedTickets` pointers (`hydrated: false`), and attachment `files[].id` / `name` (plus `mimeType` / `size` when known). Optional DM `surround` groups remain available. Pass `--short` on `context` for evidence cards (`anchors` / `clusters` / short top-level `messages`) under a tighter packing budget. Ranking `why` reasons stay in `--json` only; agent ranking order encodes strength. Agents should parse `--agent` JSON rather than treating it as prose. Detailed per-conversation freshness evidence remains available in `--json`; `--agent` retains aggregate `evidence` status and relevant warnings. Warnings appear only once at the top level. `--agent` conflicts with `--json` and `--pretty`.
 
-Zod schemas and inferred TypeScript types for every command are exported from the package, including `commandResultV1Schema`, command-specific `*ResultV1Schema` values, and `parseCommandResultV1`. Complete synthetic V1 golden documents live in `src/contracts/contracts.v1.fixture.json`.
+Zod schemas and inferred TypeScript types for every command are exported from the package, including `commandResultV1Schema`, command-specific `*ResultV1Schema` values, and `parseCommandResultV1`. Complete synthetic golden documents live in `src/contracts/contracts.v1.fixture.json`.
 
 Schema policy:
 
-- compatible optional/additive fields may retain `schemaVersion: 1`;
+- compatible optional/additive fields may retain the current `schemaVersion`;
 - removing or renaming a field, changing its meaning/type, changing required ordering, or changing error source/kind semantics requires a schema-version increment;
 - human prose is opaque and may change without a schema-version increment.
 
@@ -237,7 +237,7 @@ const data = await getMattermostContext({
 
 contextResultV1Schema.parse({
   command: "context",
-  schemaVersion: 1,
+  schemaVersion: 2,
   success: true,
   data,
   warnings: [],
@@ -252,7 +252,7 @@ src/
   config/        Local config load + validation
   contracts/     V1 Zod schemas and golden fixtures
   context/       Orchestration: prepare, freshen, hydrate, selection, filters
-  evidence/      Packing, ticket segments, coverage trust summary
+  evidence/      Packing, ticket segments, evidence status summary
   mattermost/    Read-only HTTP client (`http.ts` transport + resource methods)
   output/        Human format, `--agent` projection, shared labels
   search/        Subject/probes, routing, lexical retrieval, fusion, ranking
