@@ -1,5 +1,11 @@
 /** SQLite waits this long for a busy lock before failing a statement. */
-export const SQLITE_BUSY_TIMEOUT_MS = 20_000;
+export const SQLITE_BUSY_TIMEOUT_MS = 60_000;
+
+/**
+ * Overall budget for opening/migrating the index while another process holds
+ * the write lock. Covers statement busy_timeout plus short reopen retries.
+ */
+export const SQLITE_OPEN_WAIT_MS = 180_000;
 
 /** Soft wall-clock budget for local (+ automatic remote) search work. */
 const SEARCH_DEADLINE_MS = 45_000;

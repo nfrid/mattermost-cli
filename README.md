@@ -135,7 +135,7 @@ Unreplied bot or automation roots (Mattermost `is_bot`, post `from_bot`/`from_we
 
 For short direct-message threads, `context` may attach prior root posts from the same DM as `surround` so a late ticket link still carries the preceding problem discussion. Bounded packing keeps the root, matching posts, a tight match neighborhood (default radius 2), short high-priority latest posts, optional structural/densest-window anchors, then merges clusters separated by at most `clusterMergeGap` posts and spends leftover budget on the largest internal skip (`gap_fill`). When only one or two candidate threads fit the packet, each receives a larger per-thread share of `defaultMaxCharacters`. Returned packets include an explicit chronological `timeline` with skip markers for omitted spans so consumers can see where evidence was dropped. Agent output adds `recommendFull` / `largestSkip` / `omittedRatio` when posts were omitted, plus top-level `relatedTickets` parsed from selected threads.
 
-Local search uses a soft wall-clock deadline and may emit `search_deadline` with partial evidence. Concurrent freshen/sync processes take a database-adjacent lockfile; a waiter that cannot acquire it emits `freshen_lock_busy` and continues with local evidence. SQLite opens with `busy_timeout` and WAL `synchronous=NORMAL`. Context freshen is targeted (ticket-related / matched / capped stale set) rather than refreshing the entire allowlist on every call.
+Local search uses a soft wall-clock deadline and may emit `search_deadline` with partial evidence. Concurrent freshen/sync processes take a database-adjacent lockfile; a waiter that cannot acquire it emits `freshen_lock_busy` and continues with local evidence. SQLite opens with `busy_timeout`, open/migrate retries while another process holds the write lock, and WAL `synchronous=NORMAL`. Context freshen is targeted (ticket-related / matched / capped stale set) rather than refreshing the entire allowlist on every call.
 
 English and Russian significant terms and stop words are recognized. Russian search is case-insensitive and treats `ё`/`е` equivalently while preserving original messages in output.
 
@@ -268,7 +268,7 @@ Internal modules under those directories are not part of the documented package 
 
 Database migrations run automatically and transactionally whenever a database-using command opens the store. Applied versions are recorded in `schema_migrations`; no manual migration command is required.
 
-SQLite is a disposable retrieval index, not the source of truth. A backup is optional and useful only to avoid another backfill. If `doctor` reports a corrupt, locked, or incompatible index, stop other `mm` processes, optionally copy the database for diagnosis, then rebuild:
+SQLite is a disposable retrieval index, not the source of truth. A backup is optional and useful only to avoid another backfill. Concurrent `mm` processes wait on SQLite locks (`busy_timeout` plus open retries) instead of treating a busy index as corrupt. If `doctor` reports a corrupt or incompatible index — after other `mm` processes have stopped — optionally copy the database for diagnosis, then rebuild:
 
 ```bash
 rm -f .mattermost/mattermost.sqlite3 \

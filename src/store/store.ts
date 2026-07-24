@@ -9,8 +9,11 @@ import type {
 	MattermostUser,
 } from "../mattermost/schemas.ts";
 import type { EngineeringEntityKind } from "../search/extract.ts";
-import { DatabaseError } from "../shared/errors.ts";
-import { SQLITE_BUSY_TIMEOUT_MS } from "../shared/limits.ts";
+import { DatabaseError, isSqliteBusyError } from "../shared/errors.ts";
+import {
+	SQLITE_BUSY_TIMEOUT_MS,
+	SQLITE_OPEN_WAIT_MS,
+} from "../shared/limits.ts";
 import type { StoreHandle } from "./handle.ts";
 import { databaseFilePaths } from "./paths.ts";
 import * as reads from "./reads.ts";
@@ -32,6 +35,10 @@ import * as writes from "./writes.ts";
 
 export interface MattermostStoreOptions {
 	concepts?: SearchConcepts;
+	/** Per-statement SQLite busy wait; defaults to SQLITE_BUSY_TIMEOUT_MS. */
+	busyTimeoutMs?: number;
+	/** Overall open/migrate wait while another process holds the lock. */
+	openWaitMs?: number;
 }
 
 export class MattermostStore implements StoreHandle {
@@ -42,40 +49,59 @@ export class MattermostStore implements StoreHandle {
 		path: string,
 		options: MattermostStoreOptions = {},
 	): Promise<MattermostStore> {
-		let database: Database | undefined;
-		try {
-			if (path !== ":memory:") {
-				const directory = dirname(path);
-				await mkdir(directory, { recursive: true, mode: 0o700 });
-				if (basename(directory) === ".mattermost") {
-					await chmod(directory, 0o700);
-				}
-			}
-			database = new Database(path, { create: true });
-			const store = new MattermostStore(database, options);
-			if (path !== ":memory:") secureDatabaseFiles(path);
-			return store;
-		} catch (error) {
+		const openWaitMs = options.openWaitMs ?? SQLITE_OPEN_WAIT_MS;
+		const busyTimeoutMs = options.busyTimeoutMs ?? SQLITE_BUSY_TIMEOUT_MS;
+		const deadline = Date.now() + openWaitMs;
+		while (true) {
+			let database: Database | undefined;
 			try {
-				database?.close();
-			} catch {
-				// Preserve the original open or migration failure.
+				if (path !== ":memory:") {
+					const directory = dirname(path);
+					await mkdir(directory, { recursive: true, mode: 0o700 });
+					if (basename(directory) === ".mattermost") {
+						await chmod(directory, 0o700);
+					}
+				}
+				database = new Database(path, { create: true });
+				// Honor locks before any pragma/migration that may need a write.
+				database.run(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
+				const store = new MattermostStore(database, options);
+				if (path !== ":memory:") secureDatabaseFiles(path);
+				return store;
+			} catch (error) {
+				try {
+					database?.close();
+				} catch {
+					// Preserve the original open or migration failure.
+				}
+				if (isSqliteBusyError(error) && Date.now() < deadline) {
+					await Bun.sleep(50);
+					continue;
+				}
+				if (isSqliteBusyError(error)) {
+					throw new DatabaseError(
+						"The local Mattermost index is locked by another mm process.",
+						"database_busy",
+						{ cause: error },
+					);
+				}
+				throw new DatabaseError(
+					"The local Mattermost index could not be opened or migrated.",
+					"database_open_failed",
+					{ cause: error },
+				);
 			}
-			throw new DatabaseError(
-				"The local Mattermost index could not be opened or migrated.",
-				"database_open_failed",
-				{ cause: error },
-			);
 		}
 	}
 
 	constructor(database: Database, options: MattermostStoreOptions = {}) {
 		this.database = database;
 		this.concepts = options.concepts ?? {};
+		const busyTimeoutMs = options.busyTimeoutMs ?? SQLITE_BUSY_TIMEOUT_MS;
+		this.database.run(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
 		this.database.run("PRAGMA foreign_keys = ON");
 		this.database.run("PRAGMA journal_mode = WAL");
 		this.database.run("PRAGMA synchronous = NORMAL");
-		this.database.run(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
 		writes.migrate(this);
 		writes.synchronizeConceptIndexConfig(this);
 	}

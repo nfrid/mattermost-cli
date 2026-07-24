@@ -487,7 +487,11 @@ function runTransaction(store: StoreHandle, action: () => void): void {
 		action();
 		store.database.run("COMMIT");
 	} catch (error) {
-		store.database.run("ROLLBACK");
+		try {
+			store.database.run("ROLLBACK");
+		} catch {
+			// Prefer the original write failure over rollback noise.
+		}
 		throw error;
 	}
 }

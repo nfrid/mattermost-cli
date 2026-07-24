@@ -11,6 +11,7 @@ import { requireMattermostToken } from "../config/config.ts";
 import type { MattermostClient } from "../mattermost/client.ts";
 import type { MattermostChannel } from "../mattermost/schemas.ts";
 import type { Warning } from "../shared/command-result.ts";
+import { isSqliteBusyError } from "../shared/errors.ts";
 import { databaseFilePaths, MattermostStore } from "../store/index.ts";
 import {
 	channelIdentityMatches,
@@ -285,6 +286,13 @@ async function databaseIndexCheck(
 		};
 	} catch (error) {
 		store?.close();
+		if (isSqliteBusyError(error)) {
+			return {
+				name: "database_index",
+				ok: false,
+				message: `${errorMessage(error)} Another mm process is using the index; wait and retry without deleting it.`,
+			};
+		}
 		return {
 			name: "database_index",
 			ok: false,

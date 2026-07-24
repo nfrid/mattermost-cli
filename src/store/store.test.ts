@@ -215,6 +215,90 @@ describe("MattermostStore", () => {
 		});
 	});
 
+	test("waits for a brief writer lock instead of failing open", async () => {
+		const directory = await temporaryDirectory();
+		const path = join(directory, "busy.sqlite3");
+		const seed = await MattermostStore.open(path);
+		seed.close();
+
+		const holder = Bun.spawn({
+			cmd: [
+				"bun",
+				"-e",
+				`
+import { Database } from "bun:sqlite";
+const db = new Database(${JSON.stringify(path)});
+db.run("BEGIN IMMEDIATE");
+await Bun.sleep(400);
+db.run("COMMIT");
+db.close();
+`,
+			],
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		await Bun.sleep(50);
+
+		const started = Date.now();
+		const store = await MattermostStore.open(path, {
+			concepts: {
+				"duplicate-charge": ["повторное списание", "списали дважды"],
+			},
+			busyTimeoutMs: 5_000,
+			openWaitMs: 5_000,
+		});
+		expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+		expect(Date.now() - started).toBeLessThan(5_000);
+		store.close();
+		expect(await holder.exited).toBe(0);
+	});
+
+	test("reports a durable writer lock as busy without rebuild advice", async () => {
+		const directory = await temporaryDirectory();
+		const path = join(directory, "busy-fail.sqlite3");
+		const seed = await MattermostStore.open(path);
+		seed.close();
+
+		const holder = Bun.spawn({
+			cmd: [
+				"bun",
+				"-e",
+				`
+import { Database } from "bun:sqlite";
+const db = new Database(${JSON.stringify(path)});
+db.run("BEGIN IMMEDIATE");
+await Bun.sleep(5_000);
+db.run("COMMIT");
+db.close();
+`,
+			],
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		await Bun.sleep(50);
+
+		try {
+			await expect(
+				MattermostStore.open(path, {
+					concepts: {
+						"duplicate-charge": ["повторное списание", "списали дважды"],
+					},
+					busyTimeoutMs: 50,
+					openWaitMs: 200,
+				}),
+			).rejects.toMatchObject({
+				source: "database",
+				kind: "database_busy",
+				details: {
+					recommendedAction: "wait for other mm processes to finish and retry",
+				},
+			});
+		} finally {
+			holder.kill();
+			await holder.exited;
+		}
+	});
+
 	test("detects a missing FTS index during integrity verification", async () => {
 		const store = await MattermostStore.open(":memory:");
 		store.database.run("DROP TABLE posts_fts");

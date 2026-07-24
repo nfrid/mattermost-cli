@@ -14,12 +14,14 @@ export {
 	ConfigError,
 	DatabaseError,
 	type ErrorSource,
+	isSqliteBusyError,
 } from "./errors.ts";
 export {
 	deadlineReached,
 	FRESHEN_LOCK_STALE_MS,
 	FRESHEN_LOCK_TIMEOUT_MS,
 	SQLITE_BUSY_TIMEOUT_MS,
+	SQLITE_OPEN_WAIT_MS,
 	searchDeadlineAt,
 } from "./limits.ts";
 export { freshenLockPath, withFileLock } from "./lock.ts";

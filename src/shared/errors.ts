@@ -27,10 +27,37 @@ export class DatabaseError extends AppError {
 		options?: ErrorOptions,
 	) {
 		super(message, "database", kind, 1, options, {
-			recommendedAction: "remove the disposable database and run mm sync",
+			recommendedAction: recommendedActionFor(kind),
 		});
 		this.name = "DatabaseError";
 	}
+}
+
+/** True when SQLite (or a wrapped DatabaseError) reports a busy/locked database. */
+export function isSqliteBusyError(error: unknown): boolean {
+	let current: unknown = error;
+	for (let depth = 0; depth < 6 && current; depth += 1) {
+		if (current instanceof DatabaseError && current.kind === "database_busy") {
+			return true;
+		}
+		if (
+			current &&
+			typeof current === "object" &&
+			"code" in current &&
+			(current as { code: unknown }).code === "SQLITE_BUSY"
+		) {
+			return true;
+		}
+		current = current instanceof Error ? current.cause : undefined;
+	}
+	return false;
+}
+
+function recommendedActionFor(kind: string): string {
+	if (kind === "database_busy") {
+		return "wait for other mm processes to finish and retry";
+	}
+	return "remove the disposable database and run mm sync";
 }
 
 export class ConfigError extends AppError {
