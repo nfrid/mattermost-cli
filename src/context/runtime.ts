@@ -3,8 +3,11 @@ import { loadMattermostConfig } from "../config/config.ts";
 import { buildEvidence } from "../evidence/evidence.ts";
 import {
 	type EvidencePost,
+	hasInternalBudgetSkipInCore,
 	type PackedThread,
+	type PackThreadOptions,
 	packThread,
+	ticketCorePostIds,
 } from "../evidence/packing.ts";
 import {
 	segmentThreadByTicketProximity,
@@ -117,6 +120,7 @@ import { withResources } from "./resources.ts";
 import {
 	buildDroppedCandidates,
 	orderCandidatesForThinReserve,
+	pickPrimaryThreadIndex,
 } from "./selection.ts";
 import {
 	type ContextClient,
@@ -363,11 +367,12 @@ export async function getMattermostContext(
 			});
 		}
 
+		const shortPacking = Boolean(input.short || input.navigate);
 		const budgets = {
-			maxCharacters: input.short
+			maxCharacters: shortPacking
 				? Math.min(config.budgets.defaultMaxCharacters, SHORT_MAX_CHARACTERS)
 				: config.budgets.defaultMaxCharacters,
-			perThreadCharacters: input.short
+			perThreadCharacters: shortPacking
 				? Math.min(
 						config.budgets.defaultPerThreadCharacters,
 						SHORT_PER_THREAD_CHARACTERS,
@@ -382,7 +387,7 @@ export async function getMattermostContext(
 			budgets.maxThreads,
 		);
 		const perThreadCharacters =
-			!input.short && expectedThreadCount <= 2
+			!shortPacking && expectedThreadCount <= 2
 				? Math.max(
 						budgets.perThreadCharacters,
 						Math.floor(budgets.maxCharacters / expectedThreadCount),
@@ -390,6 +395,14 @@ export async function getMattermostContext(
 				: budgets.perThreadCharacters;
 		let remaining = budgets.maxCharacters;
 		const threads: ContextThread[] = [];
+		const networkHydratedThreadIds = new Set<string>();
+		const repackInputs = new Map<
+			string,
+			{
+				posts: EvidencePost[];
+				options: Omit<PackThreadOptions, "limit">;
+			}
+		>();
 		const matchedProbeValues = new Set<string>();
 		const noMatchIds = new Set<string>();
 		const seenCandidates = new Map<string, ThreadCandidate>();
@@ -418,7 +431,7 @@ export async function getMattermostContext(
 					({ id }) => id === candidate.conversationId,
 				);
 				if (!conversation) continue;
-				const evidence = await hydrateThread(
+				const hydrated = await hydrateThread(
 					candidate.rootPostId,
 					conversation,
 					store,
@@ -433,6 +446,10 @@ export async function getMattermostContext(
 						warnings: freshenWarnings,
 					},
 				);
+				const evidence = hydrated.posts;
+				if (hydrated.source === "network") {
+					networkHydratedThreadIds.add(candidate.threadId);
+				}
 				for (const value of matchingProbeValues(evidence, probes)) {
 					matchedProbeValues.add(value);
 				}
@@ -475,21 +492,28 @@ export async function getMattermostContext(
 							clusterMergeGap: config.budgets.clusterMergeGap,
 						})
 					: undefined;
-				const packed = packThread(candidate.threadId, evidence, {
+				const packOptions: Omit<PackThreadOptions, "limit"> = {
 					matchingPostIds: currentMatchingPostIds,
 					neighborhoodRadius: config.budgets.matchNeighborhoodRadius,
 					ticketNeighborhoodRadius: config.budgets.ticketNeighborhoodRadius,
 					subjectTicketKey,
 					clusterMergeGap: config.budgets.clusterMergeGap,
-					mode: input.short ? "short" : "default",
-					gapFill: !input.short,
+					mode: shortPacking ? "short" : "default",
+					gapFill: !shortPacking,
+					...(ticketMetrics ? { ticketMetrics } : {}),
+				};
+				const packed = packThread(candidate.threadId, evidence, {
+					...packOptions,
 					limit: Math.min(
-						input.short && ticketMetrics?.rootAnchoredFocused
+						shortPacking && ticketMetrics?.rootAnchoredFocused
 							? Math.max(perThreadCharacters, SHORT_ROOT_ANCHORED_PER_THREAD)
 							: perThreadCharacters,
 						remaining,
 					),
-					...(ticketMetrics ? { ticketMetrics } : {}),
+				});
+				repackInputs.set(candidate.threadId, {
+					posts: evidence,
+					options: packOptions,
 				});
 				remaining -= packed.budget.used;
 				const surround = resolveConversationSurround(
@@ -551,6 +575,17 @@ export async function getMattermostContext(
 				threadCache.clear();
 				await hydrateCandidates(searchRoutedThreads(widened));
 			}
+		}
+
+		if (!shortPacking && remaining > 0) {
+			remaining = reclaimUnusedPackingBudget(threads, repackInputs, remaining);
+		}
+		if (!shortPacking && subject.kind === "ticket") {
+			remaining = repackPrimaryContiguousTicketCore(
+				threads,
+				repackInputs,
+				remaining,
+			);
 		}
 
 		const searchedConversations = [...searched.values()];
@@ -684,6 +719,18 @@ export async function getMattermostContext(
 			subjectTicket: subject.kind === "ticket" ? subject.ticketKey : undefined,
 			allowlist: new Set(searchedConversations.map(({ id }) => id)),
 		});
+		const freshConversationIds = new Set(
+			freshness
+				.filter(({ stale }) => !stale)
+				.map(({ conversationId }) => conversationId),
+		);
+		const selectedEvidenceCurrent =
+			threads.length > 0 &&
+			threads.every(
+				(thread) =>
+					networkHydratedThreadIds.has(thread.threadId) ||
+					freshConversationIds.has(thread.conversationId),
+			);
 		const evidence = buildEvidence({
 			searchCoverageComplete,
 			selectedThreadsComplete,
@@ -695,6 +742,13 @@ export async function getMattermostContext(
 			selection,
 			warnings,
 			freshenedConversationCount,
+			selectedEvidenceCurrent,
+			subject:
+				subject.kind === "ticket"
+					? subject.ticketKey
+					: subject.kind === "post"
+						? subject.postId
+						: subject.text,
 		});
 		return {
 			subject,
@@ -730,8 +784,100 @@ export async function getMattermostContext(
 			},
 			warnings,
 			...(input.short ? { short: true } : {}),
+			...(input.navigate ? { navigate: true } : {}),
+			...(input.signals ? { signals: true } : {}),
 		};
 	});
+}
+
+function reclaimUnusedPackingBudget(
+	threads: ContextThread[],
+	repackInputs: ReadonlyMap<
+		string,
+		{ posts: EvidencePost[]; options: Omit<PackThreadOptions, "limit"> }
+	>,
+	remaining: number,
+): number {
+	const primaryIndex = pickPrimaryThreadIndex(threads);
+	const order = [
+		primaryIndex,
+		...threads
+			.map((_, index) => index)
+			.filter((index) => index !== primaryIndex),
+	];
+	let available = remaining;
+	for (const index of order) {
+		if (available <= 0) break;
+		const thread = threads[index];
+		if (!thread || thread.omittedPosts <= 0) continue;
+		const input = repackInputs.get(thread.threadId);
+		if (!input) continue;
+		const repacked = packThread(thread.threadId, input.posts, {
+			...input.options,
+			limit: thread.budget.limit + available,
+		});
+		const added = repacked.budget.used - thread.budget.used;
+		if (added <= 0) continue;
+		threads[index] = { ...thread, ...repacked };
+		available -= added;
+	}
+	return available;
+}
+
+/**
+ * After reclaim, if the primary ticket thread still has an internal budget hole
+ * inside its subject-ticket core, repack with contiguous-core selection at the
+ * same thread limit (no global budget increase).
+ */
+function repackPrimaryContiguousTicketCore(
+	threads: ContextThread[],
+	repackInputs: ReadonlyMap<
+		string,
+		{ posts: EvidencePost[]; options: Omit<PackThreadOptions, "limit"> }
+	>,
+	remaining: number,
+): number {
+	const primaryIndex = pickPrimaryThreadIndex(threads);
+	const thread = threads[primaryIndex];
+	if (!thread || thread.omittedPosts <= 0) return remaining;
+	const input = repackInputs.get(thread.threadId);
+	if (!input?.options.subjectTicketKey) return remaining;
+
+	const chronological = [...input.posts].sort(
+		(left, right) =>
+			left.createAt - right.createAt || left.id.localeCompare(right.id),
+	);
+	const ticketMetrics =
+		input.options.ticketMetrics ??
+		segmentThreadByTicketProximity(chronological, {
+			subjectTicket: input.options.subjectTicketKey,
+			matchingPostIds: input.options.matchingPostIds,
+			ticketRadius: input.options.ticketNeighborhoodRadius,
+			matchRadius: input.options.neighborhoodRadius,
+			clusterMergeGap: input.options.clusterMergeGap,
+		});
+	if (!ticketMetrics.ticketHitPostIds.length) return remaining;
+
+	const coreIds = ticketCorePostIds(
+		chronological,
+		ticketMetrics.ticketHitPostIds,
+		ticketMetrics.rootAnchoredFocused,
+	);
+	if (!hasInternalBudgetSkipInCore(thread.timeline, coreIds)) {
+		return remaining;
+	}
+
+	const maxAllowedUsed = thread.budget.used + Math.max(0, remaining);
+	const repacked = packThread(thread.threadId, input.posts, {
+		...input.options,
+		ticketMetrics,
+		contiguousTicketCore: true,
+		limit: Math.min(thread.budget.limit, maxAllowedUsed),
+	});
+	if (repacked.budget.used > maxAllowedUsed) return remaining;
+	const delta = repacked.budget.used - thread.budget.used;
+	threads[primaryIndex] = { ...thread, ...repacked };
+	return remaining - delta;
 }
 
 export async function searchMattermost(
@@ -934,7 +1080,7 @@ export async function getMattermostThread(
 		).some(({ stale }) => stale);
 		const usedRemote =
 			Boolean(client) && (Boolean(input.fresh) || !initiallyFresh);
-		const evidence = await hydrateThread(
+		const hydrated = await hydrateThread(
 			target.rootId || target.id,
 			conversation,
 			store,
@@ -947,9 +1093,21 @@ export async function getMattermostThread(
 				warnings,
 			},
 		);
+		const evidence = hydrated.posts;
+		if (
+			(input.beforePosts !== undefined || input.afterPosts !== undefined) &&
+			!input.around
+		) {
+			throw new ConfigError(
+				"--before-posts and --after-posts require --around.",
+				"invalid_around_options",
+			);
+		}
 		const packed = packThread(target.rootId || target.id, evidence, {
 			matchingPostIds: [target.id],
 			aroundPostId: input.around,
+			beforePosts: input.beforePosts,
+			afterPosts: input.afterPosts,
 			neighborhoodRadius: config.budgets.matchNeighborhoodRadius,
 			clusterMergeGap: config.budgets.clusterMergeGap,
 			limit: config.budgets.defaultPerThreadCharacters,
@@ -1011,6 +1169,7 @@ export async function getMattermostThread(
 			link: postLink(config, target.rootId || target.id),
 			thread: packed,
 			warnings: consolidateLocalFallbackWarnings(warnings),
+			...(input.signals ? { signals: true } : {}),
 		};
 	});
 }

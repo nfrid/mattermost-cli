@@ -22,6 +22,9 @@ export interface CommandOptions {
 	subject?: string;
 	target?: string;
 	fileId?: string;
+	fileIds?: string[];
+	postId?: string;
+	threadId?: string;
 	ticket?: string;
 	query?: string[];
 	repository?: string[];
@@ -33,13 +36,19 @@ export interface CommandOptions {
 	hasFile?: boolean;
 	file?: string;
 	out?: string;
+	outDir?: string;
 	fresh?: boolean;
 	local?: boolean;
 	remoteSearch?: boolean;
 	widen?: boolean;
 	full?: boolean;
 	around?: string;
+	beforePosts?: number;
+	afterPosts?: number;
 	includeAutomation?: boolean;
 	short?: boolean;
+	navigate?: boolean;
+	/** Opt-in agent emission of advisory `signals` and `technicalEntities`. */
+	signals?: boolean;
 	limit?: number;
 }

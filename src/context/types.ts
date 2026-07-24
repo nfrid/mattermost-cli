@@ -14,12 +14,7 @@ import type {
 	ThreadCandidate,
 } from "../search/index.ts";
 import type { Warning } from "../shared/command-result.ts";
-import type {
-	ConversationRecord,
-	IndexedPost,
-	MattermostStore,
-	ThreadSearchFilters,
-} from "../store/index.ts";
+import type { ConversationRecord, MattermostStore } from "../store/index.ts";
 import type { SyncClient } from "../sync/sync.ts";
 
 export const DEFAULT_SEARCH_LIMIT = 10;
@@ -55,6 +50,10 @@ export interface ContextInput extends SearchFilterInput {
 	includeAutomation?: boolean;
 	/** Use the short evidence-card packing budget. */
 	short?: boolean;
+	/** Lean navigate projection (uses short packing budget). */
+	navigate?: boolean;
+	/** Opt-in advisory `signals` / `technicalEntities` in `--agent` output. */
+	signals?: boolean;
 }
 
 export interface SearchInput
@@ -86,6 +85,12 @@ export interface ThreadInput {
 	fresh?: boolean;
 	full?: boolean;
 	around?: string;
+	/** Asymmetric `--around` window; requires {@link around}. */
+	beforePosts?: number;
+	/** Asymmetric `--around` window; requires {@link around}. */
+	afterPosts?: number;
+	/** Opt-in advisory `signals` / `technicalEntities` in `--agent` output. */
+	signals?: boolean;
 }
 
 export interface ContextClient extends SyncClient {
@@ -163,6 +168,8 @@ export interface DroppedCandidate {
 	dropReason: DroppedCandidateReason;
 	reasons: RankingReason[];
 	excerpt?: string;
+	/** Up to two distinct match excerpts (first also mirrored in {@link excerpt}). */
+	excerpts?: string[];
 }
 
 /** One-hop related ticket pointer (not a full nested context). */
@@ -176,8 +183,18 @@ export interface RelatedTicketPointer {
 	excerpt?: string;
 	/** Selected subject thread that contributed the strongest mention. */
 	sourceThreadId?: string;
+	/**
+	 * True when the projected target is already in the selected packet:
+	 * resolved {@link threadId} when present, otherwise the in-packet
+	 * {@link sourceThreadId} mention (no out-of-packet best thread).
+	 * Omit when the pointer resolves to an out-of-packet related thread.
+	 */
+	alreadyInPacket?: boolean;
 	hydrated: false;
 }
+
+/** Agent skip guidance for DM conversation surround posts. */
+export type SurroundRelevance = "low" | "unknown";
 
 export interface ContextResult {
 	subject: MattermostSubject;
@@ -211,6 +228,10 @@ export interface ContextResult {
 	warnings: Warning[];
 	/** True when context used the short evidence-card packing budget. */
 	short?: boolean;
+	/** True when context used lean navigate packing/projection. */
+	navigate?: boolean;
+	/** True when advisory signals were requested for `--agent` projection. */
+	signals?: boolean;
 }
 
 export interface SearchContextResult extends Omit<SearchResult, "candidates"> {
@@ -234,4 +255,6 @@ export interface ThreadResult {
 	link: string;
 	thread: PackedThread;
 	warnings: Warning[];
+	/** True when advisory signals were requested for `--agent` projection. */
+	signals?: boolean;
 }

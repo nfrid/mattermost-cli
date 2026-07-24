@@ -518,6 +518,7 @@ const selectionEvidenceSchema = z.object({
 			dropReason: z.enum(["budget", "no_match", "thin"]),
 			reasons: z.array(rankingReasonSchema),
 			excerpt: z.string().optional(),
+			excerpts: z.array(z.string()).max(2).optional(),
 		}),
 	),
 });
@@ -530,6 +531,7 @@ const relatedTicketPointerSchema = z.object({
 	latestAt: z.number().int().nonnegative().optional(),
 	excerpt: z.string().optional(),
 	sourceThreadId: z.string().optional(),
+	alreadyInPacket: z.literal(true).optional(),
 	hydrated: z.literal(false),
 });
 const evidenceStatusSchema = z.object({
@@ -538,16 +540,27 @@ const evidenceStatusSchema = z.object({
 	completeness: z.object({
 		selectedThreads: z.enum(["complete", "truncated"]),
 		indexHistory: z.enum(["full", "cutoff_bounded"]),
+		discovery: z.enum(["current", "possibly_stale", "local_only"]).optional(),
 	}),
 	next: z.array(
 		z.object({
 			action: z.enum([
 				"thread_full",
+				"thread_around",
 				"sync",
 				"inspect_dropped",
 				"fresh_or_remote",
 			]),
 			reason: z.string(),
+			priority: z.enum(["recommended", "optional"]),
+			impact: z.enum([
+				"may_recover_omitted_core",
+				"older_discovery_only",
+				"may_add_dropped_pointer",
+				"may_refresh_selected_or_discovery",
+			]),
+			/** Argv segments only — never a joined shell string. */
+			command: z.array(z.string()).optional(),
 			threadId: z.string().optional(),
 			conversationId: z.string().optional(),
 		}),
@@ -591,6 +604,8 @@ const contextDataSchema = z.object({
 	budget: budgetSchema.extend({ maxThreads: z.number().int().positive() }),
 	warnings: z.array(warningSchema),
 	short: z.boolean().optional(),
+	navigate: z.boolean().optional(),
+	signals: z.boolean().optional(),
 });
 const threadDataSchema = z.object({
 	subject: subjectSchema,
@@ -601,6 +616,7 @@ const threadDataSchema = z.object({
 	link: z.string(),
 	thread: packedThreadSchema,
 	warnings: z.array(warningSchema),
+	signals: z.boolean().optional(),
 });
 
 const successResult = <Command extends string, Data extends z.ZodType>(
@@ -642,6 +658,51 @@ const fileDataSchema = z.object({
 	conversationId: z.string(),
 });
 export const fileResultV1Schema = successResult("file", fileDataSchema);
+
+const fileBatchSelectorSchema = z.union([
+	z.object({
+		kind: z.literal("file_ids"),
+		fileIds: z.array(z.string()).min(1),
+	}),
+	z.object({
+		kind: z.literal("post"),
+		postId: z.string().min(1),
+	}),
+	z.object({
+		kind: z.literal("thread"),
+		threadId: z.string().min(1),
+	}),
+]);
+
+const fileBatchItemSchema = z.union([
+	fileDataSchema.extend({
+		status: z.literal("downloaded"),
+	}),
+	z.object({
+		status: z.enum(["error", "skipped"]),
+		id: z.string().optional(),
+		name: z.string().optional(),
+		error: z.object({
+			kind: z.string(),
+			message: z.string(),
+		}),
+	}),
+]);
+
+const filesDataSchema = z.object({
+	outDir: z.string(),
+	selector: fileBatchSelectorSchema,
+	limits: z.object({
+		maxFiles: z.number().int().positive(),
+		maxTotalBytes: z.number().int().positive(),
+	}),
+	downloaded: z.number().int().nonnegative(),
+	failed: z.number().int().nonnegative(),
+	skipped: z.number().int().nonnegative(),
+	totalBytes: z.number().int().nonnegative(),
+	files: z.array(fileBatchItemSchema),
+});
+export const filesResultV1Schema = successResult("files", filesDataSchema);
 export const failureResultV1Schema = z.object({
 	command: z.string(),
 	schemaVersion: z.literal(SCHEMA_VERSION),
@@ -672,6 +733,7 @@ export const commandResultV1Schema = z.union([
 	contextResultV1Schema,
 	threadResultV1Schema,
 	fileResultV1Schema,
+	filesResultV1Schema,
 	failureResultV1Schema,
 ]);
 
@@ -687,6 +749,7 @@ export type SearchCommandResultV1 = z.output<typeof searchResultV1Schema>;
 export type ContextCommandResultV1 = z.output<typeof contextResultV1Schema>;
 export type ThreadCommandResultV1 = z.output<typeof threadResultV1Schema>;
 export type FileCommandResultV1 = z.output<typeof fileResultV1Schema>;
+export type FilesCommandResultV1 = z.output<typeof filesResultV1Schema>;
 
 export function parseCommandResultV1(value: unknown): CommandResultV1 {
 	return commandResultV1Schema.parse(value);

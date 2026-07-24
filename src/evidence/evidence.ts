@@ -1,3 +1,7 @@
+import {
+	isActionableDroppedCandidate,
+	shouldRecommendInspectDropped,
+} from "../context/selection.ts";
 import type {
 	ContextResult,
 	ContextThread,
@@ -12,16 +16,33 @@ export type EvidenceAdequacy = "usable" | "thin" | "insufficient";
 export type EvidenceCurrency = "current" | "possibly_stale" | "local_only";
 export type EvidenceThreadCompleteness = "complete" | "truncated";
 export type EvidenceIndexHistory = "full" | "cutoff_bounded";
+export type EvidenceDiscoveryCurrency =
+	| "current"
+	| "possibly_stale"
+	| "local_only";
 
 export type EvidenceNextAction =
 	| "thread_full"
+	| "thread_around"
 	| "sync"
 	| "inspect_dropped"
 	| "fresh_or_remote";
 
+export type EvidenceNextPriority = "recommended" | "optional";
+
+export type EvidenceNextImpact =
+	| "may_recover_omitted_core"
+	| "older_discovery_only"
+	| "may_add_dropped_pointer"
+	| "may_refresh_selected_or_discovery";
+
 export interface EvidenceNextStep {
 	action: EvidenceNextAction;
 	reason: string;
+	priority: EvidenceNextPriority;
+	impact: EvidenceNextImpact;
+	/** Argv only — never a shell string. Omitted when no safe follow-up exists. */
+	command?: string[];
 	threadId?: string;
 	conversationId?: string;
 }
@@ -32,6 +53,8 @@ export interface EvidenceStatus {
 	completeness: {
 		selectedThreads: EvidenceThreadCompleteness;
 		indexHistory: EvidenceIndexHistory;
+		/** Additive schema-version-2 field; absent in older packets. */
+		discovery?: EvidenceDiscoveryCurrency;
 	};
 	next: EvidenceNextStep[];
 	selection: {
@@ -63,6 +86,10 @@ export function buildEvidence(input: {
 	selection: SelectionEvidence;
 	warnings: readonly { kind: string }[];
 	freshenedConversationCount?: number;
+	/** Selected threads are fresh locally or were hydrated during this request. */
+	selectedEvidenceCurrent?: boolean;
+	/** Subject string for follow-up argv (ticket key, post id, or text). */
+	subject?: string;
 }): EvidenceStatus {
 	const warningKinds = new Set(input.warnings.map(({ kind }) => kind));
 	const cutoffBoundedConversations = input.freshness.filter(
@@ -97,12 +124,23 @@ export function buildEvidence(input: {
 			? "thin"
 			: "usable";
 
+	const selectedEvidenceCurrent =
+		input.selectedEvidenceCurrent ?? staleRouted === 0;
 	const currency: EvidenceCurrency =
 		input.freshnessMode === "local"
 			? "local_only"
-			: staleRouted > 0 || localFallback || input.remoteSearch.failures > 0
+			: localFallback ||
+					input.remoteSearch.failures > 0 ||
+					!selectedEvidenceCurrent
 				? "possibly_stale"
 				: "current";
+	const discovery: EvidenceDiscoveryCurrency =
+		input.freshnessMode === "local"
+			? "local_only"
+			: staleRouted === 0 ||
+					(input.remoteSearch.performed && input.remoteSearch.failures === 0)
+				? "current"
+				: "possibly_stale";
 
 	const selectedThreads: EvidenceThreadCompleteness =
 		!input.selectedThreadsComplete || recommendFullThreadIds.length > 0
@@ -111,6 +149,9 @@ export function buildEvidence(input: {
 	const indexHistory: EvidenceIndexHistory =
 		cutoffBoundedConversations > 0 ? "cutoff_bounded" : "full";
 
+	const selectedMessages = input.threads.flatMap((thread) =>
+		thread.posts.map(({ message }) => message),
+	);
 	const next = collectNextActions({
 		recommendFullThreadIds,
 		cutoffBoundedConversations,
@@ -118,9 +159,17 @@ export function buildEvidence(input: {
 		localFallback,
 		localMode: input.freshnessMode === "local",
 		remoteFailures: input.remoteSearch.failures,
+		remoteSearchSuccessful:
+			input.remoteSearch.performed && input.remoteSearch.failures === 0,
+		selectedEvidenceCurrent,
+		adequacy,
+		currency,
+		selectedThreadsComplete: selectedThreads === "complete",
+		selectedMessages,
 		droppedCandidates: input.selection.droppedCandidates,
 		freshness: input.freshness,
 		warningKinds,
+		subject: input.subject,
 	});
 
 	return {
@@ -129,6 +178,7 @@ export function buildEvidence(input: {
 		completeness: {
 			selectedThreads,
 			indexHistory,
+			discovery,
 		},
 		next,
 		selection: {
@@ -168,42 +218,80 @@ function collectNextActions(input: {
 	localFallback: boolean;
 	localMode: boolean;
 	remoteFailures: number;
+	remoteSearchSuccessful: boolean;
+	selectedEvidenceCurrent: boolean;
+	adequacy: EvidenceAdequacy;
+	currency: EvidenceCurrency;
+	selectedThreadsComplete: boolean;
+	selectedMessages: readonly string[];
 	droppedCandidates: readonly DroppedCandidate[];
 	freshness: readonly FreshnessEvidence[];
 	warningKinds: ReadonlySet<string>;
+	subject?: string;
 }): EvidenceNextStep[] {
 	const next: EvidenceNextStep[] = [];
 	for (const threadId of input.recommendFullThreadIds) {
 		next.push({
 			action: "thread_full",
 			reason: "packing_incomplete",
+			priority: "recommended",
+			impact: "may_recover_omitted_core",
+			command: ["mm", "thread", threadId, "--full", "--agent"],
 			threadId,
 		});
 	}
-	if (
+	const historyIncomplete =
 		input.cutoffBoundedConversations > 0 ||
-		input.warningKinds.has("incomplete_history")
-	) {
-		const conversationId = input.freshness.find(
+		input.warningKinds.has("incomplete_history");
+	const packetTrusted =
+		input.adequacy === "usable" &&
+		input.currency === "current" &&
+		input.selectedThreadsComplete;
+	if (historyIncomplete && !packetTrusted) {
+		const incomplete = input.freshness.filter(
 			({ coverageComplete }) => !coverageComplete,
-		)?.conversationId;
+		);
+		const conversationId = incomplete[0]?.conversationId;
+		const uniqueChannelAlias =
+			incomplete.length === 1 ? incomplete[0]?.alias : undefined;
 		next.push({
 			action: "sync",
 			reason: "incomplete_history",
+			priority: "optional",
+			impact: "older_discovery_only",
+			command: uniqueChannelAlias
+				? ["mm", "sync", "--channel", uniqueChannelAlias, "--agent"]
+				: ["mm", "sync", "--agent"],
 			...(conversationId ? { conversationId } : {}),
 		});
 	}
-	if (input.droppedCandidates.length > 0) {
+	const actionableDropped = input.droppedCandidates.find(
+		(candidate) =>
+			isActionableDroppedCandidate(candidate) &&
+			shouldRecommendInspectDropped(candidate, input.selectedMessages),
+	);
+	if (actionableDropped) {
+		const droppedThreadId = actionableDropped.threadId;
 		next.push({
 			action: "inspect_dropped",
 			reason: "selection_dropped",
+			priority: "optional",
+			impact: "may_add_dropped_pointer",
+			...(droppedThreadId
+				? {
+						command: ["mm", "thread", droppedThreadId, "--agent"],
+						threadId: droppedThreadId,
+					}
+				: {}),
 		});
 	}
 	if (
 		input.localFallback ||
 		input.remoteFailures > 0 ||
-		(input.localMode && input.staleRouted > 0) ||
-		(!input.localMode && input.staleRouted > 0)
+		(input.staleRouted > 0 &&
+			(input.localMode ||
+				(!input.remoteSearchSuccessful &&
+					(!input.selectedEvidenceCurrent || input.adequacy !== "usable"))))
 	) {
 		next.push({
 			action: "fresh_or_remote",
@@ -212,6 +300,13 @@ function collectNextActions(input: {
 				: input.remoteFailures > 0
 					? "remote_search_failed"
 					: "stale_local_index",
+			priority: "optional",
+			impact: "may_refresh_selected_or_discovery",
+			...(input.subject
+				? {
+						command: ["mm", "context", input.subject, "--fresh", "--agent"],
+					}
+				: {}),
 		});
 	}
 	return next;

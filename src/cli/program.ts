@@ -130,9 +130,21 @@ export function createProgram(
 				"request bounded Mattermost server-side search fallback",
 			).conflicts("local"),
 		)
+		.addOption(
+			new Option(
+				"--short",
+				"pack evidence cards with ticket windows, anchors, and a short timeline (legacy card+timeline)",
+			).conflicts("navigate"),
+		)
+		.addOption(
+			new Option(
+				"--navigate",
+				"short packing budget with lean agent navigation (anchors/clusters/skips; omit dense posts and messages)",
+			).conflicts("short"),
+		)
 		.option(
-			"--short",
-			"pack evidence cards with ticket windows and anchors instead of dense timelines",
+			"--signals",
+			"include advisory signals and technicalEntities in --agent output",
 		)
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (subject?: string) => {
@@ -172,6 +184,20 @@ export function createProgram(
 		.option("--fresh", "force a remote thread refresh when possible")
 		.option("--full", "return the complete selected thread")
 		.option("--around <post-id>", "prioritize a neighborhood around one post")
+		.option(
+			"--before-posts <n>",
+			"posts before --around (default: match neighborhood radius; max 50)",
+			(value) => Number(value),
+		)
+		.option(
+			"--after-posts <n>",
+			"posts after --around (default: match neighborhood radius; max 50)",
+			(value) => Number(value),
+		)
+		.option(
+			"--signals",
+			"include advisory signals and technicalEntities in --agent output",
+		)
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (target: string) => {
 			await run("thread", program.opts<GlobalOptions>(), {
@@ -192,6 +218,46 @@ export function createProgram(
 			await run("file", program.opts<GlobalOptions>(), {
 				...file.opts<CommandOptions>(),
 				fileId,
+			});
+		});
+
+	const files = program
+		.command("files")
+		.description(
+			"Download multiple allowlisted attachments into --out-dir (max 20 files / 50 MiB; no overwrite).",
+		)
+		.argument(
+			"[file-ids...]",
+			"Mattermost file ids (mutually exclusive with --post / --thread)",
+		)
+		.requiredOption(
+			"--out-dir <dir>",
+			"destination directory (created if missing; never overwrites)",
+		)
+		.addOption(
+			new Option(
+				"--post <id>",
+				"download all attachments on one indexed post (conflicts with --thread / file ids)",
+			).conflicts("thread"),
+		)
+		.addOption(
+			new Option(
+				"--thread <id>",
+				"download all attachments in one indexed thread (conflicts with --post / file ids)",
+			).conflicts("post"),
+		)
+		.addHelpText("after", GLOBAL_HELP)
+		.action(async (fileIds: string[]) => {
+			const options = files.opts<{
+				outDir: string;
+				post?: string;
+				thread?: string;
+			}>();
+			await run("files", program.opts<GlobalOptions>(), {
+				outDir: options.outDir,
+				fileIds,
+				postId: options.post,
+				threadId: options.thread,
 			});
 		});
 

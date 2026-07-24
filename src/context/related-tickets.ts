@@ -1,5 +1,4 @@
 import type { MattermostConfig } from "../config/config.ts";
-import { segmentThreadByTicketProximity } from "../evidence/ticket-segments.ts";
 import {
 	extractTicketKeys,
 	MULTI_TICKET_BULLETIN_MIN_KEYS,
@@ -22,6 +21,9 @@ export function resolveRelatedTicketPointers(input: {
 	allowlist: ReadonlySet<string>;
 }): RelatedTicketPointer[] {
 	const subject = input.subjectTicket?.toUpperCase();
+	const selectedThreadIds = new Set(
+		input.threads.map((thread) => thread.threadId),
+	);
 	type Mention = {
 		key: string;
 		postId: string;
@@ -164,11 +166,18 @@ export function resolveRelatedTicketPointers(input: {
 			(input.allowlist.has(entry.first.conversationId)
 				? entry.first.threadId
 				: undefined);
+		const sourceThreadId = entry.first.threadId;
+		// In-packet only when the projected target is selected; source-only
+		// pointers (no resolved best thread) keep the in-packet mention excerpt.
+		const alreadyInPacket = bestThreadId
+			? selectedThreadIds.has(bestThreadId)
+			: selectedThreadIds.has(sourceThreadId);
 		if (!bestThreadId) {
 			pointers.push({
 				key: entry.key,
 				mentions: entry.mentions,
-				sourceThreadId: entry.first.threadId,
+				sourceThreadId,
+				...(alreadyInPacket ? { alreadyInPacket: true } : {}),
 				hydrated: false,
 				excerpt: entry.first.excerpt,
 			});
@@ -199,7 +208,8 @@ export function resolveRelatedTicketPointers(input: {
 				hit?.message ?? entry.first.excerpt,
 				POINTER_EXCERPT_LIMIT,
 			),
-			sourceThreadId: entry.first.threadId,
+			sourceThreadId,
+			...(alreadyInPacket ? { alreadyInPacket: true } : {}),
 			hydrated: false,
 		});
 	}

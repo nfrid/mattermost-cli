@@ -294,6 +294,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
     "evidence": {
       "adequacy": "usable",
       "completeness": {
+        "discovery": "local_only",
         "indexHistory": "full",
         "selectedThreads": "complete",
       },

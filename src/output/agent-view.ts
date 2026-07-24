@@ -1,3 +1,4 @@
+import { scoreSurroundRelevance } from "../context/helpers.ts";
 import type {
 	ContextResult,
 	ContextThread,
@@ -5,6 +6,8 @@ import type {
 	SearchContextResult,
 	ThreadResult,
 } from "../context/index.ts";
+import { pickPrimaryThreadIndex } from "../context/selection.ts";
+import type { SurroundRelevance } from "../context/types.ts";
 import { buildEvidence, shouldRecommendFull } from "../evidence/evidence.ts";
 import type {
 	EvidencePost,
@@ -14,10 +17,17 @@ import type {
 } from "../evidence/packing.ts";
 import { largestTimelineSkip } from "../evidence/packing.ts";
 import {
+	buildThreadBrief,
+	buildThreadSignals,
+	type ThreadBrief,
+	type ThreadSignals,
+} from "../evidence/signals.ts";
+import {
 	segmentThreadByTicketProximity,
 	type TicketSegment,
 } from "../evidence/ticket-segments.ts";
 import {
+	type EngineeringEntityKind,
 	extractEngineeringEntities,
 	extractTicketKeys,
 	MULTI_TICKET_BULLETIN_MIN_KEYS,
@@ -26,18 +36,41 @@ import {
 	POINTER_EXCERPT_LIMIT,
 	truncateExcerpt,
 } from "../search/match-utils.ts";
+import { normalizeSearchText } from "../search/text.ts";
 import type {
 	CommandResult,
 	SCHEMA_VERSION,
 	Warning,
 } from "../shared/command-result.ts";
+import type { FileBatchDownloadResult } from "../sync/file-batch-download.ts";
+import type { FileDownloadResult } from "../sync/file-download.ts";
 import { isoTimestamp, subjectValue } from "./shared.ts";
+
+export type {
+	CandidateSpan,
+	CandidateSpanKind,
+	OutcomeWindow,
+	PurposeHint,
+	PurposeHintLabel,
+	RoleHint,
+	RoleHintLabel,
+	ThreadBrief,
+	ThreadSignals,
+} from "../evidence/signals.ts";
 
 export interface AgentFile {
 	id: string;
 	name: string;
 	mimeType?: string;
 	size?: number;
+	/** Argv segments only — copy; never auto-exec or join into a shell string. */
+	downloadCommand: string[];
+}
+
+export interface AgentTechnicalEntity {
+	kind: EngineeringEntityKind;
+	value: string;
+	sourcePostIds: string[];
 }
 
 export interface AgentMessage {
@@ -86,6 +119,8 @@ export interface AgentRelatedTicket {
 	latestAt?: string;
 	excerpt?: string;
 	sourceThreadId?: string;
+	/** True when the related target is already visible in the selected packet. */
+	alreadyInPacket?: true;
 	hydrated: false;
 }
 
@@ -104,7 +139,7 @@ export interface AgentAnchor {
 	at: string;
 	text?: string;
 	matched?: string[];
-	files?: Array<{ id: string; name: string; mimeType?: string }>;
+	files?: AgentFile[];
 }
 
 export interface AgentCluster {
@@ -126,15 +161,43 @@ export interface AgentThread {
 	largestSkip?: number;
 	omittedRatio?: number;
 	role?: "primary" | "secondary";
+	/**
+	 * Narrow consumption hint. `announce` marks secondary multi-ticket bulletin
+	 * roots (`multi_ticket_root`); never replaces `role`.
+	 */
+	presentation?: "announce";
 	span?: { firstAt: string; lastAt: string; totalPosts: number };
 	anchors?: AgentAnchor[];
 	clusters?: AgentCluster[];
 	relatedTicketsInThread?: string[];
 	ticketDensity?: number;
 	nearestTicketDistance?: number | null;
-	posts: AgentTimelineItem[];
+	/**
+	 * Dense author-group timeline. Omitted for `--navigate` (use anchors /
+	 * clusters / skips instead).
+	 */
+	posts?: AgentTimelineItem[];
+	/** Skip markers extracted for lean `--navigate` projection. */
+	skips?: AgentSkip["skip"][];
+	/** Engineering entities from packed posts only (capped). */
+	technicalEntities?: AgentTechnicalEntity[];
+	/**
+	 * Advisory candidate spans / roleHints / mechanical outcome window from
+	 * packed posts only. Never authoritative decisions or ranking input.
+	 */
+	signals?: ThreadSignals;
+	/**
+	 * Lean default-agent briefing from packed posts. Present for both default
+	 * `--agent` and `--signals` (alongside full signals when requested).
+	 * Omitted when empty.
+	 */
+	brief?: ThreadBrief;
+	/** True when any packed post carries attachments (even with empty text). */
+	filesPresent?: true;
 	/** Prior DM root posts for short threads (not replies of this thread). */
 	surround?: AgentMessageGroup[];
+	/** Skip guidance for attached surround; only when surround is present. */
+	surroundRelevance?: SurroundRelevance;
 }
 
 export interface AgentCandidate {
@@ -157,6 +220,12 @@ export type AgentCommandResult =
 	| Extract<CommandResult<never>, { success: false }>;
 
 const SHORT_MESSAGE_LIMIT = 8;
+/** Cap technical entities emitted per agent thread. */
+const TECHNICAL_ENTITY_CAP = 40;
+
+function fileDownloadCommand(id: string): string[] {
+	return ["mm", "file", id];
+}
 
 /** Build the compact agent view from the same validated result used by JSON output. */
 export function projectAgentResult(
@@ -190,11 +259,17 @@ export function projectAgentResult(
 				result.warnings,
 			);
 		case "file":
-			return {
-				...envelope,
-				...(isRecord(result.data) ? result.data : { result: result.data }),
-				warnings: result.warnings,
-			};
+			return projectFileDownload(
+				envelope,
+				result.data as FileDownloadResult,
+				result.warnings,
+			);
+		case "files":
+			return projectFiles(
+				envelope,
+				result.data as FileBatchDownloadResult,
+				result.warnings,
+			);
 		default:
 			return {
 				...envelope,
@@ -214,19 +289,28 @@ function projectContext(
 	warnings: Warning[],
 ): AgentCommandResult {
 	const relatedTickets = projectRelatedTickets(data.relatedTickets);
+	const navigate = Boolean(data.navigate);
 	const short = Boolean(data.short);
+	const includeSignals = Boolean(data.signals);
 	const primaryIndex = pickPrimaryThreadIndex(data.threads);
 	const threads = data.threads.map((thread, index) =>
 		projectContextThread(thread, {
 			short,
+			navigate,
+			includeSignals,
 			role: index === primaryIndex ? "primary" : "secondary",
 			subjectTicket:
 				data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
 		}),
 	);
-	const messages = short
-		? shortMessagesFromThreads(data.threads, primaryIndex, SHORT_MESSAGE_LIMIT)
-		: undefined;
+	const messages =
+		short && !navigate
+			? shortMessagesFromThreads(
+					data.threads,
+					primaryIndex,
+					SHORT_MESSAGE_LIMIT,
+				)
+			: undefined;
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
@@ -250,6 +334,7 @@ function projectContext(
 					droppedCandidates: [],
 				},
 				warnings,
+				subject: subjectValue(data.subject),
 			}),
 		...(data.remoteSearch.performed || data.remoteSearch.requested
 			? { remoteSearch: data.remoteSearch }
@@ -301,17 +386,133 @@ function projectThread(
 		data.thread.posts,
 		data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
 	);
+	const projected = projectPackedThread(
+		data.thread,
+		data.conversation.alias,
+		data.conversation.kind,
+		data.link,
+		{
+			includeSignals: Boolean(data.signals),
+			subjectTicket:
+				data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+		},
+	);
+	const contextThread: ContextThread = {
+		...data.thread,
+		conversationId: data.conversation.id,
+		conversationAlias: data.conversation.alias,
+		conversationKind: data.conversation.kind,
+		reasons: [],
+		matchingPostIds: [],
+		latestActivityAt:
+			data.thread.posts.at(-1)?.createAt ?? data.freshness.observedAt,
+		link: data.link,
+	};
+	const selectedEvidenceCurrent =
+		data.freshnessMode !== "local" || !data.freshness.stale;
+	const evidence = buildEvidence({
+		searchCoverageComplete: data.complete,
+		selectedThreadsComplete:
+			data.thread.omittedPosts === 0 &&
+			data.thread.totalOmittedAttachments === 0,
+		freshnessMode: data.freshnessMode,
+		freshness: [data.freshness],
+		searchedConversations: [{ id: data.conversation.id }],
+		threads: [contextThread],
+		remoteSearch: {
+			requested: false,
+			performed: false,
+			reason: null,
+			queries: [],
+			candidateThreads: 0,
+			failures: 0,
+		},
+		selection: {
+			candidateThreads: 1,
+			returnedThreads: 1,
+			droppedThin: 0,
+			droppedByBudget: 0,
+			droppedNoMatch: 0,
+			droppedCandidates: [],
+		},
+		warnings,
+		selectedEvidenceCurrent,
+		subject: subjectValue(data.subject),
+	});
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
 		status: status(data.freshnessMode),
 		...(relatedTickets.length ? { relatedTickets } : {}),
-		thread: projectPackedThread(
-			data.thread,
-			data.conversation.alias,
-			data.conversation.kind,
-			data.link,
-		),
+		evidence,
+		thread: projected,
+		threads: [projected],
+		warnings,
+	};
+}
+
+/** Flatten single-file download metadata only — never file bytes. */
+function projectFileDownload(
+	envelope: {
+		command: string;
+		schemaVersion: typeof SCHEMA_VERSION;
+		success: true;
+	},
+	data: FileDownloadResult,
+	warnings: Warning[],
+): AgentCommandResult {
+	return {
+		...envelope,
+		id: data.id,
+		name: data.name,
+		mimeType: data.mimeType,
+		size: data.size,
+		path: data.path,
+		postId: data.postId,
+		conversationId: data.conversationId,
+		warnings,
+	};
+}
+
+/** Flatten batch download metadata only — never file bytes. */
+function projectFiles(
+	envelope: {
+		command: string;
+		schemaVersion: typeof SCHEMA_VERSION;
+		success: true;
+	},
+	data: FileBatchDownloadResult,
+	warnings: Warning[],
+): AgentCommandResult {
+	return {
+		...envelope,
+		outDir: data.outDir,
+		selector: data.selector,
+		limits: data.limits,
+		downloaded: data.downloaded,
+		failed: data.failed,
+		skipped: data.skipped,
+		totalBytes: data.totalBytes,
+		files: data.files.map((item) => {
+			if (item.status === "downloaded") {
+				return {
+					status: "downloaded" as const,
+					id: item.id,
+					name: item.name,
+					mimeType: item.mimeType,
+					size: item.size,
+					path: item.path,
+					postId: item.postId,
+					conversationId: item.conversationId,
+				};
+			}
+			return {
+				status: item.status,
+				...(item.id ? { id: item.id } : {}),
+				...(item.name ? { name: item.name } : {}),
+				error: item.error,
+			};
+		}),
 		warnings,
 	};
 }
@@ -320,6 +521,8 @@ function projectContextThread(
 	thread: ContextThread,
 	options: {
 		short: boolean;
+		navigate: boolean;
+		includeSignals: boolean;
 		role: "primary" | "secondary";
 		subjectTicket?: string;
 	},
@@ -331,19 +534,31 @@ function projectContextThread(
 		thread.link,
 		{
 			short: options.short,
+			navigate: options.navigate,
+			includeSignals: options.includeSignals,
 			role: options.role,
 			subjectTicket: options.subjectTicket,
 			matchingPostIds: thread.matchingPostIds,
 			segments: thread.segments,
 			ticketDensity: thread.ticketDensity,
 			nearestTicketDistance: thread.nearestTicketDistance,
+			reasons: thread.reasons,
 		},
 	);
+	const lean = options.short || options.navigate;
+	if (!thread.surround?.length || lean) return base;
+	const rootMessage =
+		thread.posts.find((post) => post.id === thread.threadId)?.message ??
+		thread.posts[0]?.message ??
+		"";
 	return {
 		...base,
-		...(thread.surround?.length && !options.short
-			? { surround: groupEvidencePosts(thread.surround) }
-			: {}),
+		surround: groupEvidencePosts(thread.surround),
+		surroundRelevance: scoreSurroundRelevance(
+			thread.surround,
+			options.subjectTicket,
+			rootMessage,
+		),
 	};
 }
 
@@ -354,12 +569,15 @@ function projectPackedThread(
 	url: string,
 	options: {
 		short?: boolean;
+		navigate?: boolean;
+		includeSignals?: boolean;
 		role?: "primary" | "secondary";
 		subjectTicket?: string;
 		matchingPostIds?: readonly string[];
 		segments?: TicketSegment[];
 		ticketDensity?: number;
 		nearestTicketDistance?: number | null;
+		reasons?: readonly string[];
 	} = {},
 ): AgentThread {
 	const omittedNames = [
@@ -368,13 +586,35 @@ function projectPackedThread(
 	const packingHints =
 		thread.omittedPosts > 0 ? packingCompletenessHints(thread) : undefined;
 	const clusters = compactClusters(options.segments);
-	const card = options.short
+	const cardMode = Boolean(options.short || options.navigate);
+	const card = cardMode
 		? evidenceCardFields(thread, {
 				role: options.role ?? "primary",
 				subjectTicket: options.subjectTicket,
 				matchingPostIds: options.matchingPostIds ?? [],
 				segments: options.segments,
 			})
+		: undefined;
+	const includeSignals = Boolean(options.includeSignals);
+	const technicalEntities = includeSignals
+		? collectTechnicalEntities(thread.posts)
+		: [];
+	const signals = includeSignals
+		? projectThreadSignals(thread.posts, options.subjectTicket)
+		: undefined;
+	const skips = options.navigate ? timelineSkips(thread.timeline) : undefined;
+	const presentation =
+		options.role === "secondary" &&
+		options.reasons?.includes("multi_ticket_root")
+			? ("announce" as const)
+			: undefined;
+	const brief = projectThreadBrief(thread.posts, {
+		subjectTicket: options.subjectTicket,
+		reasons: options.reasons,
+		presentation,
+	});
+	const filesPresent = thread.posts.some((post) => post.attachments.length > 0)
+		? (true as const)
 		: undefined;
 	return {
 		threadId: thread.threadId,
@@ -394,9 +634,57 @@ function projectPackedThread(
 			? { nearestTicketDistance: options.nearestTicketDistance }
 			: {}),
 		...(options.role ? { role: options.role } : {}),
-		...(!options.short && clusters?.length ? { clusters } : {}),
+		...(presentation ? { presentation } : {}),
+		...(filesPresent ? { filesPresent } : {}),
+		...(!cardMode && clusters?.length ? { clusters } : {}),
 		...(card ?? {}),
-		posts: projectTimeline(thread.timeline),
+		...(technicalEntities.length ? { technicalEntities } : {}),
+		...(signals ? { signals } : {}),
+		...(brief ? { brief } : {}),
+		...(skips?.length ? { skips } : {}),
+		...(options.navigate ? {} : { posts: projectTimeline(thread.timeline) }),
+	};
+}
+
+function projectThreadBrief(
+	posts: readonly PackedPost[],
+	options: {
+		subjectTicket?: string;
+		reasons?: readonly string[];
+		presentation?: "announce";
+	},
+): ThreadBrief | undefined {
+	const brief = buildThreadBrief(posts, options);
+	if (
+		!brief.purposeHints.length &&
+		!brief.decisionPostIds.length &&
+		!brief.outcomeWindow
+	) {
+		return undefined;
+	}
+	return {
+		purposeHints: brief.purposeHints,
+		decisionPostIds: brief.decisionPostIds,
+		...(brief.outcomeWindow ? { outcomeWindow: brief.outcomeWindow } : {}),
+	};
+}
+
+function projectThreadSignals(
+	posts: readonly PackedPost[],
+	subjectTicket?: string,
+): ThreadSignals | undefined {
+	const signals = buildThreadSignals(posts, { subjectTicket });
+	if (
+		!signals.candidateSpans.length &&
+		!signals.roleHints.length &&
+		!signals.outcomeWindow
+	) {
+		return undefined;
+	}
+	return {
+		candidateSpans: signals.candidateSpans,
+		...(signals.outcomeWindow ? { outcomeWindow: signals.outcomeWindow } : {}),
+		roleHints: signals.roleHints,
 	};
 }
 
@@ -511,11 +799,7 @@ function collectAnchors(
 				kind: "file",
 				postId: post.id,
 				at: isoTimestamp(post.createAt),
-				files: liveFiles.map((file) => ({
-					id: file.id,
-					name: file.name,
-					...(file.mimeType ? { mimeType: file.mimeType } : {}),
-				})),
+				files: liveFiles.map((file) => projectFile(file)),
 			});
 		}
 		if (keys.length >= MULTI_TICKET_BULLETIN_MIN_KEYS) {
@@ -578,32 +862,6 @@ function shortMessagesFromThreads(
 	return messages;
 }
 
-/** Prefer substantive / deeper threads over thin announce stubs for `role: primary`. */
-function pickPrimaryThreadIndex(threads: readonly ContextThread[]): number {
-	if (threads.length <= 1) return 0;
-	let bestIndex = 0;
-	let bestScore = Number.NEGATIVE_INFINITY;
-	for (const [index, thread] of threads.entries()) {
-		const thin =
-			thread.reasons.includes("thin_thread") ||
-			thread.reasons.includes("multi_ticket_root");
-		const substantive = thread.reasons.includes("substantive_thread_depth")
-			? 20
-			: 0;
-		const score =
-			(thin ? -100 : 0) +
-			substantive +
-			thread.totalPosts +
-			Math.round((thread.ticketDensity ?? 0) * 5) -
-			thread.omittedPosts * 0.01;
-		if (score > bestScore) {
-			bestScore = score;
-			bestIndex = index;
-		}
-	}
-	return bestIndex;
-}
-
 function packingCompletenessHints(thread: PackedThread): {
 	recommendFull: boolean;
 	largestSkip: number;
@@ -638,6 +896,7 @@ function projectRelatedTickets(
 		...(pointer.sourceThreadId
 			? { sourceThreadId: pointer.sourceThreadId }
 			: {}),
+		...(pointer.alreadyInPacket ? { alreadyInPacket: true as const } : {}),
 		hydrated: false,
 	}));
 }
@@ -748,12 +1007,7 @@ function projectMessage(post: {
 	message: string;
 	attachments: PackedPost["attachments"];
 }): AgentMessage {
-	const files = post.attachments.map((attachment) => ({
-		id: attachment.id,
-		name: attachment.name,
-		...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
-		...(Number.isFinite(attachment.size) ? { size: attachment.size } : {}),
-	}));
+	const files = post.attachments.map((attachment) => projectFile(attachment));
 	return {
 		id: post.id,
 		text: post.message,
@@ -764,6 +1018,73 @@ function projectMessage(post: {
 		...(post.deleteAt ? { deleted: true as const } : {}),
 		...(files.length ? { files } : {}),
 	};
+}
+
+function projectFile(attachment: {
+	id: string;
+	name: string;
+	mimeType?: string;
+	size?: number;
+}): AgentFile {
+	return {
+		id: attachment.id,
+		name: attachment.name,
+		...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+		...(Number.isFinite(attachment.size) ? { size: attachment.size } : {}),
+		downloadCommand: fileDownloadCommand(attachment.id),
+	};
+}
+
+function timelineSkips(
+	timeline: readonly PackTimelineItem[],
+): AgentSkip["skip"][] {
+	return timeline
+		.filter(
+			(item): item is Extract<PackTimelineItem, { kind: "skip" }> =>
+				item.kind === "skip",
+		)
+		.map((item) => item.skip);
+}
+
+function collectTechnicalEntities(
+	posts: readonly PackedPost[],
+): AgentTechnicalEntity[] {
+	const merged = new Map<string, AgentTechnicalEntity>();
+	for (const post of posts) {
+		const extracted = [
+			...extractEngineeringEntities(post.message),
+			...post.attachments
+				.filter((file) => !file.deleteAt)
+				.map((file) => ({
+					kind: "attachment_filename" as const,
+					value: file.name,
+					normalizedValue: normalizeSearchText(file.name),
+				})),
+		];
+		for (const entity of extracted) {
+			if (!entity.normalizedValue) continue;
+			const key = `${entity.kind}\0${entity.normalizedValue}`;
+			const existing = merged.get(key);
+			if (existing) {
+				if (!existing.sourcePostIds.includes(post.id)) {
+					existing.sourcePostIds.push(post.id);
+				}
+				continue;
+			}
+			merged.set(key, {
+				kind: entity.kind,
+				value: entity.value,
+				sourcePostIds: [post.id],
+			});
+		}
+	}
+	return [...merged.values()]
+		.sort(
+			(left, right) =>
+				left.kind.localeCompare(right.kind) ||
+				left.value.localeCompare(right.value),
+		)
+		.slice(0, TECHNICAL_ENTITY_CAP);
 }
 
 function status(freshnessMode: "local" | "network" | "forced"): AgentStatus {

@@ -177,6 +177,53 @@
 		"warnings": []
 	},
 	{
+		"command": "files",
+		"schemaVersion": 2,
+		"success": true,
+		"data": {
+			"outDir": "/tmp/mm-files-batch",
+			"selector": {
+				"kind": "file_ids",
+				"fileIds": ["file-1", "file-2"]
+			},
+			"limits": {
+				"maxFiles": 20,
+				"maxTotalBytes": 52428800
+			},
+			"downloaded": 1,
+			"failed": 0,
+			"skipped": 1,
+			"totalBytes": 42,
+			"files": [
+				{
+					"status": "downloaded",
+					"id": "file-1",
+					"name": "synthetic.txt",
+					"mimeType": "text/plain",
+					"size": 42,
+					"path": "/tmp/mm-files-batch/synthetic.txt",
+					"postId": "bbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"conversationId": "channel-1"
+				},
+				{
+					"status": "skipped",
+					"id": "file-2",
+					"name": "existing.png",
+					"error": {
+						"kind": "file_exists",
+						"message": "Refusing to overwrite existing file at /tmp/mm-files-batch/existing.png."
+					}
+				}
+			]
+		},
+		"warnings": [
+			{
+				"kind": "batch_partial_failure",
+				"message": "Downloaded 1; 1 skipped. See files[] for per-item status."
+			}
+		]
+	},
+	{
 		"command": "context",
 		"schemaVersion": 2,
 		"success": false,

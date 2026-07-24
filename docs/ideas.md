@@ -38,7 +38,8 @@ and pays for that with too many queries and CPU-bound work.
 
 ## More useful mechanical anchors
 
-**Status:** deferred
+**Status:** partial (`--navigate` anchors/clusters/skips + `technicalEntities` +
+advisory `signals` candidate spans / `roleHints` / mechanical `outcome_window`)
 
 **Problem.** Agents want “decision / proposal / unresolved” markers. Fake
 semantics (keyword heuristics or LLM labels) would be non-deterministic and easy
@@ -53,26 +54,36 @@ Stay mechanical and evidence-backed, with post ids only — no prose summaries:
 - posts with attachments or code fences in the ticket window;
 - long posts in the ticket window;
 - multi-ticket bulletin roots (already demoted; may deserve a clearer anchor);
-- optional “outcome window”: posts after the last subject-ticket mention, still
-  bounded and labeled as a window, not as a verified decision.
+- “outcome window”: posts after the last subject-ticket mention inside the
+  returned set — shipped as `signals.outcomeWindow` (`label: "outcome_window"`),
+  still bounded and labeled as a window, not as a verified decision.
 
-Expose anchors as pointers agents can hydrate; never as authoritative outcomes.
+Expose anchors / `signals` as pointers agents can hydrate; never as authoritative
+outcomes. `--agent` threads may include capped advisory `signals.candidateSpans`
+(`*candidate*` kinds only), multi-label `roleHints`, and the mechanical outcome
+window — cite packed `postId`s only; do not replace `role` primary/secondary.
+`--navigate` already returns lean anchors/clusters/skips plus capped
+`technicalEntities` from packed posts. Full `decisionFlow` / late-confirmation
+reply graphs remain deferred.
 
 ---
 
 ## Attachments without OCR / vision
 
-**Status:** deferred (skill-first)
+**Status:** done for explicit download (`downloadCommand` argv + `mm files` batch);
+OCR / vision remain out of scope
 
 **Problem.** UI and support threads often need screenshots. Metadata and
 `mm file` already work; auto-OCR or image captions need heavy tooling and invite
 treating model text as evidence.
 
-**Direction to explore later.**
+**Direction.**
 
 - Skill rule: a message with `files[]` is incomplete until the agent downloads
-  and inspects the attachment (`mm file` + Read).
-- Optional later: bounded batch download for a selected thread’s attachments
-  (explicit command, still not inlined into the context packet).
+  and inspects the attachment (`mm file` / `mm files` + Read); prefer
+  `downloadCommand` argv for one-offs and `mm files --thread|--post --out-dir`
+  for bounded batches.
+- Batch download is an explicit command with safety limits; attachments are
+  still not inlined into the context packet.
 - Do not auto-download on `context` / `sync`.
 - Do not add OCR or vision summarization unless product scope explicitly changes.

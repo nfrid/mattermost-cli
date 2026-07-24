@@ -6,6 +6,7 @@ import type {
 } from "../context/index.ts";
 import type { PackedPost } from "../evidence/packing.ts";
 import type { CommandResult } from "../shared/command-result.ts";
+import type { FileBatchDownloadResult } from "../sync/file-batch-download.ts";
 import type { FileDownloadResult } from "../sync/file-download.ts";
 import type {
 	ChannelValidationResult,
@@ -57,6 +58,9 @@ export function formatHumanResult(result: CommandResult<unknown>): string {
 			break;
 		case "file":
 			body = formatFile(result.data as FileDownloadResult);
+			break;
+		case "files":
+			body = formatFiles(result.data as FileBatchDownloadResult);
 			break;
 		default:
 			body = JSON.stringify(result.data, null, 2);
@@ -394,6 +398,35 @@ function formatFile(data: FileDownloadResult): string {
 		`${styles.accent(String(data.size))} bytes`,
 		styles.link(data.path),
 	]);
+}
+
+function formatFiles(data: FileBatchDownloadResult): string {
+	const summary = joinParts([
+		styles.success(`Downloaded ${data.downloaded}`),
+		styles.hint(`${data.failed} failed`),
+		styles.hint(`${data.skipped} skipped`),
+		`${styles.accent(String(data.totalBytes))} bytes`,
+		styles.link(data.outDir),
+	]);
+	const lines = data.files.map((item) => {
+		if (item.status === "downloaded") {
+			return joinParts([
+				styles.success("ok"),
+				styles.label(item.name),
+				styles.identifier(item.id),
+				styles.link(item.path),
+			]);
+		}
+		return joinParts(
+			[
+				styles.warning(item.status),
+				item.name ? styles.label(item.name) : undefined,
+				item.id ? styles.identifier(item.id) : undefined,
+				styles.hint(`${item.error.kind}: ${item.error.message}`),
+			].filter((part): part is string => Boolean(part)),
+		);
+	});
+	return [summary, ...lines].join("\n");
 }
 
 function joinParts(parts: string[]): string {

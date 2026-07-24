@@ -2,6 +2,7 @@ import type { MattermostConfig } from "../config/config.ts";
 import type { EvidencePost } from "../evidence/packing.ts";
 import { MattermostApiError } from "../mattermost/client.ts";
 import type { MattermostPost } from "../mattermost/schemas.ts";
+import { extractTicketKeys } from "../search/extract.ts";
 import {
 	buildRankingReasons,
 	evaluateThreadEvidence,
@@ -17,6 +18,8 @@ import { matchesQueryExpansion } from "../search/query-expansion.ts";
 import {
 	containsNormalizedExactText,
 	containsNormalizedText,
+	normalizeSearchText,
+	STOP_WORDS,
 } from "../search/text.ts";
 import type { Warning } from "../shared/command-result.ts";
 import { AppError, ConfigError } from "../shared/errors.ts";
@@ -26,10 +29,9 @@ import type {
 	IndexedPost,
 	IndexedUser,
 	MattermostStore,
-	TicketThreadRelationship,
 } from "../store/index.ts";
 import { inspectFreshness, ReconciliationError } from "../sync/sync.ts";
-import type { FreshnessEvidence } from "./types.ts";
+import type { FreshnessEvidence, SurroundRelevance } from "./types.ts";
 
 export function isRecoverableRemoteError(error: unknown): boolean {
 	if (error instanceof MattermostApiError) return true;
@@ -60,6 +62,60 @@ export function resolveConversationSurround(
 	);
 	if (!preceding.length) return [];
 	return localEvidence(store, preceding);
+}
+
+/**
+ * Labels DM surround for agent skip guidance. Does not drop posts — callers
+ * still attach surround and only surface the label.
+ *
+ * - `unknown` when the subject ticket is missing, or surround looks related
+ *   (ticket mention or non-trivial token overlap with the thread root).
+ * - `low` when no surround post mentions the subject and there is no shared
+ *   non-trivial token overlap with the thread root beyond the ticket key.
+ */
+export function scoreSurroundRelevance(
+	surroundPosts: readonly EvidencePost[],
+	subjectTicket: string | undefined,
+	threadRootMessage = "",
+): SurroundRelevance {
+	const subject = subjectTicket?.trim();
+	if (!subject) return "unknown";
+
+	const subjectKey = subject.toUpperCase();
+	if (
+		surroundPosts.some((post) =>
+			extractTicketKeys(post.message).includes(subjectKey),
+		)
+	) {
+		return "unknown";
+	}
+
+	const rootTokens = nontrivialOverlapTokens(threadRootMessage, subjectKey);
+	if (!rootTokens.size) return "low";
+
+	for (const post of surroundPosts) {
+		const surroundTokens = nontrivialOverlapTokens(post.message, subjectKey);
+		for (const token of surroundTokens) {
+			if (rootTokens.has(token)) return "unknown";
+		}
+	}
+	return "low";
+}
+
+function nontrivialOverlapTokens(
+	message: string,
+	subjectTicketKey: string,
+): Set<string> {
+	const excluded = normalizeSearchText(subjectTicketKey);
+	const tokens = message.match(/[\p{L}\p{N}_-]+/gu) ?? [];
+	return new Set(
+		tokens
+			.map(normalizeSearchText)
+			.filter(
+				(token) =>
+					token.length > 1 && token !== excluded && !STOP_WORDS.has(token),
+			),
+	);
 }
 
 export function assertThreadBoundary(

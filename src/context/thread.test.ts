@@ -12,6 +12,7 @@ import { getMattermostThread } from "./index.ts";
 import {
 	FakeContextClient,
 	list,
+	PLATFORM_ROOT,
 	REPLY,
 	ROOT,
 	seededStore,
@@ -31,6 +32,89 @@ describe("thread command API", () => {
 			{ config: configFixture(), store },
 		);
 		expect(full.thread.returnedPosts).toBe(full.thread.totalPosts);
+		store.close();
+	});
+
+	test("supports asymmetric around before/after posts", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const ids = [
+			"aaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"bbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"cccccccccccccccccccccccccc",
+			"dddddddddddddddddddddddddd",
+			"eeeeeeeeeeeeeeeeeeeeeeeeee",
+			"ffffffffffffffffffffffffff",
+			"gggggggggggggggggggggggggg",
+		] as const;
+		const [root, , , around, , , far] = ids;
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			users: [userFixture()],
+			posts: ids.map((id, index) =>
+				postFixture({
+					id,
+					root_id: index === 0 ? "" : root,
+					channel_id: "channel-payments",
+					message: `post-${index}`,
+					create_at: 10 + index,
+				}),
+			),
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: far,
+				newestPostAt: 16,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 100,
+				coverageComplete: true,
+			},
+		});
+		const selected = await getMattermostThread(
+			{
+				target: root,
+				local: true,
+				around,
+				beforePosts: 1,
+				afterPosts: 3,
+			},
+			{ config: configFixture(), store },
+		);
+		expect(selected.thread.selectionStrategy).toContain("around_neighborhood");
+		expect(selected.thread.posts.map(({ id }) => id)).toContain(far);
+		expect(selected.thread.posts.map(({ id }) => id)).toEqual([
+			...ids.slice(0, 7),
+		]);
+		store.close();
+	});
+
+	test("rejects around posts missing from the thread", async () => {
+		const store = await seededStore();
+		await expect(
+			getMattermostThread(
+				{
+					target: REPLY,
+					local: true,
+					around: PLATFORM_ROOT,
+				},
+				{ config: configFixture(), store },
+			),
+		).rejects.toMatchObject({
+			name: "ConfigError",
+			kind: "around_post_not_in_thread",
+		});
+		store.close();
+	});
+
+	test("rejects before/after posts without around", async () => {
+		const store = await seededStore();
+		await expect(
+			getMattermostThread(
+				{ target: REPLY, local: true, beforePosts: 1 },
+				{ config: configFixture(), store },
+			),
+		).rejects.toMatchObject({
+			name: "ConfigError",
+			kind: "invalid_around_options",
+		});
 		store.close();
 	});
 

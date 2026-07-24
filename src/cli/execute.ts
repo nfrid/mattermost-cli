@@ -10,12 +10,14 @@ import {
 	type CommandResult,
 	commandFailure,
 } from "../shared/command-result.ts";
+import type { FileBatchSelector } from "../sync/file-batch-download.ts";
 import {
 	type CommandDependencies,
 	channelsCommand,
 	contextCommand,
 	doctorCommand,
 	fileCommand,
+	filesCommand,
 	searchCommand,
 	syncCommand,
 	threadCommand,
@@ -84,6 +86,8 @@ export async function executeCommand(
 						noWiden: commandOptions.widen === false,
 						includeAutomation: commandOptions.includeAutomation,
 						short: commandOptions.short,
+						navigate: commandOptions.navigate,
+						signals: commandOptions.signals,
 					},
 					dependencies,
 				);
@@ -116,6 +120,9 @@ export async function executeCommand(
 						fresh: commandOptions.fresh,
 						full: commandOptions.full,
 						around: commandOptions.around,
+						beforePosts: commandOptions.beforePosts,
+						afterPosts: commandOptions.afterPosts,
+						signals: commandOptions.signals,
 					},
 					dependencies,
 				);
@@ -129,6 +136,20 @@ export async function executeCommand(
 					},
 					dependencies,
 				);
+			case "files": {
+				const selector = resolveFilesSelector(commandOptions);
+				if (!commandOptions.outDir) {
+					throw new Error("--out-dir is required.");
+				}
+				return await filesCommand(
+					config,
+					{
+						selector,
+						outDir: commandOptions.outDir,
+					},
+					dependencies,
+				);
+			}
 			case "sync":
 				return await syncCommand(
 					config,
@@ -144,6 +165,30 @@ export async function executeCommand(
 	} catch (error) {
 		return commandFailure(command, error, [resolvedToken]);
 	}
+}
+
+function resolveFilesSelector(
+	commandOptions: CommandOptions,
+): FileBatchSelector {
+	const fileIds = commandOptions.fileIds ?? [];
+	const postId = commandOptions.postId?.trim() ?? "";
+	const threadId = commandOptions.threadId?.trim() ?? "";
+	const hasFileIds = fileIds.length > 0;
+	const hasPost = postId.length > 0;
+	const hasThread = threadId.length > 0;
+	const selected = Number(hasFileIds) + Number(hasPost) + Number(hasThread);
+	if (selected !== 1) {
+		throw new Error(
+			"Specify exactly one of --post <id>, --thread <id>, or <file-id…>.",
+		);
+	}
+	if (hasPost) {
+		return { kind: "post", postId };
+	}
+	if (hasThread) {
+		return { kind: "thread", threadId };
+	}
+	return { kind: "file_ids", fileIds };
 }
 
 export function emitResult(

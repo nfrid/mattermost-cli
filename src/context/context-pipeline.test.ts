@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { MattermostApiError } from "../mattermost/client.ts";
 import { formatHumanResult } from "../output/format.ts";
 import { commandSuccess } from "../shared/command-result.ts";
+import { MattermostStore } from "../store/index.ts";
 import {
 	configFixture,
 	conversationFixture,
@@ -767,6 +768,11 @@ describe("context pipeline", () => {
 		);
 		expect(result.threads[0]?.reasons).not.toContain("exact_phrase");
 		expect(result.threads[0]?.reasons).toContain("all_terms_in_thread");
+		expect(result.evidence.currency).toBe("current");
+		expect(result.evidence.completeness.discovery).toBe("possibly_stale");
+		expect(result.evidence.next).not.toContainEqual(
+			expect.objectContaining({ action: "fresh_or_remote" }),
+		);
 		expect(client.threadRequests).toEqual([ROOT]);
 		store.close();
 	});
@@ -887,6 +893,113 @@ describe("context pipeline", () => {
 		store.close();
 	});
 
+	test("reclaims unused global budget for a truncated primary thread", async () => {
+		const store = await seededStore({ fresh: true });
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			posts: Array.from({ length: 6 }, (_, index) =>
+				postFixture({
+					id: `${String(index + 1).repeat(26)}`,
+					root_id: ROOT,
+					channel_id: "channel-payments",
+					message: `primary decision detail ${index} ${"x".repeat(70)}`,
+					create_at: 30 + index,
+				}),
+			),
+		});
+		const config = configFixture({
+			budgets: {
+				...configFixture().budgets,
+				defaultMaxCharacters: 1_400,
+				defaultPerThreadCharacters: 500,
+			},
+		});
+		const result = await getMattermostContext(
+			{ subject: "shared evidence", local: true },
+			{ config, store, now: () => 100 },
+		);
+		const primary = result.threads.find(({ threadId }) => threadId === ROOT);
+		expect(result.threads).toHaveLength(2);
+		expect(primary?.omittedPosts).toBe(0);
+		expect(primary?.budget.limit ?? 0).toBeGreaterThan(500);
+		expect(result.budget.used).toBeLessThanOrEqual(1_400);
+		store.close();
+	});
+
+	test("repacks a primary ticket thread to keep a contiguous ticket core", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const ticketRoot = "tttttttttttttttttttttttttt";
+		const posts = [
+			postFixture({
+				id: ticketRoot,
+				channel_id: "channel-payments",
+				message: "TECHSUPP-42 kickoff",
+				create_at: 10,
+			}),
+			...Array.from({ length: 18 }, (_, index) =>
+				postFixture({
+					id: `m${String(index).padStart(25, "0")}`,
+					root_id: ticketRoot,
+					channel_id: "channel-payments",
+					message: `argument middle ${index} ${"x".repeat(40)}`,
+					create_at: 20 + index,
+				}),
+			),
+			postFixture({
+				id: "uuuuuuuuuuuuuuuuuuuuuuuuuu",
+				root_id: ticketRoot,
+				channel_id: "channel-payments",
+				message: "TECHSUPP-42 resolved",
+				create_at: 100,
+			}),
+		];
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			users: [userFixture()],
+			posts,
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: "uuuuuuuuuuuuuuuuuuuuuuuuuu",
+				newestPostAt: 100,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		store.linkTicketThread("TECHSUPP-42", ticketRoot, ticketRoot, "explicit");
+		const config = configFixture({
+			budgets: {
+				...configFixture().budgets,
+				defaultMaxCharacters: 900,
+				defaultPerThreadCharacters: 900,
+				defaultMaxThreads: 1,
+				ticketNeighborhoodRadius: 0,
+				matchNeighborhoodRadius: 1,
+				clusterMergeGap: 0,
+			},
+		});
+		const result = await getMattermostContext(
+			{ subject: "TECHSUPP-42", channels: ["payments"], local: true },
+			{ config, store, now: () => 1_000 },
+		);
+		expect(result.threads).toHaveLength(1);
+		const primary = result.threads[0];
+		expect(primary?.selectionStrategy).toContain("contiguous_ticket_core");
+		expect(primary?.omittedPosts).toBeGreaterThan(0);
+		const selected = primary?.posts.map(({ id }) => id) ?? [];
+		const first = selected[0];
+		const last = selected[selected.length - 1];
+		expect(first).toBeDefined();
+		expect(last).toBeDefined();
+		const chronological = posts.map(({ id }) => id);
+		const span = chronological.slice(
+			chronological.indexOf(first!),
+			chronological.indexOf(last!) + 1,
+		);
+		expect(selected).toEqual(span);
+		store.close();
+	});
+
 	test("enforces global and per-thread budgets without splitting messages", async () => {
 		const store = await seededStore();
 		const config = configFixture({
@@ -906,7 +1019,7 @@ describe("context pipeline", () => {
 			{ config, store },
 		);
 		expect(result.budget.used).toBeLessThanOrEqual(140);
-		expect(result.threads.every(({ budget }) => budget.used <= 100)).toBe(true);
+		expect(result.threads.every(({ budget }) => budget.used <= 140)).toBe(true);
 		expect(result.threads.some(({ omittedPosts }) => omittedPosts > 0)).toBe(
 			true,
 		);

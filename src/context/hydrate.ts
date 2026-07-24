@@ -1,30 +1,17 @@
-import type { MattermostConfig } from "../config/config.ts";
 import type { EvidencePost } from "../evidence/packing.ts";
-import { packThread } from "../evidence/packing.ts";
-import { MattermostApiError } from "../mattermost/client.ts";
 import type { MattermostPost } from "../mattermost/schemas.ts";
-import type {
-	MattermostSubject,
-	RetrievalProbe,
-	RoutedConversation,
-	ThreadCandidate,
-} from "../search/index.ts";
+import type { RoutedConversation } from "../search/index.ts";
 import type { Warning } from "../shared/command-result.ts";
 import { mapWithConcurrency } from "../shared/concurrency.ts";
 import { ConfigError } from "../shared/errors.ts";
 import type { IndexedPost, MattermostStore } from "../store/index.ts";
 import {
 	assertThreadBoundary,
-	evidencePost,
 	indexedPost,
 	isRecoverableRemoteError,
-	localDisplayName,
 	localEvidence,
-	postLink,
-	reevaluateCandidate,
-	resolveConversationSurround,
 } from "./helpers.ts";
-import type { ContextClient, ContextThread } from "./types.ts";
+import type { ContextClient } from "./types.ts";
 
 export async function resolveDirectTarget(
 	postId: string,
@@ -69,6 +56,11 @@ export async function resolveDirectTarget(
 	}
 }
 
+export interface HydratedThread {
+	posts: EvidencePost[];
+	source: "local" | "network";
+}
+
 export async function hydrateThread(
 	rootPostId: string,
 	conversation: RoutedConversation,
@@ -81,7 +73,7 @@ export async function hydrateThread(
 		now?: number;
 		warnings?: Warning[];
 	} = {},
-): Promise<EvidencePost[]> {
+): Promise<HydratedThread> {
 	const localPosts = store.getThread(rootPostId);
 	const localUsable = (() => {
 		if (!localPosts.length) return false;
@@ -115,7 +107,7 @@ export async function hydrateThread(
 				"thread_not_found",
 			);
 		}
-		return localEvidence(store, localPosts);
+		return { posts: localEvidence(store, localPosts), source: "local" };
 	}
 
 	const now = options.now ?? Date.now();
@@ -126,7 +118,7 @@ export async function hydrateThread(
 		: null;
 	const stale = ageSeconds === null || ageSeconds > freshnessSeconds;
 	if (!options.forceRemote && localUsable && !stale) {
-		return localEvidence(store, localPosts);
+		return { posts: localEvidence(store, localPosts), source: "local" };
 	}
 
 	try {
@@ -158,7 +150,10 @@ export async function hydrateThread(
 		]);
 		store.writePage({ conversation, posts, users, files });
 		// Index is the source of truth so known files skipped by missingFileIds stay in evidence.
-		return localEvidence(store, store.getThread(rootPostId));
+		return {
+			posts: localEvidence(store, store.getThread(rootPostId)),
+			source: "network",
+		};
 	} catch (error) {
 		if (isRecoverableRemoteError(error) && localUsable) {
 			options.warnings?.push({
@@ -166,7 +161,7 @@ export async function hydrateThread(
 				message:
 					"Mattermost thread fetch failed; using locally indexed thread evidence.",
 			});
-			return localEvidence(store, localPosts);
+			return { posts: localEvidence(store, localPosts), source: "local" };
 		}
 		throw error;
 	}

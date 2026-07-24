@@ -3,7 +3,9 @@ import type { ThreadCandidate } from "../search/index.ts";
 import { configFixture } from "../test-fixtures.ts";
 import {
 	buildDroppedCandidates,
+	isActionableDroppedCandidate,
 	orderCandidatesForThinReserve,
+	shouldRecommendInspectDropped,
 } from "./selection.ts";
 
 function candidate(
@@ -85,6 +87,7 @@ describe("selection helpers", () => {
 				threadId: "thin",
 				dropReason: "thin",
 				excerpt: "не работает",
+				excerpts: ["не работает"],
 				url: expect.stringContaining("thin"),
 			}),
 			expect.objectContaining({
@@ -92,5 +95,83 @@ describe("selection helpers", () => {
 				dropReason: "budget",
 			}),
 		]);
+	});
+
+	test("sorts thin and ticket drops ahead of plain budget bulletin noise", () => {
+		const dropped = buildDroppedCandidates({
+			candidates: [
+				candidate("bulletin", ["exact_phrase", "multi_ticket_root"], "noise"),
+				candidate("ticket", ["ticket_in_reply"], "ticket hit"),
+				candidate("thin", ["thin_thread", "ticket_in_root"], "не работает"),
+			],
+			selectedIds: new Set(),
+			noMatchIds: new Set(),
+			config: configFixture(),
+		});
+		expect(dropped.map(({ threadId }) => threadId)).toEqual([
+			"thin",
+			"ticket",
+			"bulletin",
+		]);
+		expect(isActionableDroppedCandidate(dropped[0]!)).toBe(true);
+		expect(isActionableDroppedCandidate(dropped[1]!)).toBe(true);
+		expect(isActionableDroppedCandidate(dropped[2]!)).toBe(false);
+	});
+
+	test("keeps at most two distinct existing excerpts", () => {
+		const droppedCandidate = candidate("thin", ["thin_thread"], "first");
+		droppedCandidate.matches.push(
+			{ postId: "p2", probe: "second", excerpt: "second" },
+			{ postId: "p3", probe: "duplicate", excerpt: "first" },
+			{ postId: "p4", probe: "third", excerpt: "third" },
+		);
+		const [dropped] = buildDroppedCandidates({
+			candidates: [droppedCandidate],
+			selectedIds: new Set(),
+			noMatchIds: new Set(),
+			config: configFixture(),
+		});
+		expect(dropped?.excerpt).toBe("first");
+		expect(dropped?.excerpts).toEqual(["first", "second"]);
+	});
+
+	test("shouldRecommendInspectDropped skips empty and thin link-only excerpts", () => {
+		expect(shouldRecommendInspectDropped({ excerpt: "" }, ["selected"])).toBe(
+			false,
+		);
+		expect(shouldRecommendInspectDropped({}, ["selected"])).toBe(false);
+		expect(
+			shouldRecommendInspectDropped(
+				{ excerpt: "BTB-1 https://tracker.example/BTB-1" },
+				["selected"],
+			),
+		).toBe(false);
+		expect(
+			shouldRecommendInspectDropped({ excerpt: "…BTB-2080 не работает" }, [
+				"selected",
+			]),
+		).toBe(false);
+		expect(
+			shouldRecommendInspectDropped({ excerpt: "не работает checkout" }, [
+				"selected",
+			]),
+		).toBe(true);
+	});
+
+	test("shouldRecommendInspectDropped skips excerpts already in selected messages", () => {
+		expect(
+			shouldRecommendInspectDropped(
+				{ excerpt: "payment   timeout  reproduced" },
+				["Earlier: payment timeout reproduced in staging"],
+			),
+		).toBe(false);
+		expect(
+			shouldRecommendInspectDropped(
+				{
+					excerpts: ["BTB-1", "unique symptom: duplicate charge"],
+				},
+				["BTB-1 ping only"],
+			),
+		).toBe(true);
 	});
 });

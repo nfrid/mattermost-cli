@@ -15,13 +15,20 @@ import {
 import {
 	type CommandResult,
 	commandSuccess,
+	type Warning,
 } from "../shared/command-result.ts";
+import { ConfigError } from "../shared/errors.ts";
 import {
 	FRESHEN_LOCK_STALE_MS,
 	FRESHEN_LOCK_TIMEOUT_MS,
 } from "../shared/limits.ts";
 import { freshenLockPath, withFileLock } from "../shared/lock.ts";
 import { MattermostStore } from "../store/index.ts";
+import {
+	downloadMattermostFiles,
+	type FileBatchDownloadInput,
+	type FileBatchDownloadResult,
+} from "../sync/file-batch-download.ts";
 import {
 	downloadMattermostFile,
 	type FileDownloadInput,
@@ -134,6 +141,55 @@ export async function fileCommand(
 	} finally {
 		store.close();
 	}
+}
+
+export async function filesCommand(
+	config: MattermostConfig,
+	input: FileBatchDownloadInput,
+	dependencies: CommandDependencies = {},
+): Promise<CommandResult<FileBatchDownloadResult>> {
+	const store = await MattermostStore.open(config.databasePath, {
+		concepts: config.concepts,
+	});
+	try {
+		const data = await downloadMattermostFiles(input, {
+			config,
+			store,
+			client: input.local ? undefined : createClient(config, dependencies),
+		});
+		if (data.downloaded === 0) {
+			throw new ConfigError(
+				summarizeBatchFailure(data),
+				"batch_download_empty",
+			);
+		}
+		return commandSuccess("files", data, batchWarnings(data));
+	} finally {
+		store.close();
+	}
+}
+
+function batchWarnings(data: FileBatchDownloadResult): Warning[] {
+	if (data.failed === 0 && data.skipped === 0) return [];
+	const parts: string[] = [];
+	if (data.failed > 0) parts.push(`${data.failed} failed`);
+	if (data.skipped > 0) parts.push(`${data.skipped} skipped`);
+	return [
+		{
+			kind: "batch_partial_failure",
+			message: `Downloaded ${data.downloaded}; ${parts.join(", ")}. See files[] for per-item status.`,
+		},
+	];
+}
+
+function summarizeBatchFailure(data: FileBatchDownloadResult): string {
+	const first = data.files.find(
+		(item) => item.status === "error" || item.status === "skipped",
+	);
+	if (first && (first.status === "error" || first.status === "skipped")) {
+		return `No files downloaded (${data.failed} failed, ${data.skipped} skipped). First issue: ${first.error.message}`;
+	}
+	return "No files downloaded.";
 }
 
 export async function syncCommand(

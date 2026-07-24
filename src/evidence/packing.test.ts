@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { type EvidencePost, packThread, renderedPostUnits } from "./packing.ts";
+import { ConfigError } from "../shared/errors.ts";
+import {
+	clampAroundSidePosts,
+	type EvidencePost,
+	hasInternalBudgetSkipInCore,
+	MAX_AROUND_SIDE_POSTS,
+	packThread,
+	renderedPostUnits,
+	ticketCorePostIds,
+} from "./packing.ts";
 
 describe("thread packing", () => {
 	test("selects root, matches, neighborhoods, then latest and restores chronology", () => {
@@ -342,6 +351,262 @@ describe("thread packing", () => {
 		expect(packed.selectionStrategy).not.toContain("gap_fill");
 		expect(packed.selectionStrategy).not.toContain("densest_window");
 		expect(packed.posts.map(({ id }) => id)).toEqual(["p0", "p3", "p4"]);
+	});
+
+	test("contiguousTicketCore avoids internal budget skips inside the ticket core", () => {
+		const posts = [
+			evidence("p0", 0, "TECHSUPP-109 start"),
+			...Array.from({ length: 20 }, (_, index) =>
+				evidence(`m${index}`, index + 1, `argument ${index}`),
+			),
+			evidence("p1", 21, "TECHSUPP-109 agreed"),
+		];
+		const unitsFor = (...indexes: number[]) =>
+			indexes.reduce((sum, index) => {
+				const post = posts.at(index);
+				if (!post) throw new Error(`missing post ${index}`);
+				return sum + renderedPostUnits(post);
+			}, 0);
+		const limit = unitsFor(0, 21, 1, 2, 19, 20);
+		const packed = packThread("p0", posts, {
+			subjectTicketKey: "TECHSUPP-109",
+			matchingPostIds: ["p0", "p1"],
+			ticketNeighborhoodRadius: 0,
+			neighborhoodRadius: 1,
+			clusterMergeGap: 0,
+			structuralAnchors: false,
+			contiguousTicketCore: true,
+			limit,
+		});
+		expect(packed.selectionStrategy).toContain("contiguous_ticket_core");
+		const selected = packed.posts.map(({ id }) => id);
+		const first = selected[0];
+		const last = selected[selected.length - 1];
+		expect(first).toBeDefined();
+		expect(last).toBeDefined();
+		const coreSpan = posts
+			.map(({ id }) => id)
+			.slice(
+				posts.findIndex((post) => post.id === first),
+				posts.findIndex((post) => post.id === last) + 1,
+			);
+		expect(selected).toEqual(coreSpan);
+		expect(
+			hasInternalBudgetSkipInCore(
+				packed.timeline,
+				ticketCorePostIds(posts, ["p0", "p1"], false),
+			),
+		).toBe(false);
+	});
+
+	test("contiguousTicketCore may omit a noisy off-topic root while keeping the ticket core", () => {
+		const posts = [
+			evidence("root", 0, "unrelated standup noise"),
+			...Array.from({ length: 4 }, (_, index) =>
+				evidence(`noise${index}`, index + 1, `noise ${index}`),
+			),
+			evidence("t0", 5, "BTB-2112 starts"),
+			evidence("mid", 6, "decision detail"),
+			evidence("t1", 7, "BTB-2112 done"),
+			evidence("tail", 8, "thanks"),
+		];
+		const coreUnits =
+			renderedPostUnits(posts[5]!) +
+			renderedPostUnits(posts[6]!) +
+			renderedPostUnits(posts[7]!);
+		const packed = packThread("root", posts, {
+			subjectTicketKey: "BTB-2112",
+			matchingPostIds: ["t0"],
+			ticketNeighborhoodRadius: 0,
+			neighborhoodRadius: 1,
+			clusterMergeGap: 0,
+			structuralAnchors: false,
+			contiguousTicketCore: true,
+			limit: coreUnits,
+		});
+		expect(packed.posts.map(({ id }) => id)).toEqual(["t0", "mid", "t1"]);
+		expect(packed.posts.some(({ id }) => id === "root")).toBe(false);
+		expect(
+			packed.timeline.some(
+				(item) =>
+					item.kind === "skip" && item.skip.reason === "outside_ticket_window",
+			),
+		).toBe(true);
+	});
+
+	test("contiguousTicketCore keeps mid-thread replies for root-anchored support threads", () => {
+		const posts = [
+			evidence("p0", 0, "BTB-99 duty announce"),
+			...Array.from({ length: 10 }, (_, index) =>
+				evidence(`r${index}`, index + 1, `duty reply ${index}`),
+			),
+			evidence("tail", 11, "ack"),
+		];
+		const unitsFor = (...indexes: number[]) =>
+			indexes.reduce((sum, index) => {
+				const post = posts.at(index);
+				if (!post) throw new Error(`missing post ${index}`);
+				return sum + renderedPostUnits(post);
+			}, 0);
+		// Fits root + a contiguous mid slice, but not the full chain.
+		const limit = unitsFor(0, 4, 5, 6, 7, 8);
+		const packed = packThread("p0", posts, {
+			subjectTicketKey: "BTB-99",
+			matchingPostIds: ["p0"],
+			ticketNeighborhoodRadius: 0,
+			neighborhoodRadius: 1,
+			clusterMergeGap: 0,
+			structuralAnchors: false,
+			contiguousTicketCore: true,
+			limit,
+		});
+		expect(packed.selectionStrategy).toContain("contiguous_ticket_core");
+		expect(packed.posts.some(({ id }) => id === "p0")).toBe(true);
+		const selected = packed.posts.map(({ id }) => id);
+		const first = selected[0];
+		const last = selected[selected.length - 1];
+		const span = posts
+			.map(({ id }) => id)
+			.slice(
+				posts.findIndex((post) => post.id === first),
+				posts.findIndex((post) => post.id === last) + 1,
+			);
+		expect(selected).toEqual(span);
+		expect(selected.some((id) => id.startsWith("r"))).toBe(true);
+	});
+
+	test("around uses asymmetric before/after counts and defaults to match radius", () => {
+		const posts = Array.from({ length: 10 }, (_, index) =>
+			evidence(`p${index}`, index),
+		);
+		const units = (...indexes: number[]) =>
+			indexes.reduce((sum, index) => {
+				const post = posts.at(index);
+				if (!post) throw new Error(`missing post ${index}`);
+				return sum + renderedPostUnits(post);
+			}, 0);
+
+		const asymmetric = packThread("p0", posts, {
+			matchingPostIds: [],
+			aroundPostId: "p5",
+			beforePosts: 1,
+			afterPosts: 3,
+			neighborhoodRadius: 2,
+			clusterMergeGap: 0,
+			structuralAnchors: false,
+			gapFill: false,
+			limit: units(0, 4, 5, 6, 7, 8),
+		});
+		expect(asymmetric.selectionStrategy).toEqual([
+			"root",
+			"around_post",
+			"around_neighborhood",
+			"latest_posts",
+		]);
+		expect(asymmetric.posts.map(({ id }) => id)).toEqual([
+			"p0",
+			"p4",
+			"p5",
+			"p6",
+			"p7",
+			"p8",
+		]);
+		expect(asymmetric.timeline.filter((item) => item.kind === "skip")).toEqual([
+			{ kind: "skip", skip: { posts: 3, after: "p0", before: "p4" } },
+			{ kind: "skip", skip: { posts: 1, after: "p8" } },
+		]);
+
+		const defaults = packThread("p0", posts, {
+			matchingPostIds: [],
+			aroundPostId: "p5",
+			neighborhoodRadius: 2,
+			clusterMergeGap: 0,
+			structuralAnchors: false,
+			gapFill: false,
+			limit: units(0, 3, 4, 5, 6, 7),
+		});
+		expect(defaults.posts.map(({ id }) => id)).toEqual([
+			"p0",
+			"p3",
+			"p4",
+			"p5",
+			"p6",
+			"p7",
+		]);
+	});
+
+	test("around clamps side counts and rejects missing around posts", () => {
+		expect(clampAroundSidePosts(undefined, 2)).toBe(2);
+		expect(clampAroundSidePosts(0, 2)).toBe(0);
+		expect(clampAroundSidePosts(MAX_AROUND_SIDE_POSTS + 10, 2)).toBe(
+			MAX_AROUND_SIDE_POSTS,
+		);
+		expect(clampAroundSidePosts(-3, 2)).toBe(0);
+
+		const posts = Array.from({ length: 6 }, (_, index) =>
+			evidence(`p${index}`, index),
+		);
+		const huge = packThread("p0", posts, {
+			matchingPostIds: [],
+			aroundPostId: "p2",
+			beforePosts: 100,
+			afterPosts: 100,
+			clusterMergeGap: 0,
+			structuralAnchors: false,
+			gapFill: false,
+			limit: 10_000,
+		});
+		expect(huge.posts.map(({ id }) => id)).toEqual([
+			"p0",
+			"p1",
+			"p2",
+			"p3",
+			"p4",
+			"p5",
+		]);
+
+		expect(() =>
+			packThread("p0", posts, {
+				aroundPostId: "missing",
+				limit: 1_000,
+			}),
+		).toThrow(ConfigError);
+		try {
+			packThread("p0", posts, {
+				aroundPostId: "missing",
+				limit: 1_000,
+			});
+		} catch (error) {
+			expect(error).toBeInstanceOf(ConfigError);
+			expect((error as ConfigError).kind).toBe("around_post_not_in_thread");
+		}
+	});
+
+	test("around still honors character budget and emits skips", () => {
+		const posts = Array.from({ length: 8 }, (_, index) =>
+			evidence(`p${index}`, index, `body-${index}`),
+		);
+		const units = (...indexes: number[]) =>
+			indexes.reduce((sum, index) => {
+				const post = posts.at(index);
+				if (!post) throw new Error(`missing post ${index}`);
+				return sum + renderedPostUnits(post);
+			}, 0);
+		const packed = packThread("p0", posts, {
+			matchingPostIds: [],
+			aroundPostId: "p4",
+			beforePosts: 3,
+			afterPosts: 3,
+			clusterMergeGap: 0,
+			structuralAnchors: false,
+			gapFill: false,
+			limit: units(0, 3, 4, 5),
+		});
+		expect(packed.returnedPosts).toBeLessThan(packed.totalPosts);
+		expect(packed.omittedPosts).toBeGreaterThan(0);
+		expect(packed.posts.some(({ id }) => id === "p4")).toBe(true);
+		expect(packed.timeline.some((item) => item.kind === "skip")).toBe(true);
+		expect(packed.selectionStrategy).not.toContain("full_thread");
 	});
 });
 
