@@ -1,6 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import type { MattermostConfig } from "../config/config.ts";
 import { ConfigError } from "../shared/errors.ts";
 import type { IndexedFile, MattermostStore } from "../store/index.ts";
@@ -8,7 +8,13 @@ import { resolveConfiguredAllowlist } from "./conversations.ts";
 
 export interface FileDownloadInput {
 	fileId: string;
+	/** Explicit destination path; overwrites an existing file. */
 	out?: string;
+	/**
+	 * Destination directory, created if missing. Names the file exactly as
+	 * `mm files` does and refuses to overwrite an existing file.
+	 */
+	outDir?: string;
 	local?: boolean;
 }
 
@@ -106,10 +112,8 @@ export async function downloadMattermostFile(
 		);
 	}
 
+	const path = await resolveDownloadPath(input, meta.id, meta.name);
 	const bytes = await dependencies.client.downloadFile(fileId);
-	const path = input.out?.trim()
-		? input.out.trim()
-		: defaultDownloadPath(meta.id, meta.name);
 	await mkdir(dirname(path), { recursive: true });
 	await writeFile(path, bytes);
 
@@ -124,8 +128,96 @@ export async function downloadMattermostFile(
 	};
 }
 
+/**
+ * Resolve the destination path for one download.
+ * `--out` keeps its historical behavior and overwrites; `--out-dir` names the
+ * file exactly as `mm files` does and refuses to overwrite.
+ */
+async function resolveDownloadPath(
+	input: FileDownloadInput,
+	fileId: string,
+	name: string,
+): Promise<string> {
+	const out = input.out?.trim();
+	const outDir = input.outDir?.trim();
+
+	if (out && outDir) {
+		throw new ConfigError(
+			"Specify either --out <path> or --out-dir <dir>, not both.",
+			"conflicting_out_target",
+		);
+	}
+	if (out) return out;
+	if (input.outDir === undefined) return defaultDownloadPath(fileId, name);
+	if (!outDir) {
+		throw new ConfigError("Output directory is required.", "invalid_out_dir");
+	}
+
+	const base = resolve(outDir);
+	const path = safeJoinUnderOutDir(
+		base,
+		uniqueBatchFileName(name || "attachment", fileId, new Map()),
+	);
+	if (await pathExists(path)) {
+		throw new ConfigError(
+			`Refusing to overwrite existing file at ${path}.`,
+			"file_exists",
+		);
+	}
+	return path;
+}
+
 function defaultDownloadPath(fileId: string, name: string): string {
 	return join(tmpdir(), `mm-${fileId}-${sanitizeFileName(name)}`);
+}
+
+/**
+ * Deterministic collision naming shared by single and batch downloads.
+ * `usedNames` maps an already claimed lowercased file name to its file id.
+ */
+export function uniqueBatchFileName(
+	name: string,
+	fileId: string,
+	usedNames: Map<string, string>,
+): string {
+	const sanitized = sanitizeFileName(name);
+	const key = sanitized.toLowerCase();
+	if (!usedNames.has(key)) return sanitized;
+
+	const extension = extname(sanitized);
+	const stem = basename(sanitized, extension) || "attachment";
+	const withId = sanitizeFileName(`${stem}-${fileId}${extension}`);
+	if (!usedNames.has(withId.toLowerCase())) return withId;
+	return sanitizeFileName(`${fileId}-${sanitized}`);
+}
+
+export function safeJoinUnderOutDir(outDir: string, fileName: string): string {
+	const base = resolve(outDir);
+	const cleaned = sanitizeFileName(fileName);
+	const candidate = resolve(join(base, cleaned));
+	const prefix = base.endsWith(sep) ? base : `${base}${sep}`;
+	if (candidate !== base && !candidate.startsWith(prefix)) {
+		throw new ConfigError(
+			"Refusing path that escapes the output directory.",
+			"path_traversal",
+		);
+	}
+	if (dirname(candidate) !== base) {
+		throw new ConfigError(
+			"Refusing nested destination paths inside --out-dir.",
+			"path_traversal",
+		);
+	}
+	return candidate;
+}
+
+export async function pathExists(path: string): Promise<boolean> {
+	try {
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export function sanitizeFileName(name: string): string {

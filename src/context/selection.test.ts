@@ -118,6 +118,68 @@ describe("selection helpers", () => {
 		expect(isActionableDroppedCandidate(dropped[2]!)).toBe(false);
 	});
 
+	test("drops routing-only candidates instead of spending the cap on them", () => {
+		const dropped = buildDroppedCandidates({
+			candidates: [
+				candidate("routing-1", [
+					"rank_fusion",
+					"routing_all_configured",
+					"conversation_priority",
+					"latest_activity",
+				]),
+				candidate("routing-2", ["rank_fusion", "latest_activity"]),
+				candidate("routing-3", ["routing_scope", "conversation_priority"]),
+				candidate("routing-4", ["routing_widened", "rank_fusion"]),
+				candidate("routing-5", ["conversation_priority"]),
+				candidate("lexical", ["morphology_match", "rank_fusion"], "симптом"),
+			],
+			selectedIds: new Set(),
+			noMatchIds: new Set(),
+			config: configFixture(),
+		});
+		expect(dropped.map(({ threadId }) => threadId)).toEqual(["lexical"]);
+	});
+
+	test("keeps thin and ticket drops that carry no lexical reason", () => {
+		const dropped = buildDroppedCandidates({
+			candidates: [
+				candidate(
+					"thin-stub",
+					["thin_thread", "rank_fusion", "latest_activity"],
+					"BTB-1 не работает",
+				),
+				candidate(
+					"ticket-root",
+					["ticket_in_root", "rank_fusion", "conversation_priority"],
+					"BTB-1",
+				),
+				candidate(
+					"ticket-reply",
+					["ticket_in_reply", "routing_all_configured"],
+					"BTB-1 in reply",
+				),
+				candidate(
+					"related",
+					["explicit_ticket_relationship", "rank_fusion"],
+					"blocks BTB-1",
+				),
+				candidate("routing-only", ["rank_fusion", "latest_activity"], "noise"),
+			],
+			selectedIds: new Set(),
+			noMatchIds: new Set(),
+			config: configFixture(),
+		});
+		expect(dropped.map(({ threadId }) => threadId)).toEqual([
+			"thin-stub",
+			"ticket-root",
+			"ticket-reply",
+			"related",
+		]);
+		expect(dropped.every((item) => isActionableDroppedCandidate(item))).toBe(
+			true,
+		);
+	});
+
 	test("keeps at most two distinct existing excerpts", () => {
 		const droppedCandidate = candidate("thin", ["thin_thread"], "first");
 		droppedCandidate.matches.push(

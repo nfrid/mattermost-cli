@@ -203,6 +203,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
       },
     ],
     "complete": true,
+    "excerptLimit": 3,
     "filters": {},
     "freshness": [
       {
@@ -213,6 +214,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
         "kind": "channel",
         "lastSuccessAt": 1000,
         "observedAt": 1000,
+        "oldestCoveredAt": 10,
         "stale": false,
       },
     ],
@@ -274,7 +276,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
     "warnings": [],
     "widened": false,
   },
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "success": true,
   "warnings": [],
 }
@@ -309,6 +311,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
         "candidateThreads": 1,
         "droppedByBudget": 0,
         "droppedCandidates": [],
+        "droppedNoMatch": 0,
         "droppedThin": 0,
         "returnedThreads": 1,
       },
@@ -324,6 +327,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
         "kind": "channel",
         "lastSuccessAt": 1000,
         "observedAt": 1000,
+        "oldestCoveredAt": 10,
         "stale": false,
       },
     ],
@@ -509,7 +513,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
       "performed": false,
     },
   },
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "success": true,
   "warnings": [],
 }

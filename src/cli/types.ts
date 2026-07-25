@@ -51,4 +51,6 @@ export interface CommandOptions {
 	/** Opt-in agent emission of advisory `signals` and `technicalEntities`. */
 	signals?: boolean;
 	limit?: number;
+	/** Excerpts per candidate in `search --agent`. */
+	excerpts?: number;
 }

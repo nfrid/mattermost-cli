@@ -108,6 +108,7 @@ export async function executeCommand(
 					noWiden: commandOptions.widen === false,
 					includeAutomation: commandOptions.includeAutomation,
 					limit: commandOptions.limit,
+					excerpts: commandOptions.excerpts,
 				});
 			case "thread":
 				if (!commandOptions.target)
@@ -133,6 +134,7 @@ export async function executeCommand(
 					{
 						fileId: commandOptions.fileId,
 						out: commandOptions.out,
+						outDir: commandOptions.outDir,
 					},
 					dependencies,
 				);

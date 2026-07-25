@@ -1,6 +1,10 @@
 import type { MattermostConfig } from "../config/config.ts";
 import { TICKET_PATTERN } from "../search/extract.ts";
-import type { MattermostSubject, ThreadCandidate } from "../search/index.ts";
+import type {
+	MattermostSubject,
+	RankingReason,
+	ThreadCandidate,
+} from "../search/index.ts";
 import { postLink } from "./helpers.ts";
 import type {
 	DroppedCandidate,
@@ -91,6 +95,45 @@ export function orderCandidatesForThinReserve(
 	return [...head, reserved, ...restSubstantive, ...restThin];
 }
 
+/**
+ * Reasons that mean the query actually matched thread content (lexical,
+ * morphological, or structured). Ordering artifacts — `rank_fusion`,
+ * `routing_*`, `conversation_priority`, `latest_activity` — are deliberately
+ * absent: on their own they say only that the thread was ranked, not that it is
+ * about the subject, and they used to fill the dropped-candidate cap with noise.
+ */
+const MATCH_REASONS: ReadonlySet<RankingReason> = new Set<RankingReason>([
+	"direct_post",
+	"remote_search",
+	"structured_entity_match",
+	"subject_in_root",
+	"exact_phrase",
+	"exact_phrase_in_root",
+	"exact_phrase_in_reply",
+	"all_terms_in_thread",
+	"all_expanded_terms_in_thread",
+	"exact_terms_near",
+	"morph_terms_near",
+	"exact_terms_same_post",
+	"morph_terms_same_post",
+	"expanded_terms_same_post",
+	"terms_across_thread",
+	"morphology_match",
+	"concept_match",
+	"keyboard_layout_match",
+	"transliteration_match",
+	"mixed_script_match",
+	"prefix_match",
+	"typo_match",
+	"query_expansion",
+	"multiple_probes_in_thread",
+]);
+
+/** Whether a candidate matched content rather than only being ranked/routed. */
+function hasMatchReason(reasons: readonly RankingReason[]): boolean {
+	return reasons.some((reason) => MATCH_REASONS.has(reason));
+}
+
 export function buildDroppedCandidates(input: {
 	candidates: readonly ThreadCandidate[];
 	selectedIds: ReadonlySet<string>;
@@ -106,6 +149,13 @@ export function buildDroppedCandidates(input: {
 			candidate,
 			input.noMatchIds.has(candidate.threadId),
 		);
+		const reasons = [...candidate.reasons];
+		if (
+			!isActionableDroppedCandidate({ dropReason, reasons }) &&
+			!hasMatchReason(reasons)
+		) {
+			continue;
+		}
 		const excerpts = [
 			...new Set(
 				candidate.matches
@@ -121,7 +171,7 @@ export function buildDroppedCandidates(input: {
 			conversationAlias: candidate.conversationAlias,
 			conversationKind: candidate.conversationKind,
 			dropReason,
-			reasons: [...candidate.reasons],
+			reasons,
 			...(excerpt ? { excerpt } : {}),
 			...(excerpts.length ? { excerpts } : {}),
 		});

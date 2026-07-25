@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { POINTER_EXCERPT_LIMIT } from "../search/match-utils.ts";
 import type { EvidencePost } from "./packing.ts";
 import {
 	buildThreadBrief,
 	buildThreadSignals,
 	citedSignalPostIds,
+	DECISION_CONFIDENCE_FLOOR,
 	isCandidateSpanKind,
 	MAX_CANDIDATE_SPANS,
 	MAX_DECISION_POST_IDS,
+	MAX_HINT_EVIDENCE_POST_IDS,
 	MAX_PURPOSE_HINTS,
 	type ThreadBrief,
 	type ThreadSignals,
@@ -16,14 +19,15 @@ function post(
 	id: string,
 	message: string,
 	createAt: number,
-	options: { deleteAt?: number } = {},
+	options: { deleteAt?: number; author?: string } = {},
 ): EvidencePost {
+	const author = options.author ?? "alice";
 	return {
 		id,
 		rootId: "root-synthetic",
-		userId: "user-1",
-		authorUsername: "alice",
-		authorDisplayName: "Alice",
+		userId: `user-${author}`,
+		authorUsername: author,
+		authorDisplayName: author,
 		createAt,
 		updateAt: createAt,
 		deleteAt: options.deleteAt ?? 0,
@@ -72,6 +76,7 @@ describe("buildThreadSignals", () => {
 			startPostId: "p4",
 			endPostId: "p4",
 			postIds: ["p4"],
+			precedingInWindow: 0,
 		});
 		assertCitationsWithin(signals, posts);
 	});
@@ -178,6 +183,172 @@ describe("buildThreadSignals", () => {
 		);
 	});
 
+	test("first-person commitments score as decision candidates", () => {
+		const utterances: Array<[string, string]> = [
+			["u1", "просто выпилю нафиг это"],
+			["u2", "наверное, так пока и сделаю"],
+			["u3", "обсудили, можно делать"],
+			["u4", "i'll go with the capability flag"],
+			["u5", "going to remove the legacy route"],
+		];
+		for (const [id, message] of utterances) {
+			const signals = buildThreadSignals([post(id, message, 10)]);
+			const decision = signals.candidateSpans.find(
+				(span) => span.kind === "decision_candidate",
+			);
+			expect(decision?.postId).toBe(id);
+			expect(decision?.cues.length).toBeGreaterThan(0);
+			expect(decision?.confidence).toBeGreaterThanOrEqual(
+				DECISION_CONFIDENCE_FLOOR,
+			);
+		}
+	});
+
+	test("interrogative sentence rejects the decision cue it contains", () => {
+		const signals = buildThreadSignals([post("q1", "обсудили на дейли ?", 10)]);
+		expect(
+			signals.candidateSpans.some((span) => span.kind === "decision_candidate"),
+		).toBe(false);
+		// The same message is still a legitimate open question.
+		expect(
+			signals.candidateSpans.some(
+				(span) => span.kind === "open_question_candidate",
+			),
+		).toBe(true);
+
+		const brief = buildThreadBrief([post("q1", "обсудили на дейли ?", 10)]);
+		expect(brief.decisionPostIds).toEqual([]);
+		expect(brief.decisions).toBeUndefined();
+	});
+
+	test("interrogative guard is sentence-level, not message-level", () => {
+		const message =
+			"посмотрел на оба варианта, capabilities не тянут. просто выпилю нафиг это и закрою тикет. кто-нибудь помнит когда был последний релиз?";
+		const signals = buildThreadSignals([post("long-1", message, 10)]);
+		const decision = signals.candidateSpans.find(
+			(span) => span.kind === "decision_candidate",
+		);
+		expect(decision?.postId).toBe("long-1");
+		expect(decision?.cues).toContain("выпилю");
+	});
+
+	test("negated commitment does not read as a decision", () => {
+		const signals = buildThreadSignals([
+			post("n1", "не будем делать это в этом релизе", 10),
+		]);
+		expect(
+			signals.candidateSpans.some((span) => span.kind === "decision_candidate"),
+		).toBe(false);
+	});
+
+	test("bare future tense reaches the brief but ranks below explicit cues", () => {
+		const brief = buildThreadBrief([
+			post("b1", "будем не запрещать для КС, а разрешать остальным", 10),
+			post("b2", "договорились, выкатываем в понедельник", 20),
+		]);
+		// Both surface, but the explicit consensus cue outranks bare future tense.
+		expect(brief.decisionPostIds).toEqual(["b2", "b1"]);
+
+		const asked = buildThreadBrief([
+			post("q1", "а что будем делать с этим?", 10),
+		]);
+		expect(asked.decisionPostIds).toEqual([]);
+	});
+
+	test("the decider's own follow-up posts do not consume the ack window", () => {
+		const signals = buildThreadSignals([
+			post("d1", "будем не запрещать для КС, а разрешать остальным", 10, {
+				author: "bob",
+			}),
+			post("d2", "ну то бишь эти роли поднимем в приоритете", 20, {
+				author: "bob",
+			}),
+			post("d3", "надо было изначально так и сделать", 30, { author: "bob" }),
+			post("d4", "но я забоялся менять поведение", 40, { author: "bob" }),
+			post("d5", "хорошо", 50, { author: "alice" }),
+		]);
+		const decision = signals.candidateSpans.find(
+			(span) => span.kind === "decision_candidate" && span.postId === "d1",
+		);
+		expect(decision?.ackPostId).toBe("d5");
+	});
+
+	test("short ack from another author raises decision confidence", () => {
+		const posts = [
+			post(
+				"a1",
+				"будем не запрещать для КС и рекрутеров, а разрешать остальным",
+				10,
+				{ author: "bob" },
+			),
+			post("a2", "хорошо", 20, { author: "alice" }),
+		];
+		const signals = buildThreadSignals(posts);
+		const decision = signals.candidateSpans.find(
+			(span) => span.kind === "decision_candidate",
+		);
+		expect(decision?.postId).toBe("a1");
+		expect(decision?.ackPostId).toBe("a2");
+		expect(citedSignalPostIds(signals)).toContain("a2");
+
+		const withoutAck = buildThreadSignals([
+			posts[0] as EvidencePost,
+			post("a2", "хорошо", 20, { author: "bob" }),
+		]);
+		const unacked = withoutAck.candidateSpans.find(
+			(span) => span.kind === "decision_candidate",
+		);
+		expect(unacked?.ackPostId).toBeUndefined();
+		expect(decision?.confidence).toBeCloseTo(
+			(unacked?.confidence ?? 0) + 0.15,
+			5,
+		);
+		// The bump is applied after scoring — cue weights keep their meaning.
+		expect(decision?.cues).toEqual(unacked?.cues ?? []);
+		assertCitationsWithin(signals, posts);
+	});
+
+	test("ack pairing ignores the same author and posts beyond the lookahead", () => {
+		const sameAuthor = buildThreadSignals([
+			post("s1", "так и сделаю", 10, { author: "bob" }),
+			post("s2", "ок", 20, { author: "bob" }),
+		]);
+		expect(
+			sameAuthor.candidateSpans.find(
+				(span) => span.kind === "decision_candidate",
+			)?.ackPostId,
+		).toBeUndefined();
+
+		const tooFar = buildThreadSignals([
+			post("f1", "так и сделаю", 10, { author: "bob" }),
+			post("f2", "а что с миграцией", 20, { author: "alice" }),
+			post("f3", "и с фичефлагом тоже вопрос остаётся", 30, {
+				author: "carol",
+			}),
+			post("f4", "ок", 40, { author: "alice" }),
+		]);
+		expect(
+			tooFar.candidateSpans.find((span) => span.kind === "decision_candidate")
+				?.ackPostId,
+		).toBeUndefined();
+	});
+
+	test("outcome window keeps the tail when it exceeds the cap", () => {
+		const posts = [
+			post("root", "TICKET-7 обсуждаем лимиты", 10),
+			...Array.from({ length: 25 }, (_, index) =>
+				post(`w${index}`, `follow-up ${index}`, 20 + index),
+			),
+		];
+		const signals = buildThreadSignals(posts, { subjectTicket: "TICKET-7" });
+		expect(signals.outcomeWindow?.postIds.length).toBe(20);
+		expect(signals.outcomeWindow?.postIds[0]).toBe("w5");
+		expect(signals.outcomeWindow?.startPostId).toBe("w5");
+		expect(signals.outcomeWindow?.endPostId).toBe("w24");
+		expect(signals.outcomeWindow?.precedingInWindow).toBe(5);
+		assertCitationsWithin(signals, posts);
+	});
+
 	test("outcome window is a label only — not a verified decision", () => {
 		const posts = [
 			post("o1", "TICKET-1 announce", 10),
@@ -259,13 +430,17 @@ describe("buildThreadBrief", () => {
 			false,
 		);
 		expect(brief.outcomeWindow?.postIds.length).toBeLessThanOrEqual(5);
+		// Tail-anchored: the last five eligible posts, not the first five.
 		expect(brief.outcomeWindow?.postIds).toEqual([
-			"m3",
 			"m4",
 			"m5",
 			"m6",
 			"m7",
+			"m8",
 		]);
+		expect(brief.outcomeWindow?.startPostId).toBe("m4");
+		expect(brief.outcomeWindow?.endPostId).toBe("m8");
+		expect(brief.outcomeWindow?.precedingInWindow).toBe(1);
 		assertBriefCitationsWithin(brief, posts);
 	});
 
@@ -296,6 +471,7 @@ describe("buildThreadBrief", () => {
 			startPostId: "p3",
 			endPostId: "p3",
 			postIds: ["p3"],
+			precedingInWindow: 0,
 		});
 		expect(brief.decisionPostIds).toEqual(["p2"]);
 		expect(brief.purposeHints.some((hint) => hint.label === "decision")).toBe(
@@ -411,6 +587,117 @@ describe("buildThreadBrief", () => {
 		).toBe(false);
 	});
 
+	test("open_question is its own purpose, not debugging", () => {
+		const posts = [
+			post("oq1", "TICKET-3: не ясно кто владелец лимитов", 10),
+			post("oq2", "нужно уточнить у продукта, ждём ответа", 20),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "TICKET-3" });
+		const labels = brief.purposeHints.map((hint) => hint.label);
+		expect(labels).toContain("open_question");
+		expect(labels).not.toContain("debugging");
+		const question = brief.purposeHints.find(
+			(hint) => hint.label === "open_question",
+		);
+		expect(question?.evidencePostIds).toEqual(["oq1", "oq2"]);
+		expect(question?.confidence).toBeGreaterThanOrEqual(0.5);
+		assertBriefCitationsWithin(brief, posts);
+	});
+
+	test("debugging comes from debug role hints, questions never promote it", () => {
+		const posts = [
+			post("dbg1", "TICKET-4 регресс после релиза, репро есть", 10),
+			post("dbg2", "залил fix: merged MR", 20),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "TICKET-4" });
+		expect(brief.purposeHints.map((hint) => hint.label)).toContain("debugging");
+		expect(
+			brief.purposeHints.find((hint) => hint.label === "debugging")
+				?.evidencePostIds,
+		).toEqual(["dbg1", "dbg2"]);
+	});
+
+	test("a bare ? alone does not raise open_question", () => {
+		const quiet = [
+			post("bq1", "TICKET-5 кто-нибудь смотрел это ?", 10),
+			post("bq2", "я гляну вечером", 20),
+		];
+		const quietBrief = buildThreadBrief(quiet, { subjectTicket: "TICKET-5" });
+		expect(quietBrief.purposeHints.map((hint) => hint.label)).not.toContain(
+			"open_question",
+		);
+		expect(quietBrief.purposeHints.map((hint) => hint.label)).not.toContain(
+			"debugging",
+		);
+
+		// Three distinct posts carrying bare questions do cross the bar.
+		const recurring = [
+			...quiet,
+			post("bq3", "а по срокам что ?", 30),
+			post("bq4", "и кто владелец ?", 40),
+		];
+		const recurringBrief = buildThreadBrief(recurring, {
+			subjectTicket: "TICKET-5",
+		});
+		expect(recurringBrief.purposeHints.map((hint) => hint.label)).toContain(
+			"open_question",
+		);
+	});
+
+	test("hint evidence is capped at the chronologically last ids", () => {
+		const posts = Array.from({ length: 8 }, (_, index) =>
+			post(`hq${index}`, `не ясно по пункту ${index}`, 10 + index),
+		);
+		const brief = buildThreadBrief(posts, { subjectTicket: "TICKET-6" });
+		const question = brief.purposeHints.find(
+			(hint) => hint.label === "open_question",
+		);
+		expect(question?.evidencePostIds.length).toBe(MAX_HINT_EVIDENCE_POST_IDS);
+		expect(question?.evidencePostIds).toEqual([
+			"hq3",
+			"hq4",
+			"hq5",
+			"hq6",
+			"hq7",
+		]);
+	});
+
+	test("brief inlines the capped decisions with numeric createAt", () => {
+		const posts = [
+			post("i1", "BTB-2113: past-month cancel for superadmin?", 10),
+			post("i2", "BTB-2113 обсудили, можно делать", 20, { author: "bob" }),
+			post("i3", "хорошо", 30, { author: "alice" }),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-2113" });
+		expect(brief.decisionPostIds).toEqual(["i2"]);
+		expect(brief.decisions).toHaveLength(1);
+		const decision = brief.decisions?.[0];
+		expect(decision?.postId).toBe("i2");
+		expect(decision?.author).toBe("bob");
+		expect(decision?.createAt).toBe(20);
+		expect(typeof decision?.createAt).toBe("number");
+		expect(decision?.excerpt).toBe("BTB-2113 обсудили, можно делать");
+		expect(decision?.cues).toContain("можно делать");
+		expect(decision?.ackPostId).toBe("i3");
+		expect(decision?.confidence).toBeLessThanOrEqual(0.95);
+
+		const manyDecisions = Array.from({ length: 9 }, (_, index) =>
+			post(`md${index}`, `TICKET-8 итого: решили option ${index}`, 10 + index),
+		);
+		const cappedBrief = buildThreadBrief(manyDecisions, {
+			subjectTicket: "TICKET-8",
+		});
+		expect(cappedBrief.decisions?.length).toBe(MAX_DECISION_POST_IDS);
+		expect(cappedBrief.decisions?.map((item) => item.postId)).toEqual(
+			cappedBrief.decisionPostIds,
+		);
+		expect(
+			cappedBrief.decisions?.every(
+				(item) => item.excerpt.length <= POINTER_EXCERPT_LIMIT,
+			),
+		).toBe(true);
+	});
+
 	test("brief never invents prose summaries or verified outcomes", () => {
 		const posts = [
 			post("x1", "TECHSUPP-1 kickoff", 10),
@@ -424,6 +711,7 @@ describe("buildThreadBrief", () => {
 		expect(brief.outcomeWindow?.label).toBe("outcome_window");
 		expect(Object.keys(brief).sort()).toEqual([
 			"decisionPostIds",
+			"decisions",
 			"outcomeWindow",
 			"purposeHints",
 		]);

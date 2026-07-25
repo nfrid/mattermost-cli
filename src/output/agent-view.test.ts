@@ -34,7 +34,7 @@ describe("agent projection", () => {
 
 		expect(result).toEqual({
 			command: "context",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: true,
 			subject: "payment evidence",
 			status: {
@@ -59,9 +59,23 @@ describe("agent projection", () => {
 					conversation: "payments",
 					kind: "channel",
 					url: `https://chat.example.test/_redirect/pl/${ROOT}`,
+					rank: 1,
 					role: "primary",
 					filesPresent: true,
 					omitted: { posts: 0, attachments: 0 },
+					messageCount: 2,
+					latestAt: "1970-01-01T00:00:00.020Z",
+					attachments: [
+						{
+							id: "file-1",
+							name: "trace.txt",
+							postId: REPLY,
+							mimeType: "text/plain",
+							size: 42,
+							inPacket: true,
+							downloadCommand: ["mm", "file", "file-1", "--agent"],
+						},
+					],
 					posts: [
 						{
 							author: "alice",
@@ -81,7 +95,7 @@ describe("agent projection", () => {
 											name: "trace.txt",
 											mimeType: "text/plain",
 											size: 42,
-											downloadCommand: ["mm", "file", "file-1"],
+											downloadCommand: ["mm", "file", "file-1", "--agent"],
 										},
 									],
 								},
@@ -157,32 +171,27 @@ describe("agent projection", () => {
 					selectedThreads: "complete",
 				}),
 			}),
-			thread: {
-				threadId: ROOT,
-				conversation: "payments",
-				kind: "channel",
-				posts: [
-					{
-						author: "alice",
-						messages: [
-							{ id: ROOT, editedAt: "1970-01-01T00:00:00.030Z" },
-							{ id: REPLY, text: "", deleted: true },
-						],
-					},
-				],
-			},
 			threads: [
-				expect.objectContaining({
+				{
 					threadId: ROOT,
 					conversation: "payments",
-				}),
+					kind: "channel",
+					posts: [
+						{
+							author: "alice",
+							messages: [
+								{ id: ROOT, editedAt: "1970-01-01T00:00:00.030Z" },
+								{ id: REPLY, text: "", deleted: true },
+							],
+						},
+					],
+				},
 			],
 		});
-		expect(
-			(result as { threads?: unknown[]; thread?: unknown }).threads?.[0],
-		).toEqual((result as { thread?: unknown }).thread);
+		expect(result).not.toHaveProperty("thread");
+		// `resolved.from` is a legitimate field; the guard targets raw post state.
 		expect(JSON.stringify(result)).not.toMatch(
-			/"updateAt"|"deleteAt"|"from"|"to"|displayName|"why"/,
+			/"updateAt"|"deleteAt"|"to"|displayName|"why"/,
 		);
 		store.close();
 	});
@@ -208,11 +217,13 @@ describe("agent projection", () => {
 			},
 			candidates: [
 				{
+					rank: 1,
 					threadId: ROOT,
 					conversation: "payments",
 					kind: "channel",
 					url: `https://chat.example.test/_redirect/pl/${ROOT}`,
 					latestAt: "1970-01-01T00:00:00.020Z",
+					reasons: expect.arrayContaining(["all_terms_in_thread"]),
 					excerpts: [
 						"synthetic payment evidence",
 						"payment evidence confirmed",
@@ -221,8 +232,71 @@ describe("agent projection", () => {
 			],
 		});
 		expect(JSON.stringify(result)).not.toMatch(
-			/rootPostId|conversationId|priority|scoreVector|postId|probes|evidenceIssues|"complete"|rank_fusion|routing_|"why"/,
+			/rootPostId|conversationId|priority|scoreVector|postId|probes|evidenceIssues|"complete"|"why"/,
 		);
+		store.close();
+	});
+
+	test("caps search excerpts and reports the remainder", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: ROOT,
+					message: "payment evidence root",
+					create_at: 10,
+				}),
+				...Array.from({ length: 5 }, (_, index) =>
+					postFixture({
+						id: `${String.fromCharCode(99 + index)}${"c".repeat(25)}`,
+						root_id: ROOT,
+						message: `payment evidence detail ${index + 1}`,
+						create_at: 20 + index,
+					}),
+				),
+			],
+		});
+		const search = await searchMattermost(
+			{ subject: "payment evidence", channels: ["payments"], excerpts: 2 },
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("search", search, search.warnings),
+		) as unknown as {
+			candidates: Array<{ excerpts: string[]; omittedExcerpts?: number }>;
+		};
+		const candidate = result.candidates[0];
+		expect(candidate?.excerpts).toHaveLength(2);
+		expect(candidate?.omittedExcerpts).toBeGreaterThan(0);
+		store.close();
+	});
+
+	test("reconciles a permalink subject with the thread it resolved into", async () => {
+		const store = await seededStore();
+		const thread = await getMattermostThread(
+			{ target: `https://chat.example.test/mg/pl/${REPLY}`, local: true },
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("thread", thread, thread.warnings),
+		) as unknown as {
+			resolved?: unknown;
+			threads: Array<{
+				posts?: Array<{ messages?: Array<{ id: string; anchor?: true }> }>;
+			}>;
+		};
+		expect(result.resolved).toEqual({
+			postId: REPLY,
+			from: "permalink",
+			threadId: ROOT,
+			inPacket: true,
+		});
+		const anchored = result.threads[0]?.posts
+			?.flatMap((group) => group.messages ?? [])
+			.filter((message) => message.anchor);
+		expect(anchored?.map(({ id }) => id)).toEqual([REPLY]);
 		store.close();
 	});
 
@@ -310,6 +384,193 @@ describe("agent projection", () => {
 		expect(thread?.largestSkip).toBeGreaterThanOrEqual(5);
 		expect(thread?.omittedRatio).toBeGreaterThan(0);
 		expect(thread?.ticketDensity).toBeGreaterThanOrEqual(0);
+		store.close();
+	});
+
+	test("indexes attachments hidden inside skip spans and counts them per skip", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const ids = Array.from(
+			{ length: 10 },
+			(_, index) => `${String.fromCharCode(98 + index)}${"b".repeat(25)}`,
+		);
+		const filePostIndexes = [2, 4, 6, 8];
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			files: filePostIndexes.map((index) => ({
+				id: `file-${index}`,
+				user_id: "user-1",
+				post_id: ids[index] as string,
+				create_at: 20 + index,
+				update_at: 20 + index,
+				delete_at: 0,
+				name: `screenshot-${index}.png`,
+				extension: "png",
+				size: 128,
+				mime_type: "image/png",
+			})),
+			posts: [
+				postFixture({
+					id: ROOT,
+					message: "TECHSUPP-109 kickoff",
+					create_at: 10,
+				}),
+				...ids.map((id, index) =>
+					postFixture({
+						id,
+						root_id: ROOT,
+						message: `decision detail ${index + 1} for the rollout`,
+						create_at: 20 + index,
+						...(filePostIndexes.includes(index)
+							? { file_ids: [`file-${index}`] }
+							: {}),
+					}),
+				),
+			],
+		});
+		const context = await getMattermostContext(
+			{ subject: "TECHSUPP-109", channels: ["payments"], local: true },
+			{
+				config: configFixture({
+					budgets: {
+						...configFixture().budgets,
+						defaultPerThreadCharacters: 700,
+						defaultMaxCharacters: 700,
+						defaultMaxThreads: 1,
+					},
+				}),
+				store,
+				now: () => 1_000,
+			},
+		);
+		const result = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		);
+		const thread = (
+			result as unknown as {
+				threads: Array<{
+					omitted: { posts: number; unreportedAttachments?: number };
+					attachments?: Array<{
+						id: string;
+						postId: string;
+						inPacket: boolean;
+						downloadCommand: string[];
+					}>;
+					posts?: Array<{ skip?: { posts: number; files?: number } }>;
+				}>;
+			}
+		).threads[0];
+
+		// An attachment whose post never made the packet must still be reachable.
+		const buried = thread?.attachments?.filter(({ inPacket }) => !inPacket);
+		expect(buried?.length).toBeGreaterThan(0);
+		expect(buried?.[0]).toMatchObject({
+			inPacket: false,
+			downloadCommand: expect.arrayContaining(["mm", "file", "--agent"]),
+		});
+		expect(thread?.attachments?.some(({ inPacket }) => inPacket)).toBe(true);
+
+		// The hole itself states how many attachments it swallowed.
+		const skipsWithFiles = (thread?.posts ?? []).filter(
+			(item) => (item.skip?.files ?? 0) > 0,
+		);
+		expect(skipsWithFiles.length).toBeGreaterThan(0);
+
+		// And the index admits when it is itself incomplete.
+		expect(thread?.omitted.unreportedAttachments).toBeGreaterThan(0);
+		store.close();
+	});
+
+	test("inlines decision text so the brief is readable without the timeline", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture(), userFixture({ id: "user-2", username: "bob" })],
+			posts: [
+				postFixture({ id: ROOT, message: "BTB-2080 импорт", create_at: 10 }),
+				postFixture({
+					id: REPLY,
+					root_id: ROOT,
+					user_id: "user-2",
+					message: "просто выпилю нафиг эту логику двухсотки",
+					create_at: 20,
+				}),
+				postFixture({
+					id: `c${"c".repeat(25)}`,
+					root_id: ROOT,
+					message: "хорошо",
+					create_at: 30,
+				}),
+			],
+		});
+		const context = await getMattermostContext(
+			{ subject: "BTB-2080", channels: ["payments"], local: true },
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		);
+		const brief = (
+			result as unknown as {
+				threads: Array<{
+					brief?: {
+						decisionPostIds: string[];
+						decisions?: Array<{
+							id: string;
+							author: string;
+							at: string;
+							text: string;
+							ackPostId?: string;
+						}>;
+					};
+				}>;
+			}
+		).threads[0]?.brief;
+		expect(brief?.decisionPostIds).toContain(REPLY);
+		expect(brief?.decisions?.[0]).toMatchObject({
+			id: REPLY,
+			author: "bob",
+			at: "1970-01-01T00:00:00.020Z",
+			text: "просто выпилю нафиг эту логику двухсотки",
+			ackPostId: `c${"c".repeat(25)}`,
+		});
+		store.close();
+	});
+
+	test("marks an untruncated thread that stops on a question", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts: [
+				postFixture({ id: ROOT, message: "BTB-2080 import", create_at: 10 }),
+				postFixture({
+					id: REPLY,
+					root_id: ROOT,
+					message: "кинул в тест, а юнит тесты не проходят",
+					create_at: 20,
+				}),
+			],
+		});
+		const context = await getMattermostContext(
+			{ subject: "BTB-2080", channels: ["payments"], local: true },
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		);
+		const thread = (
+			result as unknown as {
+				threads: Array<{
+					latestAt?: string;
+					tail?: { kind: string; postId: string };
+					omitted: { posts: number };
+				}>;
+			}
+		).threads[0];
+		expect(thread?.omitted.posts).toBe(0);
+		expect(thread?.latestAt).toBe("1970-01-01T00:00:00.020Z");
+		expect(thread?.tail).toMatchObject({ kind: "error", postId: REPLY });
 		store.close();
 	});
 
@@ -947,7 +1208,7 @@ describe("agent projection", () => {
 		);
 		expect(result).toEqual({
 			command: "file",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: true,
 			id: "file-1",
 			name: "trace.txt",

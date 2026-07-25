@@ -24,6 +24,9 @@ logs/
 .cache
 *.tsbuildinfo
 
+# agent tooling
+.claude/
+
 # editors and OS
 .idea
 .DS_Store

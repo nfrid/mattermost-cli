@@ -98,6 +98,45 @@ describe("file command", () => {
 			agent: true,
 		});
 	});
+
+	test("accepts --out-dir and rejects it together with --out", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		const program = createProgram(async (command, global, commandOptions) => {
+			seen.push({ command, ...global, ...(commandOptions ?? {}) });
+			return {
+				command,
+				schemaVersion: SCHEMA_VERSION,
+				success: true,
+				data: {},
+				warnings: [],
+			};
+		});
+
+		await program.parseAsync(
+			["file", "file-1", "--out-dir", "/tmp/mm-out", "--agent"],
+			{ from: "user" },
+		);
+		expect(seen.at(-1)).toMatchObject({
+			command: "file",
+			fileId: "file-1",
+			outDir: "/tmp/mm-out",
+		});
+		expect(seen.at(-1)?.out).toBeUndefined();
+
+		await expect(
+			program.parseAsync(
+				[
+					"file",
+					"file-1",
+					"--out",
+					"/tmp/mm-file-1-trace.txt",
+					"--out-dir",
+					"/tmp/mm-out",
+				],
+				{ from: "user" },
+			),
+		).rejects.toThrow(/cannot be used|conflict|out-dir/i);
+	});
 });
 
 describe("files batch command", () => {

@@ -1,7 +1,7 @@
 [
 	{
 		"command": "whoami",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": true,
 		"data": {
 			"id": "user-1",
@@ -12,35 +12,47 @@
 	},
 	{
 		"command": "channels",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": true,
-		"data": { "channels": [], "directMessages": [] },
+		"data": {
+			"channels": [],
+			"directMessages": []
+		},
 		"warnings": []
 	},
 	{
 		"command": "channels.validate",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": true,
-		"data": { "valid": true, "items": [], "configUpdated": false },
+		"data": {
+			"valid": true,
+			"items": [],
+			"configUpdated": false
+		},
 		"warnings": []
 	},
 	{
 		"command": "doctor",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": true,
-		"data": { "healthy": true, "checks": [] },
+		"data": {
+			"healthy": true,
+			"checks": []
+		},
 		"warnings": []
 	},
 	{
 		"command": "sync",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": true,
-		"data": { "conversations": [] },
+		"data": {
+			"conversations": []
+		},
 		"warnings": []
 	},
 	{
 		"command": "search",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": true,
 		"data": {
 			"subject": {
@@ -58,7 +70,10 @@
 			"routing": {
 				"conversations": [],
 				"explicitChannelPolicy": "restrict",
-				"unmatchedHints": { "scopes": [], "repositories": [] },
+				"unmatchedHints": {
+					"scopes": [],
+					"repositories": []
+				},
 				"reason": "all_configured",
 				"canWiden": false
 			},
@@ -69,13 +84,14 @@
 			"freshness": [],
 			"searchedConversations": [],
 			"widened": false,
-			"warnings": []
+			"warnings": [],
+			"excerptLimit": 3
 		},
 		"warnings": []
 	},
 	{
 		"command": "context",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": true,
 		"data": {
 			"subject": {
@@ -95,10 +111,16 @@
 			"searchCoverageComplete": true,
 			"selectedThreadsComplete": false,
 			"freshness": [],
-			"unmatchedHints": { "scopes": [], "repositories": [] },
+			"unmatchedHints": {
+				"scopes": [],
+				"repositories": []
+			},
 			"searchedConversations": [],
 			"explicitChannelPolicy": "restrict",
-			"widening": { "allowed": false, "performed": false },
+			"widening": {
+				"allowed": false,
+				"performed": false
+			},
 			"threads": [],
 			"budget": {
 				"measurement": "unicode_code_points_in_rendered_post",
@@ -112,7 +134,7 @@
 	},
 	{
 		"command": "thread",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": true,
 		"data": {
 			"subject": {
@@ -131,7 +153,8 @@
 				"lastSuccessAt": null,
 				"ageSeconds": 0,
 				"stale": false,
-				"coverageComplete": true
+				"coverageComplete": true,
+				"oldestCoveredAt": null
 			},
 			"conversation": {
 				"id": "channel-1",
@@ -163,7 +186,7 @@
 	},
 	{
 		"command": "file",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": true,
 		"data": {
 			"id": "file-1",
@@ -178,7 +201,7 @@
 	},
 	{
 		"command": "files",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": true,
 		"data": {
 			"outDir": "/tmp/mm-files-batch",
@@ -225,7 +248,7 @@
 	},
 	{
 		"command": "context",
-		"schemaVersion": 2,
+		"schemaVersion": 3,
 		"success": false,
 		"error": {
 			"source": "config",

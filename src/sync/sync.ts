@@ -83,6 +83,8 @@ export interface ConversationFreshness {
 	ageSeconds: number | null;
 	stale: boolean;
 	coverageComplete: boolean;
+	/** Oldest indexed post; the cutoff bound when coverage is incomplete. */
+	oldestCoveredAt: number | null;
 }
 
 export interface SyncClient {
@@ -240,6 +242,7 @@ export function inspectFreshness(
 			ageSeconds,
 			stale: ageSeconds === null || ageSeconds > config.freshnessSeconds,
 			coverageComplete: checkpoint?.coverageComplete ?? false,
+			oldestCoveredAt: checkpoint?.oldestCoveredAt ?? null,
 		};
 	});
 }

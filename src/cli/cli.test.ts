@@ -41,7 +41,7 @@ describe("CLI output", () => {
 		const document = JSON.parse(stdout.text);
 		expect(document).toMatchObject({
 			command: "channels",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: true,
 		});
 		expect(document.data.directMessages).toEqual([
@@ -85,7 +85,7 @@ describe("CLI output", () => {
 		const document = JSON.parse(stdout.text);
 		expect(document).toMatchObject({
 			command: "channels",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: true,
 		});
 		expect(stdout.text).toBe(`${JSON.stringify(document, null, 2)}\n`);
@@ -108,7 +108,7 @@ describe("CLI output", () => {
 		expect(stdout.text).toBe(`${JSON.stringify(document)}\n`);
 		expect(document).toMatchObject({
 			command: "channels",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: true,
 			channels: expect.any(Array),
 			directMessages: expect.any(Array),
@@ -133,7 +133,7 @@ describe("CLI output", () => {
 		expect(exitCode).toBe(1);
 		expect(JSON.parse(stdout.text)).toMatchObject({
 			command: "channels",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: false,
 			error: { source: "config", kind: "config_not_found" },
 		});
@@ -265,7 +265,7 @@ describe("CLI output", () => {
 		const document = JSON.parse(stdout.text);
 		expect(document).toMatchObject({
 			command: "context",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: true,
 			data: {
 				explicitChannelPolicy: "restrict",

@@ -88,6 +88,7 @@ const SHORT_PER_THREAD_CHARACTERS = 2_500;
 /** Short packing budget for one root-anchored primary support thread. */
 const SHORT_ROOT_ANCHORED_PER_THREAD = 4_500;
 
+import { findBackgroundThreads } from "./background.ts";
 import { evidenceMatchesFilters, resolveSearchFilters } from "./filters.ts";
 import {
 	freshen,
@@ -128,6 +129,7 @@ import {
 	type ContextInput,
 	type ContextResult,
 	type ContextThread,
+	DEFAULT_SEARCH_EXCERPTS,
 	DEFAULT_SEARCH_LIMIT,
 	type FreshnessEvidence,
 	type RelatedTicketPointer,
@@ -147,6 +149,7 @@ export {
 	type ContextInput,
 	type ContextResult,
 	type ContextThread,
+	DEFAULT_SEARCH_EXCERPTS,
 	DEFAULT_SEARCH_LIMIT,
 	type FreshnessEvidence,
 	type RelatedTicketPointer,
@@ -159,6 +162,30 @@ export {
 	type ThreadInput,
 	type ThreadResult,
 } from "./types.ts";
+
+/** Named aliases appended to `incomplete_history` prose (opaque by contract). */
+const MAX_NAMED_CUTOFF_CONVERSATIONS = 3;
+
+/**
+ * `": b2b-team, backend-zone"` (or `" +2 more"` beyond the cap) for the
+ * conversations whose indexed history is cutoff-bounded; empty when none are.
+ */
+function cutoffBoundedAliasSuffix(
+	freshness: readonly FreshnessEvidence[],
+): string {
+	const aliases = [
+		...new Set(
+			freshness
+				.filter(({ coverageComplete }) => !coverageComplete)
+				.map(({ alias }) => alias)
+				.filter((alias) => alias.length > 0),
+		),
+	];
+	if (!aliases.length) return "";
+	const named = aliases.slice(0, MAX_NAMED_CUTOFF_CONVERSATIONS).join(", ");
+	const remaining = aliases.length - MAX_NAMED_CUTOFF_CONVERSATIONS;
+	return remaining > 0 ? `: ${named} +${remaining} more` : `: ${named}`;
+}
 
 export async function getMattermostContext(
 	input: ContextInput,
@@ -668,8 +695,7 @@ export async function getMattermostContext(
 		if (freshness.some(({ coverageComplete }) => !coverageComplete)) {
 			warnings.push({
 				kind: "incomplete_history",
-				message:
-					"At least one searched conversation has cutoff-bounded history.",
+				message: `At least one searched conversation has cutoff-bounded history${cutoffBoundedAliasSuffix(freshness)}.`,
 			});
 		}
 		if (!threads.length) {
@@ -719,6 +745,19 @@ export async function getMattermostContext(
 			subjectTicket: subject.kind === "ticket" ? subject.ticketKey : undefined,
 			allowlist: new Set(searchedConversations.map(({ id }) => id)),
 		});
+		const background = findBackgroundThreads({
+			config,
+			store,
+			subject,
+			probes,
+			routing,
+			all,
+			filters: resolvedFilters.storage,
+			selectedThreadIds: selectedIds,
+			hasExplicitProbes: Boolean(input.queries?.length || input.probes?.length),
+			deadlineAt,
+			includeAutomation: input.includeAutomation,
+		});
 		const freshConversationIds = new Set(
 			freshness
 				.filter(({ stale }) => !stale)
@@ -749,6 +788,9 @@ export async function getMattermostContext(
 					: subject.kind === "post"
 						? subject.postId
 						: subject.text,
+			...(subject.kind === "ticket"
+				? { subjectTicket: subject.ticketKey }
+				: {}),
 		});
 		return {
 			subject,
@@ -776,6 +818,7 @@ export async function getMattermostContext(
 			relatedTickets,
 			evidence,
 			threads,
+			...(background.length ? { background } : {}),
 			budget: {
 				measurement: "unicode_code_points_in_rendered_post",
 				limit: budgets.maxCharacters,
@@ -988,8 +1031,7 @@ export async function searchMattermost(
 		if (freshness.some(({ coverageComplete }) => !coverageComplete)) {
 			warnings.push({
 				kind: "incomplete_history",
-				message:
-					"At least one searched conversation has cutoff-bounded history.",
+				message: `At least one searched conversation has cutoff-bounded history${cutoffBoundedAliasSuffix(freshness)}.`,
 			});
 		}
 		warnings.push(...routingHintWarnings(routing));
@@ -1012,6 +1054,10 @@ export async function searchMattermost(
 		const limit = Number.isFinite(requestedLimit)
 			? Math.max(1, Math.floor(requestedLimit))
 			: DEFAULT_SEARCH_LIMIT;
+		const requestedExcerpts = input.excerpts ?? DEFAULT_SEARCH_EXCERPTS;
+		const excerptLimit = Number.isFinite(requestedExcerpts)
+			? Math.max(1, Math.floor(requestedExcerpts))
+			: DEFAULT_SEARCH_EXCERPTS;
 		return {
 			subject,
 			probes,
@@ -1032,6 +1078,7 @@ export async function searchMattermost(
 				evidence: conversation.evidence,
 			})),
 			widened,
+			excerptLimit,
 			warnings,
 		};
 	});
@@ -1151,7 +1198,7 @@ export async function getMattermostThread(
 		if (stayedLocal && !freshness.coverageComplete) {
 			warnings.push({
 				kind: "incomplete_history",
-				message: "Local thread evidence comes from cutoff-bounded history.",
+				message: `Local thread evidence comes from cutoff-bounded history${cutoffBoundedAliasSuffix([freshness])}.`,
 			});
 		}
 		return {

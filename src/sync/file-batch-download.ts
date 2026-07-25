@@ -1,13 +1,17 @@
-import { access, mkdir } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve, sep } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { MattermostConfig } from "../config/config.ts";
 import { ConfigError } from "../shared/errors.ts";
 import type { MattermostStore } from "../store/index.ts";
 import {
 	downloadMattermostFile,
 	type FileDownloadResult,
-	sanitizeFileName,
+	pathExists,
+	safeJoinUnderOutDir,
+	uniqueBatchFileName,
 } from "./file-download.ts";
+
+export { safeJoinUnderOutDir, uniqueBatchFileName } from "./file-download.ts";
 
 /** Hard cap on how many attachments one `mm files` invocation may download. */
 export const DEFAULT_MAX_BATCH_FILES = 20;
@@ -278,51 +282,6 @@ export function resolveBatchFileIds(
 					.map((file) => file.id),
 			);
 		}
-	}
-}
-
-function uniqueBatchFileName(
-	name: string,
-	fileId: string,
-	usedNames: Map<string, string>,
-): string {
-	const sanitized = sanitizeFileName(name);
-	const key = sanitized.toLowerCase();
-	if (!usedNames.has(key)) return sanitized;
-
-	const extension = extname(sanitized);
-	const stem = basename(sanitized, extension) || "attachment";
-	const withId = sanitizeFileName(`${stem}-${fileId}${extension}`);
-	if (!usedNames.has(withId.toLowerCase())) return withId;
-	return sanitizeFileName(`${fileId}-${sanitized}`);
-}
-
-export function safeJoinUnderOutDir(outDir: string, fileName: string): string {
-	const base = resolve(outDir);
-	const cleaned = sanitizeFileName(fileName);
-	const candidate = resolve(join(base, cleaned));
-	const prefix = base.endsWith(sep) ? base : `${base}${sep}`;
-	if (candidate !== base && !candidate.startsWith(prefix)) {
-		throw new ConfigError(
-			"Refusing path that escapes the output directory.",
-			"path_traversal",
-		);
-	}
-	if (dirname(candidate) !== base) {
-		throw new ConfigError(
-			"Refusing nested destination paths inside --out-dir.",
-			"path_traversal",
-		);
-	}
-	return candidate;
-}
-
-async function pathExists(path: string): Promise<boolean> {
-	try {
-		await access(path);
-		return true;
-	} catch {
-		return false;
 	}
 }
 

@@ -36,6 +36,19 @@ export interface PackedPost extends EvidencePost {
 	renderedUnits: number;
 }
 
+/**
+ * A post whose entire content is an attachment: no text at all, plus at least
+ * one live file. Text-only readers see such a post as empty, so its evidence is
+ * unreachable without downloading the file — and can contradict the surrounding
+ * text.
+ */
+export function isMediaOnlyPost(
+	post: Pick<EvidencePost, "message" | "deleteAt" | "attachments">,
+): boolean {
+	if (post.deleteAt || post.message.trim().length > 0) return false;
+	return post.attachments.some((attachment) => !attachment.deleteAt);
+}
+
 export type PackSkipReason = "outside_ticket_window" | "omitted_gap" | "budget";
 
 /** Gap between returned posts in chronological thread order. */
@@ -44,6 +57,8 @@ export interface PackSkip {
 	after?: string;
 	before?: string;
 	reason?: PackSkipReason;
+	/** Live attachments carried by the omitted posts; absent when none. */
+	files?: number;
 }
 
 export type PackTimelineItem =
@@ -471,6 +486,7 @@ export function buildTimeline(
 	let skipCount = 0;
 	let skipAfter: string | undefined;
 	let skipIds: string[] = [];
+	let skipFiles = 0;
 	let lastEmittedId: string | undefined;
 
 	const flushSkip = (before?: string) => {
@@ -484,11 +500,13 @@ export function buildTimeline(
 				...(classifySkipReason(skipIds, options)
 					? { reason: classifySkipReason(skipIds, options) }
 					: {}),
+				...(skipFiles > 0 ? { files: skipFiles } : {}),
 			},
 		});
 		skipCount = 0;
 		skipAfter = undefined;
 		skipIds = [];
+		skipFiles = 0;
 	};
 
 	for (const post of chronological) {
@@ -503,6 +521,7 @@ export function buildTimeline(
 		if (skipCount === 0) skipAfter = lastEmittedId;
 		skipCount += 1;
 		skipIds.push(post.id);
+		skipFiles += post.attachments.filter(({ deleteAt }) => !deleteAt).length;
 	}
 	flushSkip();
 	return timeline;

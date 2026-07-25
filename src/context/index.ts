@@ -7,6 +7,7 @@ export {
 	type ContextInput,
 	type ContextResult,
 	type ContextThread,
+	DEFAULT_SEARCH_EXCERPTS,
 	DEFAULT_SEARCH_LIMIT,
 	type FreshnessEvidence,
 	type RelatedTicketPointer,

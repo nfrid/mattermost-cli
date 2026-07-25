@@ -6,6 +6,7 @@ import {
 import {
 	containsNormalizedExactText,
 	containsNormalizedText,
+	normalizeSearchText,
 } from "../search/text.ts";
 import type { EvidencePost } from "./packing.ts";
 
@@ -22,11 +23,22 @@ export interface CandidateSpan {
 	excerpt: string;
 	cues: string[];
 	confidence: number;
+	/**
+	 * Returned post that acknowledged this `decision_candidate` (short reply from
+	 * a different author within two posts). Advisory pairing, not a verification.
+	 */
+	ackPostId?: string;
 }
 
 /**
  * Mechanical posts-after-last-subject-ticket-mention window inside the returned
  * set. Labeled as a window — not a verified decision.
+ *
+ * Truncation is tail-anchored: when more eligible posts follow the last subject
+ * mention than the cap allows, the **last** ones are emitted and
+ * {@link OutcomeWindow.precedingInWindow} counts the eligible posts that sit
+ * ahead of the emitted slice. `startPostId` / `endPostId` always describe the
+ * emitted slice, never the untruncated window.
  */
 export interface OutcomeWindow {
 	label: "outcome_window";
@@ -36,6 +48,12 @@ export interface OutcomeWindow {
 	startPostId: string;
 	endPostId: string;
 	postIds: string[];
+	/**
+	 * Eligible posts ahead of the emitted (tail) slice. These are **not** omitted
+	 * from the packet — they are packed posts outside this tail window. Packet
+	 * omissions travel in `omitted.posts` / `evidence.packing.omittedPosts`.
+	 */
+	precedingInWindow: number;
 }
 
 export type RoleHintLabel =
@@ -60,6 +78,7 @@ export interface ThreadSignals {
 export type PurposeHintLabel =
 	| "announce"
 	| "decision"
+	| "open_question"
 	| "debugging"
 	| "status"
 	| "noise";
@@ -67,7 +86,25 @@ export type PurposeHintLabel =
 export interface PurposeHint {
 	label: PurposeHintLabel;
 	confidence: number;
+	/** Up to {@link MAX_HINT_EVIDENCE_POST_IDS}, chronologically last. */
 	evidencePostIds: string[];
+}
+
+/**
+ * Inlined `decision_candidate` pointer: enough to read the decision without
+ * scanning the whole `posts` array. Advisory — mirrors a candidate span.
+ */
+export interface BriefDecision {
+	postId: string;
+	author: string;
+	/** Epoch milliseconds; ISO projection belongs to the output layer. */
+	createAt: number;
+	/** Verbatim truncated excerpt from the packed post only. */
+	excerpt: string;
+	cues: string[];
+	confidence: number;
+	/** Short acknowledgement from a different author, when paired. */
+	ackPostId?: string;
 }
 
 /**
@@ -78,6 +115,11 @@ export interface ThreadBrief {
 	purposeHints: PurposeHint[];
 	/** Up to {@link MAX_DECISION_POST_IDS} `decision_candidate` post ids. */
 	decisionPostIds: string[];
+	/**
+	 * Same capped set as {@link ThreadBrief.decisionPostIds}, inlined.
+	 * Emitted only when non-empty, so projections may drop it.
+	 */
+	decisions?: BriefDecision[];
 	outcomeWindow?: OutcomeWindow;
 }
 
@@ -116,6 +158,8 @@ export const MAX_CUES_PER_SIGNAL = 5;
 export const MAX_PURPOSE_HINTS = 3;
 /** Max decision_candidate post ids in a lean brief. */
 export const MAX_DECISION_POST_IDS = 5;
+/** Max evidence post ids per purpose hint (chronologically last). */
+export const MAX_HINT_EVIDENCE_POST_IDS = 5;
 /**
  * Minimum `decision_candidate` confidence to surface in lean brief
  * (matches the weakest {@link DECISION_CUES} weight).
@@ -125,14 +169,37 @@ export const DECISION_CONFIDENCE_FLOOR = 0.5;
 const NOISE_MAX_POSTS = 3;
 /** Short-message ceiling (code points) for a ticket-ping noise post. */
 const NOISE_MAX_MESSAGE_CHARS = 160;
+/** Minimum question-span confidence that alone justifies `open_question`. */
+const OPEN_QUESTION_CONFIDENCE_FLOOR = 0.5;
+/** Distinct question-carrying posts that justify `open_question` regardless. */
+const OPEN_QUESTION_MIN_POSTS = 3;
+/** Confidence added to a `decision_candidate` paired with a short ack. */
+const DECISION_ACK_BONUS = 0.15;
+/** Posts scanned after a decision for a short acknowledgement. */
+const DECISION_ACK_LOOKAHEAD = 2;
+/** Short-message ceiling (code points) for an acknowledgement reply. */
+const ACK_MAX_MESSAGE_CHARS = 30;
 
 const PURPOSE_HINT_PRIORITY: Readonly<Record<PurposeHintLabel, number>> = {
 	decision: 0,
-	debugging: 1,
-	announce: 2,
-	status: 3,
-	noise: 4,
+	open_question: 1,
+	debugging: 2,
+	announce: 3,
+	status: 4,
+	noise: 5,
 };
+
+/** Leading tokens of a short acknowledgement reply. */
+const ACK_TOKENS: readonly string[] = [
+	"ок",
+	"окей",
+	"хорошо",
+	"да",
+	"спасибо",
+	"+",
+	"ok",
+	"sounds good",
+];
 
 const DEBUG_ROLE_LABELS = new Set<RoleHintLabel>([
 	"testing",
@@ -166,6 +233,29 @@ const DECISION_CUES: readonly CuePattern[] = [
 	{ cue: "we'll go with", weight: 0.65 },
 	{ cue: "ship it", weight: 0.55 },
 	{ cue: "final:", weight: 0.5 },
+	// First-person forward commitments — the dominant decision shape in these
+	// conversations. Single verbs match on token boundaries so third-person
+	// inflections (`уберут`) do not read as a personal commitment.
+	{ cue: "сделаю", exact: true, weight: 0.6 },
+	{ cue: "так и сделаю", weight: 0.65 },
+	{ cue: "выпилю", exact: true, weight: 0.6 },
+	{ cue: "уберу", exact: true, weight: 0.55 },
+	{ cue: "удалю", exact: true, weight: 0.55 },
+	{ cue: "поправлю", exact: true, weight: 0.6 },
+	{ cue: "перепишу", exact: true, weight: 0.6 },
+	{ cue: "переделаю", exact: true, weight: 0.6 },
+	{ cue: "буду делать", weight: 0.6 },
+	{ cue: "будем делать", weight: 0.6 },
+	// Bare future tense sits exactly at DECISION_CONFIDENCE_FLOOR: it is the shape
+	// real commitments take here ("будем не запрещать…"), and the interrogative
+	// guard already removes the common "что будем делать?" noise. Weaker than any
+	// explicit cue, so acknowledged or phrased decisions still outrank it, and
+	// `brief.decisions[]` inlines the text so a false positive is cheap to dismiss.
+	{ cue: "буду", exact: true, weight: 0.5 },
+	{ cue: "будем", exact: true, weight: 0.5 },
+	{ cue: "i'll go with", weight: 0.65 },
+	{ cue: "let's just", weight: 0.55 },
+	{ cue: "going to remove", weight: 0.6 },
 ];
 
 /**
@@ -355,11 +445,41 @@ export function buildThreadBrief(
 		decisionSpans: cappedDecisionSpans,
 	}).slice(0, maxPurpose);
 
+	const decisions = buildBriefDecisions(posts, cappedDecisionSpans);
+
 	return {
 		purposeHints,
 		decisionPostIds,
+		...(decisions.length ? { decisions } : {}),
 		...(signals.outcomeWindow ? { outcomeWindow: signals.outcomeWindow } : {}),
 	};
+}
+
+/**
+ * Inline the already-capped decision spans so a consumer can read the decision
+ * without scanning `posts`. `createAt` stays numeric — ISO formatting is the
+ * output layer's concern.
+ */
+function buildBriefDecisions(
+	posts: readonly EvidencePost[],
+	cappedDecisionSpans: readonly CandidateSpan[],
+): BriefDecision[] {
+	const byId = new Map(posts.map((post) => [post.id, post]));
+	const decisions: BriefDecision[] = [];
+	for (const span of cappedDecisionSpans) {
+		const post = byId.get(span.postId);
+		if (!post) continue;
+		decisions.push({
+			postId: span.postId,
+			author: post.authorUsername,
+			createAt: post.createAt,
+			excerpt: span.excerpt,
+			cues: [...span.cues],
+			confidence: span.confidence,
+			...(span.ackPostId ? { ackPostId: span.ackPostId } : {}),
+		});
+	}
+	return decisions;
 }
 
 function collectPurposeHints(
@@ -382,6 +502,11 @@ function collectPurposeHints(
 				left.createAt - right.createAt || left.id.localeCompare(right.id),
 		);
 	const hints: PurposeHint[] = [];
+	const chronologicalRank = new Map(
+		chronological.map((post, index) => [post.id, index]),
+	);
+	const capEvidence = (ids: readonly string[]): string[] =>
+		capEvidencePostIds(ids, chronologicalRank);
 
 	const isAnnounce =
 		options.presentation === "announce" ||
@@ -401,32 +526,44 @@ function collectPurposeHints(
 			confidence: options.decisionSpans.length
 				? Math.max(...options.decisionSpans.map((span) => span.confidence))
 				: DECISION_CONFIDENCE_FLOOR,
-			evidencePostIds: [...options.decisionPostIds],
+			evidencePostIds: capEvidence(options.decisionPostIds),
+		});
+	}
+
+	// Questions are their own purpose: folding them into `debugging` labeled every
+	// thread containing a `?` as debugging.
+	const openQuestions = signals.candidateSpans.filter(
+		(span) => span.kind === "open_question_candidate",
+	);
+	const questionPostIds = [
+		...new Set(openQuestions.map((span) => span.postId)),
+	];
+	const strongestQuestion = Math.max(
+		0,
+		...openQuestions.map((span) => span.confidence),
+	);
+	// Bare `?` alone is noise; require a real cue or a recurring pattern.
+	if (
+		strongestQuestion >= OPEN_QUESTION_CONFIDENCE_FLOOR ||
+		questionPostIds.length >= OPEN_QUESTION_MIN_POSTS
+	) {
+		hints.push({
+			label: "open_question",
+			confidence: strongestQuestion,
+			evidencePostIds: capEvidence(questionPostIds),
 		});
 	}
 
 	const debugRoles = signals.roleHints.filter((hint) =>
 		DEBUG_ROLE_LABELS.has(hint.label),
 	);
-	const openQuestions = signals.candidateSpans.filter(
-		(span) => span.kind === "open_question_candidate",
-	);
-	if (debugRoles.length || openQuestions.length) {
-		const evidencePostIds = [
-			...new Set([
-				...debugRoles.flatMap((hint) => hint.evidencePostIds),
-				...openQuestions.map((span) => span.postId),
-			]),
-		];
-		const confidence = Math.max(
-			0,
-			...debugRoles.map((hint) => hint.confidence),
-			...openQuestions.map((span) => span.confidence),
-		);
+	if (debugRoles.length) {
 		hints.push({
 			label: "debugging",
-			confidence,
-			evidencePostIds,
+			confidence: Math.max(...debugRoles.map((hint) => hint.confidence)),
+			evidencePostIds: capEvidence([
+				...new Set(debugRoles.flatMap((hint) => hint.evidencePostIds)),
+			]),
 		});
 	}
 
@@ -437,7 +574,7 @@ function collectPurposeHints(
 		hints.push({
 			label: "status",
 			confidence: coordination.confidence,
-			evidencePostIds: [...coordination.evidencePostIds],
+			evidencePostIds: capEvidence(coordination.evidencePostIds),
 		});
 	}
 
@@ -446,7 +583,7 @@ function collectPurposeHints(
 		hints.push({
 			label: "noise",
 			confidence: 0.6,
-			evidencePostIds: chronological.map((post) => post.id),
+			evidencePostIds: capEvidence(chronological.map((post) => post.id)),
 		});
 	}
 
@@ -456,6 +593,25 @@ function collectPurposeHints(
 			right.confidence - left.confidence ||
 			left.label.localeCompare(right.label),
 	);
+}
+
+/**
+ * Order hint evidence chronologically and cap it at
+ * {@link MAX_HINT_EVIDENCE_POST_IDS}, keeping the last ids — the tail is where
+ * unresolved work lives, and an uncapped array bloats the packet on long
+ * threads.
+ */
+function capEvidencePostIds(
+	ids: readonly string[],
+	chronologicalRank: ReadonlyMap<string, number>,
+): string[] {
+	return [...ids]
+		.sort(
+			(left, right) =>
+				(chronologicalRank.get(left) ?? 0) -
+					(chronologicalRank.get(right) ?? 0) || left.localeCompare(right),
+		)
+		.slice(-MAX_HINT_EVIDENCE_POST_IDS);
 }
 
 function isNoiseThread(
@@ -486,20 +642,32 @@ function collectCandidateSpans(
 	options: { maxSpans: number; excerptLimit: number },
 ): CandidateSpan[] {
 	const spans: CandidateSpan[] = [];
-	for (const post of posts) {
+	for (const [index, post] of posts.entries()) {
 		if (!post.message.trim() || post.deleteAt) continue;
 		for (const { kind, patterns } of SPAN_KIND_CUES) {
-			if (kind === "decision_candidate" && isDecisionMetaNoise(post.message)) {
-				continue;
-			}
-			const matched = matchCues(post.message, patterns);
+			const isDecision = kind === "decision_candidate";
+			if (isDecision && isDecisionMetaNoise(post.message)) continue;
+			const matched = matchCues(post.message, patterns, {
+				// Sentence-level, so a long decision post ending in an unrelated
+				// question still scores; only the cue's own sentence is checked.
+				rejectInterrogativeCueSentence: isDecision,
+				rejectNegatedCue: isDecision,
+			});
 			if (!matched.cues.length) continue;
+			const ackPostId = isDecision ? findAckPostId(posts, index) : undefined;
+			// Ack pairing is a post-scoring bump — never a synthetic cue weight.
+			const confidence = ackPostId
+				? roundConfidence(
+						Math.min(0.95, matched.confidence + DECISION_ACK_BONUS),
+					)
+				: matched.confidence;
 			spans.push({
 				kind,
 				postId: post.id,
 				excerpt: truncateExcerpt(post.message, options.excerptLimit),
 				cues: matched.cues,
-				confidence: matched.confidence,
+				confidence,
+				...(ackPostId ? { ackPostId } : {}),
 			});
 		}
 	}
@@ -522,7 +690,7 @@ function buildOutcomeWindow(
 	},
 ): OutcomeWindow | undefined {
 	const subject = options.subjectTicket?.toUpperCase();
-	if (!subject || !posts.length) return undefined;
+	if (!subject || !posts.length || options.maxOutcome <= 0) return undefined;
 
 	let lastMentionIndex = -1;
 	for (let index = 0; index < posts.length; index += 1) {
@@ -539,10 +707,12 @@ function buildOutcomeWindow(
 	const afterPost = posts[lastMentionIndex];
 	if (!afterPost || !options.includedIds.has(afterPost.id)) return undefined;
 
-	const windowPosts = posts
+	const eligible = posts
 		.slice(lastMentionIndex + 1)
-		.filter((post) => !post.deleteAt && options.includedIds.has(post.id))
-		.slice(0, options.maxOutcome);
+		.filter((post) => !post.deleteAt && options.includedIds.has(post.id));
+	// Tail-anchored: an `outcome_window` truncated at the head would show the
+	// thread's opening posts under a field named for its outcome.
+	const windowPosts = eligible.slice(-options.maxOutcome);
 	const first = windowPosts[0];
 	const last = windowPosts[windowPosts.length - 1];
 	if (!first || !last) return undefined;
@@ -554,6 +724,7 @@ function buildOutcomeWindow(
 		startPostId: first.id,
 		endPostId: last.id,
 		postIds: windowPosts.map((post) => post.id),
+		precedingInWindow: eligible.length - windowPosts.length,
 	};
 }
 
@@ -606,12 +777,22 @@ function isDecisionMetaNoise(message: string): boolean {
 function matchCues(
 	message: string,
 	patterns: readonly CuePattern[],
+	options: {
+		rejectInterrogativeCueSentence?: boolean;
+		rejectNegatedCue?: boolean;
+	} = {},
 ): { cues: string[]; weights: number[]; confidence: number } {
+	const sentences =
+		options.rejectInterrogativeCueSentence || options.rejectNegatedCue
+			? splitSentences(message)
+			: undefined;
 	const matched: Array<{ cue: string; weight: number }> = [];
 	for (const pattern of patterns) {
-		if (cueMatches(message, pattern)) {
-			matched.push({ cue: pattern.cue, weight: pattern.weight ?? 0.5 });
+		if (!cueMatches(message, pattern)) continue;
+		if (sentences && !cueSurvivesSentenceGuards(sentences, pattern, options)) {
+			continue;
 		}
+		matched.push({ cue: pattern.cue, weight: pattern.weight ?? 0.5 });
 	}
 	matched.sort(
 		(left, right) =>
@@ -624,6 +805,96 @@ function matchCues(
 		weights,
 		confidence: scoreConfidence(weights),
 	};
+}
+
+interface CueSentence {
+	text: string;
+	/** Terminating punctuation, empty for a trailing fragment. */
+	terminator: string;
+}
+
+/** Split a message into sentences on `[.!?\n]`, keeping each terminator. */
+function splitSentences(message: string): CueSentence[] {
+	const sentences: CueSentence[] = [];
+	let current = "";
+	for (const character of message) {
+		if (SENTENCE_TERMINATORS.has(character)) {
+			sentences.push({ text: current, terminator: character });
+			current = "";
+			continue;
+		}
+		current += character;
+	}
+	if (current.trim()) sentences.push({ text: current, terminator: "" });
+	return sentences;
+}
+
+const SENTENCE_TERMINATORS = new Set([".", "!", "?", "\n"]);
+
+/**
+ * Keep a cue only when at least one sentence carrying it is neither a question
+ * nor a negation. A cue that spans a sentence boundary is kept (conservative).
+ */
+function cueSurvivesSentenceGuards(
+	sentences: readonly CueSentence[],
+	pattern: CuePattern,
+	options: {
+		rejectInterrogativeCueSentence?: boolean;
+		rejectNegatedCue?: boolean;
+	},
+): boolean {
+	let located = false;
+	for (const sentence of sentences) {
+		if (!cueMatches(sentence.text, pattern)) continue;
+		located = true;
+		if (options.rejectInterrogativeCueSentence && sentence.terminator === "?") {
+			continue;
+		}
+		if (
+			options.rejectNegatedCue &&
+			containsNormalizedText(sentence.text, `не ${pattern.cue}`)
+		) {
+			continue;
+		}
+		return true;
+	}
+	return !located;
+}
+
+/**
+ * Short acknowledgement from a different author within the next
+ * {@link DECISION_ACK_LOOKAHEAD} posts *by other authors*. The decider's own
+ * follow-up posts are skipped without consuming the window: the bound exists to
+ * limit how late another party may answer, not how verbosely the decider
+ * elaborates their own commitment.
+ */
+function findAckPostId(
+	posts: readonly EvidencePost[],
+	decisionIndex: number,
+): string | undefined {
+	const decision = posts[decisionIndex];
+	if (!decision) return undefined;
+	let scanned = 0;
+	for (let index = decisionIndex + 1; index < posts.length; index += 1) {
+		const candidate = posts[index];
+		if (!candidate || candidate.deleteAt || !candidate.message.trim()) continue;
+		if (candidate.userId === decision.userId) continue;
+		scanned += 1;
+		if (scanned > DECISION_ACK_LOOKAHEAD) break;
+		if (isShortAcknowledgement(candidate.message)) return candidate.id;
+	}
+	return undefined;
+}
+
+function isShortAcknowledgement(message: string): boolean {
+	const trimmed = message.trim();
+	if (!trimmed || [...trimmed].length > ACK_MAX_MESSAGE_CHARS) return false;
+	const normalized = normalizeSearchText(trimmed);
+	return ACK_TOKENS.some((token) => {
+		if (!normalized.startsWith(token)) return false;
+		const next = [...normalized][[...token].length];
+		return next === undefined || !/[\p{L}\p{N}_]/u.test(next);
+	});
 }
 
 function cueMatches(message: string, pattern: CuePattern): boolean {
@@ -653,7 +924,10 @@ export function isCandidateSpanKind(kind: string): boolean {
 /** Collect every post id cited by a signals payload (for citation checks). */
 export function citedSignalPostIds(signals: ThreadSignals): string[] {
 	const ids = new Set<string>();
-	for (const span of signals.candidateSpans) ids.add(span.postId);
+	for (const span of signals.candidateSpans) {
+		ids.add(span.postId);
+		if (span.ackPostId) ids.add(span.ackPostId);
+	}
 	for (const hint of signals.roleHints) {
 		for (const id of hint.evidencePostIds) ids.add(id);
 	}

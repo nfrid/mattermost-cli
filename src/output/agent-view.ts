@@ -15,7 +15,7 @@ import type {
 	PackedThread,
 	PackTimelineItem,
 } from "../evidence/packing.ts";
-import { largestTimelineSkip } from "../evidence/packing.ts";
+import { isMediaOnlyPost, largestTimelineSkip } from "../evidence/packing.ts";
 import {
 	buildThreadBrief,
 	buildThreadSignals,
@@ -36,7 +36,7 @@ import {
 	POINTER_EXCERPT_LIMIT,
 	truncateExcerpt,
 } from "../search/match-utils.ts";
-import { normalizeSearchText } from "../search/text.ts";
+import { containsNormalizedText, normalizeSearchText } from "../search/text.ts";
 import type {
 	CommandResult,
 	SCHEMA_VERSION,
@@ -67,6 +67,57 @@ export interface AgentFile {
 	downloadCommand: string[];
 }
 
+/**
+ * One attachment reachable from the thread, including attachments carried by
+ * posts inside skip spans (`inPacket: false`) so a decision to download is
+ * informed rather than a lottery.
+ */
+export interface AgentThreadAttachment {
+	id: string;
+	name: string;
+	postId: string;
+	mimeType?: string;
+	size?: number;
+	/** False when the carrying post was omitted from the returned timeline. */
+	inPacket: boolean;
+	/**
+	 * The carrying post has no text — this file is its entire content. Only
+	 * computed for packed posts; absent on attachments recovered from skips.
+	 */
+	mediaOnly?: true;
+	/** Argv segments only — copy; never auto-exec or join into a shell string. */
+	downloadCommand: string[];
+}
+
+/**
+ * Mechanical shape of the last returned post. Emitted only for untruncated
+ * threads — a truncated packet cannot know how the thread ended.
+ */
+export interface AgentThreadTail {
+	kind: "question" | "error";
+	postId: string;
+	at: string;
+}
+
+/**
+ * Decision candidate with its text inlined, so a first read does not have to
+ * scan the whole timeline to resolve a post id.
+ */
+export interface AgentBriefDecision {
+	id: string;
+	author: string;
+	at: string;
+	/** Verbatim truncated excerpt from the packed post only. */
+	text: string;
+	/** Short acknowledgement from a different author, when paired. */
+	ackPostId?: string;
+}
+
+/** Lean brief with agent-facing timestamps and inlined decision text. */
+export interface AgentThreadBrief extends Omit<ThreadBrief, "decisions"> {
+	decisions?: AgentBriefDecision[];
+}
+
 export interface AgentTechnicalEntity {
 	kind: EngineeringEntityKind;
 	value: string;
@@ -79,6 +130,13 @@ export interface AgentMessage {
 	at?: string;
 	editedAt?: string;
 	deleted?: true;
+	/**
+	 * The post has no text at all and its whole content is the attachment.
+	 * Concluding from the timeline text alone skips this evidence entirely.
+	 */
+	mediaOnly?: true;
+	/** The post this request resolved to (post id or permalink subject). */
+	anchor?: true;
 	files?: AgentFile[];
 }
 
@@ -95,6 +153,8 @@ export interface AgentSkip {
 		after?: string;
 		before?: string;
 		reason?: string;
+		/** Live attachments carried by the omitted posts; absent when none. */
+		files?: number;
 	};
 }
 
@@ -104,10 +164,25 @@ export interface AgentStatus {
 	freshness: "local" | "network";
 }
 
+/**
+ * What a post-id / permalink subject resolved to. `threadId` is the thread the
+ * post belongs to, which is normally *not* the requested id — without this the
+ * answer looks like a different thread was substituted.
+ */
+export interface AgentResolvedSubject {
+	postId: string;
+	from: "permalink" | "id";
+	threadId: string;
+	/** False when packing dropped the requested post from the returned timeline. */
+	inPacket: boolean;
+}
+
 export interface AgentOmission {
 	posts: number;
 	attachments: number;
 	files?: string[];
+	/** Omitted attachments that did not fit the reporting budget. */
+	unreportedAttachments?: number;
 }
 
 export interface AgentRelatedTicket {
@@ -156,6 +231,17 @@ export interface AgentThread {
 	kind: "channel" | "direct_message";
 	url: string;
 	omitted: AgentOmission;
+	/**
+	 * Packed messages in this thread. `posts[]` entries are author blocks, not
+	 * messages, so `posts.length` is always smaller — compare truncation against
+	 * this number.
+	 */
+	messageCount: number;
+	/**
+	 * 1-based retrieval rank. Threads keep ranking order, so `rank: 1` is not
+	 * necessarily `role: "primary"` — `role` is picked for substance.
+	 */
+	rank?: number;
 	/** True when omit/skip is large enough that `mm thread --full` is warranted. */
 	recommendFull?: boolean;
 	largestSkip?: number;
@@ -173,8 +259,10 @@ export interface AgentThread {
 	ticketDensity?: number;
 	nearestTicketDistance?: number | null;
 	/**
-	 * Dense author-group timeline. Omitted for `--navigate` (use anchors /
-	 * clusters / skips instead).
+	 * Dense timeline. Each entry is either an author block
+	 * (`{ author, messages[] }`) or a skip marker (`{ skip: {...} }`) — never a
+	 * single message. Omitted for `--navigate` (use anchors / clusters / skips
+	 * instead).
 	 */
 	posts?: AgentTimelineItem[];
 	/** Skip markers extracted for lean `--navigate` projection. */
@@ -191,22 +279,57 @@ export interface AgentThread {
 	 * `--agent` and `--signals` (alongside full signals when requested).
 	 * Omitted when empty.
 	 */
-	brief?: ThreadBrief;
+	brief?: AgentThreadBrief;
 	/** True when any packed post carries attachments (even with empty text). */
 	filesPresent?: true;
+	/**
+	 * Flat attachment index covering returned and omitted posts, so attachments
+	 * hidden inside skip spans are visible without hydrating the thread.
+	 */
+	attachments?: AgentThreadAttachment[];
+	/** True when the attachment index hit its cap and lists only a prefix. */
+	attachmentsTruncated?: true;
+	/** Last returned post timestamp; present in every mode. */
+	latestAt?: string;
+	/** Mechanical tail shape; only for untruncated threads. */
+	tail?: AgentThreadTail;
 	/** Prior DM root posts for short threads (not replies of this thread). */
 	surround?: AgentMessageGroup[];
 	/** Skip guidance for attached surround; only when surround is present. */
 	surroundRelevance?: SurroundRelevance;
 }
 
-export interface AgentCandidate {
+/**
+ * Thematically close thread outside ticket routing — typically the discussion
+ * that predates the ticket. A pointer only: nothing is hydrated, and the packet
+ * is unchanged whether or not this list is acted on.
+ */
+export interface AgentBackgroundThread {
 	threadId: string;
 	conversation: string;
 	kind: "channel" | "direct_message";
 	url: string;
 	latestAt: string;
+	/** Probe values that matched, so the pointer is attributable. */
+	matchedProbes: string[];
 	excerpts: string[];
+	/** Argv segments only — copy; never auto-exec or join into a shell string. */
+	command: string[];
+}
+
+export interface AgentCandidate {
+	/** 1-based position in the ranking; the order is the ranking. */
+	rank: number;
+	threadId: string;
+	conversation: string;
+	kind: "channel" | "direct_message";
+	url: string;
+	latestAt: string;
+	/** Why this thread ranked: content matches first, then ordering artifacts. */
+	reasons: string[];
+	excerpts: string[];
+	/** Excerpts beyond `--excerpts`; the full set stays in `--json`. */
+	omittedExcerpts?: number;
 }
 
 export type AgentCommandResult =
@@ -222,9 +345,24 @@ export type AgentCommandResult =
 const SHORT_MESSAGE_LIMIT = 8;
 /** Cap technical entities emitted per agent thread. */
 const TECHNICAL_ENTITY_CAP = 40;
+/** Cap entries in the flat per-thread attachment index. */
+const THREAD_ATTACHMENT_CAP = 50;
+
+/**
+ * Short mechanical markers that a thread stopped on trouble rather than on an
+ * outcome. Substring matched after search normalization.
+ */
+const TAIL_ERROR_CUES: readonly string[] = [
+	"ошибк",
+	"упал",
+	"завис",
+	"не проход",
+	"failed",
+	"error",
+];
 
 function fileDownloadCommand(id: string): string[] {
-	return ["mm", "file", id];
+	return ["mm", "file", id, "--agent"];
 }
 
 /** Build the compact agent view from the same validated result used by JSON output. */
@@ -293,14 +431,17 @@ function projectContext(
 	const short = Boolean(data.short);
 	const includeSignals = Boolean(data.signals);
 	const primaryIndex = pickPrimaryThreadIndex(data.threads);
+	const resolved = resolvedSubject(data.subject, data.threads);
 	const threads = data.threads.map((thread, index) =>
 		projectContextThread(thread, {
 			short,
 			navigate,
 			includeSignals,
+			rank: index + 1,
 			role: index === primaryIndex ? "primary" : "secondary",
 			subjectTicket:
 				data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+			...(resolved ? { anchorPostId: resolved.postId } : {}),
 		}),
 	);
 	const messages =
@@ -314,6 +455,7 @@ function projectContext(
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
+		...(resolved ? { resolved } : {}),
 		status: status(data.freshnessMode),
 		evidence:
 			data.evidence ??
@@ -335,6 +477,9 @@ function projectContext(
 				},
 				warnings,
 				subject: subjectValue(data.subject),
+				...(data.subject.kind === "ticket"
+					? { subjectTicket: data.subject.ticketKey }
+					: {}),
 			}),
 		...(data.remoteSearch.performed || data.remoteSearch.requested
 			? { remoteSearch: data.remoteSearch }
@@ -342,7 +487,25 @@ function projectContext(
 		...(relatedTickets.length ? { relatedTickets } : {}),
 		...(messages?.length ? { messages } : {}),
 		threads,
+		...(data.background?.length
+			? { background: data.background.map(projectBackgroundThread) }
+			: {}),
 		warnings,
+	};
+}
+
+function projectBackgroundThread(
+	thread: NonNullable<ContextResult["background"]>[number],
+): AgentBackgroundThread {
+	return {
+		threadId: thread.threadId,
+		conversation: thread.conversationAlias,
+		kind: thread.conversationKind,
+		url: thread.url,
+		latestAt: isoTimestamp(thread.latestActivityAt),
+		matchedProbes: thread.matchedProbes,
+		excerpts: thread.excerpts,
+		command: ["mm", "thread", thread.threadId, "--agent"],
 	};
 }
 
@@ -359,16 +522,24 @@ function projectSearch(
 		...envelope,
 		subject: subjectValue(data.subject),
 		status: status(data.freshnessMode),
-		candidates: data.candidates.map(
-			(candidate): AgentCandidate => ({
+		candidates: data.candidates.map((candidate, index): AgentCandidate => {
+			const excerpts = [
+				...new Set(candidate.matches.map(({ excerpt }) => excerpt)),
+			].filter((excerpt) => excerpt.length > 0);
+			return {
+				rank: index + 1,
 				threadId: candidate.threadId,
 				conversation: candidate.conversationAlias,
 				kind: candidate.conversationKind,
 				url: candidate.link,
 				latestAt: isoTimestamp(candidate.latestActivityAt),
-				excerpts: [...new Set(candidate.matches.map(({ excerpt }) => excerpt))],
-			}),
-		),
+				reasons: [...candidate.reasons],
+				excerpts: excerpts.slice(0, data.excerptLimit),
+				...(excerpts.length > data.excerptLimit
+					? { omittedExcerpts: excerpts.length - data.excerptLimit }
+					: {}),
+			};
+		}),
 		warnings,
 	};
 }
@@ -386,6 +557,7 @@ function projectThread(
 		data.thread.posts,
 		data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
 	);
+	const resolved = resolvedSubject(data.subject, [data.thread]);
 	const projected = projectPackedThread(
 		data.thread,
 		data.conversation.alias,
@@ -395,6 +567,7 @@ function projectThread(
 			includeSignals: Boolean(data.signals),
 			subjectTicket:
 				data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+			...(resolved ? { anchorPostId: resolved.postId } : {}),
 		},
 	);
 	const contextThread: ContextThread = {
@@ -438,16 +611,41 @@ function projectThread(
 		warnings,
 		selectedEvidenceCurrent,
 		subject: subjectValue(data.subject),
+		...(data.subject.kind === "ticket"
+			? { subjectTicket: data.subject.ticketKey }
+			: {}),
 	});
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
+		...(resolved ? { resolved } : {}),
 		status: status(data.freshnessMode),
 		...(relatedTickets.length ? { relatedTickets } : {}),
 		evidence,
-		thread: projected,
 		threads: [projected],
 		warnings,
+	};
+}
+
+/**
+ * Where a post-id / permalink subject landed. Emitted for post subjects only;
+ * for every other subject there is nothing to reconcile.
+ */
+function resolvedSubject(
+	subject: ContextResult["subject"],
+	threads: readonly PackedThread[],
+): AgentResolvedSubject | undefined {
+	if (subject.kind !== "post") return undefined;
+	const carrier = threads.find((thread) =>
+		thread.posts.some(({ id }) => id === subject.postId),
+	);
+	const thread = carrier ?? threads[0];
+	if (!thread) return undefined;
+	return {
+		postId: subject.postId,
+		from: subject.source,
+		threadId: thread.threadId,
+		inPacket: Boolean(carrier),
 	};
 }
 
@@ -523,8 +721,10 @@ function projectContextThread(
 		short: boolean;
 		navigate: boolean;
 		includeSignals: boolean;
+		rank: number;
 		role: "primary" | "secondary";
 		subjectTicket?: string;
+		anchorPostId?: string;
 	},
 ): AgentThread {
 	const base = projectPackedThread(
@@ -536,8 +736,10 @@ function projectContextThread(
 			short: options.short,
 			navigate: options.navigate,
 			includeSignals: options.includeSignals,
+			rank: options.rank,
 			role: options.role,
 			subjectTicket: options.subjectTicket,
+			...(options.anchorPostId ? { anchorPostId: options.anchorPostId } : {}),
 			matchingPostIds: thread.matchingPostIds,
 			segments: thread.segments,
 			ticketDensity: thread.ticketDensity,
@@ -571,6 +773,7 @@ function projectPackedThread(
 		short?: boolean;
 		navigate?: boolean;
 		includeSignals?: boolean;
+		rank?: number;
 		role?: "primary" | "secondary";
 		subjectTicket?: string;
 		matchingPostIds?: readonly string[];
@@ -578,6 +781,8 @@ function projectPackedThread(
 		ticketDensity?: number;
 		nearestTicketDistance?: number | null;
 		reasons?: readonly string[];
+		/** Requested post id, marked with `anchor` in the timeline. */
+		anchorPostId?: string;
 	} = {},
 ): AgentThread {
 	const omittedNames = [
@@ -616,6 +821,9 @@ function projectPackedThread(
 	const filesPresent = thread.posts.some((post) => post.attachments.length > 0)
 		? (true as const)
 		: undefined;
+	const attachmentIndex = collectThreadAttachments(thread);
+	const latest = latestPackedPost(thread.posts);
+	const tail = threadTail(thread, latest);
 	return {
 		threadId: thread.threadId,
 		conversation,
@@ -625,7 +833,19 @@ function projectPackedThread(
 			posts: thread.omittedPosts,
 			attachments: thread.totalOmittedAttachments,
 			...(omittedNames.length ? { files: omittedNames } : {}),
+			...(thread.unreportedOmittedAttachments > 0
+				? { unreportedAttachments: thread.unreportedOmittedAttachments }
+				: {}),
 		},
+		messageCount: thread.posts.length,
+		...(latest ? { latestAt: isoTimestamp(latest.createAt) } : {}),
+		...(tail ? { tail } : {}),
+		...(attachmentIndex.attachments.length
+			? { attachments: attachmentIndex.attachments }
+			: {}),
+		...(attachmentIndex.truncated
+			? { attachmentsTruncated: true as const }
+			: {}),
 		...(packingHints ?? {}),
 		...(options.ticketDensity !== undefined
 			? { ticketDensity: options.ticketDensity }
@@ -633,6 +853,7 @@ function projectPackedThread(
 		...(options.nearestTicketDistance !== undefined
 			? { nearestTicketDistance: options.nearestTicketDistance }
 			: {}),
+		...(options.rank !== undefined ? { rank: options.rank } : {}),
 		...(options.role ? { role: options.role } : {}),
 		...(presentation ? { presentation } : {}),
 		...(filesPresent ? { filesPresent } : {}),
@@ -642,8 +863,81 @@ function projectPackedThread(
 		...(signals ? { signals } : {}),
 		...(brief ? { brief } : {}),
 		...(skips?.length ? { skips } : {}),
-		...(options.navigate ? {} : { posts: projectTimeline(thread.timeline) }),
+		...(options.navigate
+			? {}
+			: { posts: projectTimeline(thread.timeline, options.anchorPostId) }),
 	};
+}
+
+/**
+ * Flat attachment index over returned posts first, then attachments carried by
+ * omitted posts. `omittedAttachments` is itself budget-capped; the residual
+ * count travels as `omitted.unreportedAttachments`.
+ */
+function collectThreadAttachments(thread: PackedThread): {
+	attachments: AgentThreadAttachment[];
+	truncated: boolean;
+} {
+	const attachments: AgentThreadAttachment[] = [];
+	const seen = new Set<string>();
+	const push = (
+		attachment: PackedPost["attachments"][number],
+		inPacket: boolean,
+		mediaOnly = false,
+	) => {
+		if (attachment.deleteAt || seen.has(attachment.id)) return;
+		seen.add(attachment.id);
+		attachments.push({
+			id: attachment.id,
+			name: attachment.name,
+			postId: attachment.postId,
+			...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+			...(Number.isFinite(attachment.size) ? { size: attachment.size } : {}),
+			inPacket,
+			...(mediaOnly ? { mediaOnly: true as const } : {}),
+			downloadCommand: fileDownloadCommand(attachment.id),
+		});
+	};
+	for (const post of thread.posts) {
+		const mediaOnly = isMediaOnlyPost(post);
+		for (const attachment of post.attachments)
+			push(attachment, true, mediaOnly);
+	}
+	for (const attachment of thread.omittedAttachments) push(attachment, false);
+	return {
+		attachments: attachments.slice(0, THREAD_ATTACHMENT_CAP),
+		truncated: attachments.length > THREAD_ATTACHMENT_CAP,
+	};
+}
+
+function latestPackedPost(
+	posts: readonly PackedPost[],
+): PackedPost | undefined {
+	let latest: PackedPost | undefined;
+	for (const post of posts) {
+		if (!latest || post.createAt > latest.createAt) latest = post;
+	}
+	return latest;
+}
+
+/**
+ * Mechanical tail classification. Only for threads with nothing omitted — a
+ * truncated packet has no standing to claim how the discussion ended.
+ */
+function threadTail(
+	thread: PackedThread,
+	latest: PackedPost | undefined,
+): AgentThreadTail | undefined {
+	if (!latest || thread.omittedPosts > 0 || latest.deleteAt) return undefined;
+	const message = latest.message.trim();
+	if (!message) return undefined;
+	const kind = message.endsWith("?")
+		? ("question" as const)
+		: TAIL_ERROR_CUES.some((cue) => containsNormalizedText(message, cue))
+			? ("error" as const)
+			: undefined;
+	if (!kind) return undefined;
+	return { kind, postId: latest.id, at: isoTimestamp(latest.createAt) };
 }
 
 function projectThreadBrief(
@@ -653,7 +947,7 @@ function projectThreadBrief(
 		reasons?: readonly string[];
 		presentation?: "announce";
 	},
-): ThreadBrief | undefined {
+): AgentThreadBrief | undefined {
 	const brief = buildThreadBrief(posts, options);
 	if (
 		!brief.purposeHints.length &&
@@ -662,9 +956,19 @@ function projectThreadBrief(
 	) {
 		return undefined;
 	}
+	const decisions = (brief.decisions ?? []).map(
+		(decision): AgentBriefDecision => ({
+			id: decision.postId,
+			author: decision.author,
+			at: isoTimestamp(decision.createAt),
+			text: decision.excerpt,
+			...(decision.ackPostId ? { ackPostId: decision.ackPostId } : {}),
+		}),
+	);
 	return {
 		purposeHints: brief.purposeHints,
 		decisionPostIds: brief.decisionPostIds,
+		...(decisions.length ? { decisions } : {}),
 		...(brief.outcomeWindow ? { outcomeWindow: brief.outcomeWindow } : {}),
 	};
 }
@@ -924,6 +1228,7 @@ function finalizeRelatedTicketKeys(
 
 function projectTimeline(
 	timeline: readonly PackTimelineItem[],
+	anchorPostId?: string,
 ): AgentTimelineItem[] {
 	const items: AgentTimelineItem[] = [];
 	let openGroup: AgentMessageGroup | undefined;
@@ -941,7 +1246,7 @@ function projectTimeline(
 			items.push({ skip: item.skip });
 			continue;
 		}
-		const message = projectMessage(item.post);
+		const message = projectMessage(item.post, anchorPostId);
 		if (openGroup && openGroup.author === item.post.authorUsername) {
 			openGroup.messages.push(message);
 			continue;
@@ -999,14 +1304,17 @@ function groupPosts(
 	return groups;
 }
 
-function projectMessage(post: {
-	id: string;
-	createAt: number;
-	updateAt: number;
-	deleteAt: number;
-	message: string;
-	attachments: PackedPost["attachments"];
-}): AgentMessage {
+function projectMessage(
+	post: {
+		id: string;
+		createAt: number;
+		updateAt: number;
+		deleteAt: number;
+		message: string;
+		attachments: PackedPost["attachments"];
+	},
+	anchorPostId?: string,
+): AgentMessage {
 	const files = post.attachments.map((attachment) => projectFile(attachment));
 	return {
 		id: post.id,
@@ -1016,6 +1324,10 @@ function projectMessage(post: {
 			? { editedAt: isoTimestamp(post.updateAt) }
 			: {}),
 		...(post.deleteAt ? { deleted: true as const } : {}),
+		...(isMediaOnlyPost(post) ? { mediaOnly: true as const } : {}),
+		...(anchorPostId && post.id === anchorPostId
+			? { anchor: true as const }
+			: {}),
 		...(files.length ? { files } : {}),
 	};
 }

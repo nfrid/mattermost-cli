@@ -4,7 +4,8 @@ import type {
 	SearchContextResult,
 	ThreadResult,
 } from "../context/index.ts";
-import type { PackedPost } from "../evidence/packing.ts";
+import { isMediaOnlyPost, type PackedPost } from "../evidence/packing.ts";
+import { buildThreadBrief } from "../evidence/signals.ts";
 import type { CommandResult } from "../shared/command-result.ts";
 import type { FileBatchDownloadResult } from "../sync/file-batch-download.ts";
 import type { FileDownloadResult } from "../sync/file-download.ts";
@@ -261,9 +262,30 @@ function formatContext(data: ContextResult): string {
 							`${styles.warning("Unreported omitted attachments:")} ${styles.warning(String(thread.unreportedOmittedAttachments))}`,
 						]
 					: []),
+				...formatDecisions(
+					thread.posts,
+					data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+				),
 				...formatTimeline(thread.timeline),
 			];
 		}),
+		...(data.background?.length
+			? [
+					`\n${styles.label("Background (outside ticket routing, not hydrated):")}`,
+					...data.background.map((pointer) =>
+						joinParts([
+							formatConversation(
+								pointer.conversationKind,
+								pointer.conversationAlias,
+							),
+							styles.link(pointer.url),
+							styles.timestamp(isoTimestamp(pointer.latestActivityAt)),
+							styles.hint(`probes: ${pointer.matchedProbes.join(", ")}`),
+							pointer.excerpts.join(" | "),
+						]),
+					),
+				]
+			: []),
 	].join("\n");
 }
 
@@ -458,14 +480,43 @@ function formatConversation(kind: string, alias: string): string {
 }
 
 function formatPost(post: PackedPost): string[] {
+	const body = post.deleteAt
+		? styles.warning("[deleted]")
+		: isMediaOnlyPost(post)
+			? styles.warning("[no text — the attachment is the whole message]")
+			: post.message;
 	return [
-		`${styles.timestamp(`[${isoTimestamp(post.createAt)}]`)} ${styles.username(`@${post.authorUsername}`)}: ${post.deleteAt ? styles.warning("[deleted]") : post.message}`,
+		`${styles.timestamp(`[${isoTimestamp(post.createAt)}]`)} ${styles.username(`@${post.authorUsername}`)}: ${body}`,
 		...post.attachments.map((attachment) =>
 			joinParts([
 				`${styles.warning("Attachment:")} ${styles.label(attachment.name)}`,
 				styles.hint(attachment.mimeType),
 				`${styles.accent(String(attachment.size))} bytes`,
 				styles.identifier(attachment.id),
+				styles.hint(`mm file ${attachment.id}`),
+			]),
+		),
+	];
+}
+
+/** Inlined decision candidates so the text view answers "what was decided". */
+function formatDecisions(
+	posts: readonly PackedPost[],
+	subjectTicket?: string,
+): string[] {
+	const brief = buildThreadBrief(posts, { subjectTicket });
+	const decisions = brief.decisions ?? [];
+	if (!decisions.length) return [];
+	return [
+		`${styles.label("Decision candidates:")} ${styles.hint("mechanical cues, not verified outcomes")}`,
+		...decisions.map((decision) =>
+			joinParts([
+				styles.timestamp(`[${isoTimestamp(decision.createAt)}]`),
+				styles.username(`@${decision.author}`),
+				decision.excerpt,
+				...(decision.ackPostId
+					? [styles.hint(`acked by ${decision.ackPostId}`)]
+					: []),
 			]),
 		),
 	];

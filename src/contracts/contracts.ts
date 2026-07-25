@@ -90,6 +90,7 @@ const freshnessSchema = z.object({
 	ageSeconds: z.number().nonnegative().nullable(),
 	stale: z.boolean(),
 	coverageComplete: z.boolean(),
+	oldestCoveredAt: z.number().int().nonnegative().nullable(),
 });
 const attachmentSchema = z.object({
 	id: z.string(),
@@ -145,6 +146,7 @@ const packedThreadSchema = z.object({
 					reason: z
 						.enum(["outside_ticket_window", "omitted_gap", "budget"])
 						.optional(),
+					files: z.number().int().positive().optional(),
 				}),
 			}),
 		]),
@@ -439,7 +441,20 @@ const searchDataSchema = z.object({
 	freshness: z.array(freshnessSchema),
 	searchedConversations: z.array(searchedConversationSchema),
 	widened: z.boolean(),
+	/** Agent-projection excerpt cap; the full match list stays in this document. */
+	excerptLimit: z.number().int().positive(),
 	warnings: z.array(warningSchema),
+});
+const backgroundThreadSchema = z.object({
+	threadId: z.string(),
+	conversationId: z.string(),
+	conversationAlias: z.string(),
+	conversationKind: conversationKindSchema,
+	url: z.string(),
+	latestActivityAt: z.number().int().nonnegative(),
+	reasons: z.array(rankingReasonSchema),
+	matchedProbes: z.array(z.string()),
+	excerpts: z.array(z.string()),
 });
 const contextThreadSchema = packedThreadSchema.extend({
 	conversationId: z.string(),
@@ -550,6 +565,7 @@ const evidenceStatusSchema = z.object({
 				"sync",
 				"inspect_dropped",
 				"fresh_or_remote",
+				"read_attachments",
 			]),
 			reason: z.string(),
 			priority: z.enum(["recommended", "optional"]),
@@ -558,11 +574,13 @@ const evidenceStatusSchema = z.object({
 				"older_discovery_only",
 				"may_add_dropped_pointer",
 				"may_refresh_selected_or_discovery",
+				"may_contradict_visible_text",
 			]),
 			/** Argv segments only — never a joined shell string. */
 			command: z.array(z.string()).optional(),
 			threadId: z.string().optional(),
 			conversationId: z.string().optional(),
+			postId: z.string().optional(),
 		}),
 	),
 	selection: z.object({
@@ -570,6 +588,7 @@ const evidenceStatusSchema = z.object({
 		returnedThreads: z.number().int().nonnegative(),
 		droppedThin: z.number().int().nonnegative(),
 		droppedByBudget: z.number().int().nonnegative(),
+		droppedNoMatch: z.number().int().nonnegative(),
 		droppedCandidates: selectionEvidenceSchema.shape.droppedCandidates,
 	}),
 	packing: z.object({
@@ -577,6 +596,19 @@ const evidenceStatusSchema = z.object({
 		largestSkip: z.number().int().nonnegative(),
 		recommendFullThreadIds: z.array(z.string()),
 	}),
+	history: z
+		.object({
+			cutoffBounded: z.array(
+				z.object({
+					alias: z.string(),
+					conversationId: z.string(),
+					oldestIndexedAt: z.string().optional(),
+					inSelectedThreads: z.boolean(),
+				}),
+			),
+			additional: z.number().int().positive().optional(),
+		})
+		.optional(),
 });
 const contextDataSchema = z.object({
 	subject: subjectSchema,
@@ -601,6 +633,7 @@ const contextDataSchema = z.object({
 	relatedTickets: z.array(relatedTicketPointerSchema).optional(),
 	evidence: evidenceStatusSchema.optional(),
 	threads: z.array(contextThreadSchema),
+	background: z.array(backgroundThreadSchema).optional(),
 	budget: budgetSchema.extend({ maxThreads: z.number().int().positive() }),
 	warnings: z.array(warningSchema),
 	short: z.boolean().optional(),

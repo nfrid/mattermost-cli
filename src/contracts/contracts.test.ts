@@ -7,7 +7,7 @@ import {
 
 const fixtureUrl = new URL("./contracts.v1.fixture.json", import.meta.url);
 
-describe("schema version 2 command contracts", () => {
+describe("schema version 3 command contracts", () => {
 	test("accepts complete synthetic golden output for every command", async () => {
 		const fixtures = (await Bun.file(fixtureUrl).json()) as unknown[];
 		const parsed = fixtures.map(parseCommandResultV1);
@@ -41,7 +41,7 @@ describe("schema version 2 command contracts", () => {
 		expect(
 			commandResultV1Schema.safeParse({
 				command: "context",
-				schemaVersion: 3,
+				schemaVersion: 4,
 				success: true,
 				data: {},
 				warnings: [],
@@ -50,7 +50,7 @@ describe("schema version 2 command contracts", () => {
 		expect(
 			commandResultV1Schema.safeParse({
 				command: "search",
-				schemaVersion: 2,
+				schemaVersion: 3,
 				success: true,
 				data: { freshnessMode: "local" },
 				warnings: [],
@@ -61,7 +61,7 @@ describe("schema version 2 command contracts", () => {
 	test("accepts stable failure envelopes", () => {
 		const failure = failureResultV1Schema.parse({
 			command: "context",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: false,
 			error: {
 				source: "config",
@@ -77,7 +77,7 @@ describe("schema version 2 command contracts", () => {
 	test("accepts additive optional signals flag on context and thread data", () => {
 		const contextOk = commandResultV1Schema.safeParse({
 			command: "context",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: true,
 			data: {
 				subject: { kind: "ticket", ticketKey: "BTB-1", raw: "BTB-1" },
@@ -104,7 +104,7 @@ describe("schema version 2 command contracts", () => {
 
 		const threadOk = commandResultV1Schema.safeParse({
 			command: "thread",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: true,
 			data: {
 				subject: {
@@ -124,6 +124,7 @@ describe("schema version 2 command contracts", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: true,
+					oldestCoveredAt: null,
 				},
 				conversation: {
 					id: "channel-payments",

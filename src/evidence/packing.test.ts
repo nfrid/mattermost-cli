@@ -4,6 +4,7 @@ import {
 	clampAroundSidePosts,
 	type EvidencePost,
 	hasInternalBudgetSkipInCore,
+	isMediaOnlyPost,
 	MAX_AROUND_SIDE_POSTS,
 	packThread,
 	renderedPostUnits,
@@ -170,7 +171,7 @@ describe("thread packing", () => {
 		expect(selected.budget.used).toBe(renderedPostUnits(root));
 		expect(selected.timeline).toEqual([
 			{ kind: "post", post: expect.objectContaining({ id: "root" }) },
-			{ kind: "skip", skip: { posts: 1, after: "root" } },
+			{ kind: "skip", skip: { posts: 1, after: "root", files: 1 } },
 		]);
 
 		const full = packThread("root", [root, oversized], {
@@ -607,6 +608,36 @@ describe("thread packing", () => {
 		expect(packed.posts.some(({ id }) => id === "p4")).toBe(true);
 		expect(packed.timeline.some((item) => item.kind === "skip")).toBe(true);
 		expect(packed.selectionStrategy).not.toContain("full_thread");
+	});
+
+	test("treats only text-free posts with a live file as media-only", () => {
+		const file = {
+			id: "file-1",
+			postId: "p0",
+			name: "shot.png",
+			extension: "png",
+			size: 10,
+			mimeType: "image/png",
+			deleteAt: 0,
+		};
+		const base = evidence("p0", 0, "");
+		expect(isMediaOnlyPost({ ...base, attachments: [file] })).toBe(true);
+		expect(isMediaOnlyPost({ ...base, attachments: [] })).toBe(false);
+		expect(
+			isMediaOnlyPost({ ...base, message: "  ", attachments: [file] }),
+		).toBe(true);
+		expect(
+			isMediaOnlyPost({ ...base, message: "смотри", attachments: [file] }),
+		).toBe(false);
+		expect(
+			isMediaOnlyPost({
+				...base,
+				attachments: [{ ...file, deleteAt: 5 }],
+			}),
+		).toBe(false);
+		expect(isMediaOnlyPost({ ...base, deleteAt: 5, attachments: [file] })).toBe(
+			false,
+		);
 	});
 });
 

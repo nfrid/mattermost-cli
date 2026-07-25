@@ -18,6 +18,11 @@ import type { ConversationRecord, MattermostStore } from "../store/index.ts";
 import type { SyncClient } from "../sync/sync.ts";
 
 export const DEFAULT_SEARCH_LIMIT = 10;
+/**
+ * Excerpts per candidate in `--agent` search output. Triage needs enough text
+ * to judge a thread, not the whole match list — the full set stays in `--json`.
+ */
+export const DEFAULT_SEARCH_EXCERPTS = 3;
 
 export interface SearchFilterInput {
 	from?: string;
@@ -77,6 +82,11 @@ export interface SearchInput
 	> {
 	/** Max ranked candidates to return (default {@link DEFAULT_SEARCH_LIMIT}). */
 	limit?: number;
+	/**
+	 * Max excerpts per candidate in the agent projection (default
+	 * {@link DEFAULT_SEARCH_EXCERPTS}).
+	 */
+	excerpts?: number;
 }
 
 export interface ThreadInput {
@@ -115,6 +125,8 @@ export interface FreshnessEvidence {
 	ageSeconds: number | null;
 	stale: boolean;
 	coverageComplete: boolean;
+	/** Oldest indexed post; the cutoff bound when coverage is incomplete. */
+	oldestCoveredAt: number | null;
 }
 
 export interface ContextThread extends PackedThread {
@@ -193,6 +205,24 @@ export interface RelatedTicketPointer {
 	hydrated: false;
 }
 
+/**
+ * Pointer to a thematically close thread outside ticket routing. Never
+ * hydrated, never packed, never part of thread selection — it exists so the
+ * agent can decide whether a pre-ticket design discussion is worth a call.
+ */
+export interface BackgroundThread {
+	threadId: string;
+	conversationId: string;
+	conversationAlias: string;
+	conversationKind: ConversationRecord["kind"];
+	url: string;
+	latestActivityAt: number;
+	reasons: RankingReason[];
+	/** Probe values that matched, so the pointer is attributable. */
+	matchedProbes: string[];
+	excerpts: string[];
+}
+
 /** Agent skip guidance for DM conversation surround posts. */
 export type SurroundRelevance = "low" | "unknown";
 
@@ -219,6 +249,8 @@ export interface ContextResult {
 	relatedTickets: RelatedTicketPointer[];
 	evidence: EvidenceStatus;
 	threads: ContextThread[];
+	/** Pointers outside ticket routing; only with explicit `--query` probes. */
+	background?: BackgroundThread[];
 	budget: {
 		measurement: "unicode_code_points_in_rendered_post";
 		limit: number;
@@ -243,6 +275,8 @@ export interface SearchContextResult extends Omit<SearchResult, "candidates"> {
 	freshness: FreshnessEvidence[];
 	searchedConversations: ContextResult["searchedConversations"];
 	widened: boolean;
+	/** Resolved excerpt cap applied by the agent projection only. */
+	excerptLimit: number;
 	warnings: Warning[];
 }
 

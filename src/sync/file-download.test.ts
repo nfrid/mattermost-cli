@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigError } from "../shared/errors.ts";
@@ -42,6 +42,107 @@ describe("file download", () => {
 		expect(result.id).toBe(FILE_ID);
 		expect(result.name).toBe("trace.txt");
 		expect(await readFile(out, "utf8")).toBe("attachment-bytes");
+		store.close();
+		await rm(outDir, { recursive: true, force: true });
+	});
+
+	test("overwrites an existing file at --out", async () => {
+		const store = await seededStore();
+		const outDir = await mkdtemp(join(tmpdir(), "mm-file-"));
+		const out = join(outDir, "trace.txt");
+		await writeFile(out, "stale");
+		const result = await downloadMattermostFile(
+			{ fileId: FILE_ID, out },
+			{
+				config: configFixture(),
+				store,
+				client: {
+					getFileInfo: async () => {
+						throw new Error("should use local metadata");
+					},
+					downloadFile: async () => new TextEncoder().encode("fresh-bytes"),
+				},
+			},
+		);
+		expect(result.path).toBe(out);
+		expect(await readFile(out, "utf8")).toBe("fresh-bytes");
+		store.close();
+		await rm(outDir, { recursive: true, force: true });
+	});
+
+	test("names the file under --out-dir like the batch path", async () => {
+		const store = await seededStore();
+		const parent = await mkdtemp(join(tmpdir(), "mm-file-"));
+		const outDir = join(parent, "nested", "attachments");
+		const result = await downloadMattermostFile(
+			{ fileId: FILE_ID, outDir },
+			{
+				config: configFixture(),
+				store,
+				client: {
+					getFileInfo: async () => {
+						throw new Error("should use local metadata");
+					},
+					downloadFile: async () =>
+						new TextEncoder().encode("attachment-bytes"),
+				},
+			},
+		);
+		expect(result.path).toBe(join(outDir, "trace.txt"));
+		expect(await readFile(result.path, "utf8")).toBe("attachment-bytes");
+		store.close();
+		await rm(parent, { recursive: true, force: true });
+	});
+
+	test("refuses to overwrite an existing file under --out-dir", async () => {
+		const store = await seededStore();
+		const outDir = await mkdtemp(join(tmpdir(), "mm-file-"));
+		const existing = join(outDir, "trace.txt");
+		await writeFile(existing, "keep-me");
+		let downloads = 0;
+		const error = await downloadMattermostFile(
+			{ fileId: FILE_ID, outDir },
+			{
+				config: configFixture(),
+				store,
+				client: {
+					getFileInfo: async () => {
+						throw new Error("should use local metadata");
+					},
+					downloadFile: async () => {
+						downloads += 1;
+						return new TextEncoder().encode("attachment-bytes");
+					},
+				},
+			},
+		).catch((cause: unknown) => cause);
+		expect(error).toBeInstanceOf(ConfigError);
+		expect((error as ConfigError).kind).toBe("file_exists");
+		expect((error as ConfigError).message).toContain(existing);
+		expect(downloads).toBe(0);
+		expect(await readFile(existing, "utf8")).toBe("keep-me");
+		store.close();
+		await rm(outDir, { recursive: true, force: true });
+	});
+
+	test("rejects --out and --out-dir together", async () => {
+		const store = await seededStore();
+		const outDir = await mkdtemp(join(tmpdir(), "mm-file-"));
+		await expect(
+			downloadMattermostFile(
+				{ fileId: FILE_ID, out: join(outDir, "trace.txt"), outDir },
+				{
+					config: configFixture(),
+					store,
+					client: {
+						getFileInfo: async () => {
+							throw new Error("should use local metadata");
+						},
+						downloadFile: async () => new Uint8Array(),
+					},
+				},
+			),
+		).rejects.toMatchObject({ kind: "conflicting_out_target" });
 		store.close();
 		await rm(outDir, { recursive: true, force: true });
 	});

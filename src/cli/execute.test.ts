@@ -3,7 +3,7 @@ import { commandSuccess } from "../shared/command-result.ts";
 import { emitResult } from "./execute.ts";
 
 describe("emitResult file --agent", () => {
-	test("emits flattened schemaVersion-2 JSON, not the human one-liner", () => {
+	test("emits flattened schemaVersion-3 JSON, not the human one-liner", () => {
 		const chunks: string[] = [];
 		const stderr: string[] = [];
 		emitResult(
@@ -32,7 +32,7 @@ describe("emitResult file --agent", () => {
 		const document = JSON.parse(chunks[0] ?? "");
 		expect(document).toEqual({
 			command: "file",
-			schemaVersion: 2,
+			schemaVersion: 3,
 			success: true,
 			id: "file-1",
 			name: "trace.txt",

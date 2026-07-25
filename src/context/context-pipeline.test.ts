@@ -1025,4 +1025,85 @@ describe("context pipeline", () => {
 		);
 		store.close();
 	});
+
+	test("names cutoff-bounded conversations in incomplete_history", async () => {
+		const store = await seededStore();
+		const context = await getMattermostContext(
+			{ subject: "payment timeout", channels: ["payments"], local: true },
+			{ config: configFixture(), store, now: () => 1_000_000 },
+		);
+		expect(
+			context.warnings.find(({ kind }) => kind === "incomplete_history")
+				?.message,
+		).toBe(
+			"At least one searched conversation has cutoff-bounded history: payments.",
+		);
+
+		const search = await searchMattermost(
+			{ subject: "payment timeout", channels: ["payments"] },
+			{ config: configFixture(), store, now: () => 1_000_000 },
+		);
+		expect(
+			search.warnings.find(({ kind }) => kind === "incomplete_history")
+				?.message,
+		).toBe(
+			"At least one searched conversation has cutoff-bounded history: payments.",
+		);
+		store.close();
+	});
+
+	test("caps named cutoff-bounded conversations at three", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const aliases = ["alpha", "beta", "gamma", "delta"] as const;
+		for (const [index, alias] of aliases.entries()) {
+			store.writePage({
+				conversation: conversationFixture(alias, `channel-${alias}`),
+				users: [userFixture()],
+				posts: [
+					postFixture({
+						id: `${alias[0]}`.repeat(26),
+						channel_id: `channel-${alias}`,
+						message: "payment timeout shared evidence",
+						create_at: 10 + index,
+					}),
+				],
+				checkpoint: {
+					conversationId: `channel-${alias}`,
+					newestPostId: null,
+					newestPostAt: 10 + index,
+					oldestCoveredAt: 10 + index,
+					lastSuccessAt: 1_000_000,
+					coverageComplete: false,
+				},
+			});
+		}
+		const config = configFixture({
+			channels: Object.fromEntries(
+				aliases.map((alias, index) => [
+					alias,
+					{
+						id: `channel-${alias}`,
+						name: alias,
+						description: alias,
+						tags: [],
+						repositories: [],
+						scopes: [],
+						priority: 100 - index,
+					},
+				]),
+			),
+			directMessages: {},
+		});
+		const context = await getMattermostContext(
+			{ subject: "payment timeout", channels: [...aliases], local: true },
+			{ config, store, now: () => 1_000_000 },
+		);
+		expect(
+			context.warnings.find(({ kind }) => kind === "incomplete_history")
+				?.message,
+		).toBe(
+			"At least one searched conversation has cutoff-bounded history: alpha, beta, gamma +1 more.",
+		);
+		store.close();
+	});
 });

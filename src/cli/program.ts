@@ -1,6 +1,9 @@
 import { Command, Option } from "commander";
 import packageJson from "../../package.json" with { type: "json" };
-import { DEFAULT_SEARCH_LIMIT } from "../context/index.ts";
+import {
+	DEFAULT_SEARCH_EXCERPTS,
+	DEFAULT_SEARCH_LIMIT,
+} from "../context/index.ts";
 import type { CommandResult } from "../shared/command-result.ts";
 import type { CommandOptions, GlobalOptions } from "./types.ts";
 
@@ -167,6 +170,11 @@ export function createProgram(
 			`max ranked candidates to return (default ${DEFAULT_SEARCH_LIMIT})`,
 			(value) => Number(value),
 		)
+		.option(
+			"--excerpts <n>",
+			`max excerpts per candidate in --agent output (default ${DEFAULT_SEARCH_EXCERPTS})`,
+			(value) => Number(value),
+		)
 		.option("--local", "perform no network calls (search is always local)")
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (subject?: string) => {
@@ -213,6 +221,12 @@ export function createProgram(
 		)
 		.argument("<file-id>", "Mattermost file id from context/thread evidence")
 		.option("--out <path>", "destination path (default: /tmp/mm-<id>-<name>)")
+		.addOption(
+			new Option(
+				"--out-dir <dir>",
+				"destination directory using the attachment name (created if missing; never overwrites; conflicts with --out)",
+			).conflicts("out"),
+		)
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (fileId: string) => {
 			await run("file", program.opts<GlobalOptions>(), {

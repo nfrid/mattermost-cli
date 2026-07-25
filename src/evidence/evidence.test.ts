@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { SelectionEvidence } from "../context/types.ts";
+import type {
+	ContextThread,
+	FreshnessEvidence,
+	RemoteSearchEvidence,
+	SelectionEvidence,
+} from "../context/types.ts";
 import { buildEvidence } from "./evidence.ts";
 
 const emptySelection = (): SelectionEvidence => ({
@@ -10,6 +15,118 @@ const emptySelection = (): SelectionEvidence => ({
 	droppedNoMatch: 0,
 	droppedCandidates: [],
 });
+
+function packedThread(input: {
+	threadId: string;
+	totalPosts: number;
+	omittedPosts: number;
+	skip: number;
+	reasons?: ContextThread["reasons"];
+}): ContextThread {
+	return {
+		threadId: input.threadId,
+		selectionStrategy: ["root"],
+		totalPosts: input.totalPosts,
+		returnedPosts: input.totalPosts - input.omittedPosts,
+		omittedPosts: input.omittedPosts,
+		returnedAttachments: 0,
+		totalOmittedAttachments: 0,
+		omittedAttachments: [],
+		unreportedOmittedAttachments: 0,
+		budget: {
+			measurement: "unicode_code_points_in_rendered_post",
+			limit: 100,
+			used: 100,
+		},
+		posts: [],
+		timeline: input.skip
+			? [
+					{
+						kind: "skip",
+						skip: {
+							posts: input.skip,
+							after: "a",
+							before: "b",
+							reason: "budget",
+						},
+					},
+				]
+			: [],
+		conversationId: "channel-1",
+		conversationAlias: "payments",
+		conversationKind: "channel",
+		reasons: input.reasons ?? ["ticket_in_root"],
+		matchingPostIds: [input.threadId],
+		latestActivityAt: 1,
+		link: `https://example.test/${input.threadId}`,
+	};
+}
+
+function evidencePost(input: {
+	id: string;
+	createAt: number;
+	message: string;
+	files?: readonly string[];
+}): ContextThread["posts"][number] {
+	return {
+		id: input.id,
+		rootId: "t1",
+		userId: "user-1",
+		authorUsername: "alice",
+		authorDisplayName: "Alice",
+		createAt: input.createAt,
+		updateAt: input.createAt,
+		deleteAt: 0,
+		message: input.message,
+		renderedUnits: input.message.length,
+		attachments: (input.files ?? []).map((id) => ({
+			id,
+			postId: input.id,
+			name: `${id}.png`,
+			extension: "png",
+			size: 10,
+			mimeType: "image/png",
+			deleteAt: 0,
+		})),
+	};
+}
+
+function threadWithPosts(
+	threadId: string,
+	posts: ContextThread["posts"],
+): ContextThread {
+	return {
+		...packedThread({
+			threadId,
+			totalPosts: posts.length,
+			omittedPosts: 0,
+			skip: 0,
+		}),
+		posts,
+		timeline: posts.map((post) => ({ kind: "post" as const, post })),
+	};
+}
+
+const freshChannel: FreshnessEvidence = {
+	alias: "payments",
+	conversationId: "channel-1",
+	kind: "channel",
+	observedAt: 1_000,
+	lastSuccessAt: 1_000,
+	ageSeconds: 0,
+	stale: false,
+	coverageComplete: true,
+	oldestCoveredAt: null,
+};
+
+const noRemoteSearch: RemoteSearchEvidence = {
+	requested: false,
+	performed: false,
+	reason: null,
+	queries: [],
+	candidateThreads: 0,
+	failures: 0,
+};
 
 function assertArgv(command: string[] | undefined): void {
 	expect(command).toBeDefined();
@@ -34,6 +151,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: true,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }],
@@ -106,6 +224,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 999,
 					stale: true,
 					coverageComplete: true,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }],
@@ -172,6 +291,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: true,
 					coverageComplete: false,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }],
@@ -298,6 +418,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: true,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }],
@@ -375,6 +496,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: true,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }],
@@ -449,6 +571,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: false,
+					oldestCoveredAt: null,
 				},
 				{
 					alias: "ops",
@@ -459,6 +582,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: false,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }, { id: "channel-2" }],
@@ -530,6 +654,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: false,
+					oldestCoveredAt: null,
 				},
 				{
 					alias: "ops",
@@ -540,6 +665,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: false,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }, { id: "channel-2" }],
@@ -614,6 +740,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 999,
 					stale: true,
 					coverageComplete: true,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }],
@@ -704,6 +831,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: true,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }],
@@ -788,6 +916,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: true,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }],
@@ -867,6 +996,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: true,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }],
@@ -945,6 +1075,7 @@ describe("buildEvidence", () => {
 					ageSeconds: 0,
 					stale: false,
 					coverageComplete: true,
+					oldestCoveredAt: null,
 				},
 			],
 			searchedConversations: [{ id: "channel-1" }],
@@ -1043,5 +1174,376 @@ describe("buildEvidence", () => {
 		});
 		expect(evidence.adequacy).toBe("insufficient");
 		expect(evidence.currency).toBe("local_only");
+	});
+
+	test("recommends exactly one thread_full and keeps the rest optional", () => {
+		const evidence = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: false,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				packedThread({
+					threadId: "wide-skip",
+					totalPosts: 40,
+					omittedPosts: 16,
+					skip: 12,
+				}),
+				packedThread({
+					threadId: "thin-stub",
+					totalPosts: 30,
+					omittedPosts: 25,
+					skip: 8,
+					reasons: ["thin_thread"],
+				}),
+				packedThread({
+					threadId: "primary",
+					totalPosts: 60,
+					omittedPosts: 20,
+					skip: 6,
+					reasons: ["substantive_thread_depth", "ticket_in_root"],
+				}),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 3,
+				returnedThreads: 3,
+			},
+			warnings: [],
+		});
+		expect(evidence.next).toEqual([
+			{
+				action: "thread_full",
+				reason: "packing_incomplete",
+				priority: "recommended",
+				impact: "may_recover_omitted_core",
+				command: ["mm", "thread", "primary", "--full", "--agent"],
+				threadId: "primary",
+			},
+			{
+				action: "thread_full",
+				reason: "packing_incomplete",
+				priority: "optional",
+				impact: "may_recover_omitted_core",
+				command: ["mm", "thread", "wide-skip", "--full", "--agent"],
+				threadId: "wide-skip",
+			},
+			{
+				action: "thread_full",
+				reason: "packing_incomplete",
+				priority: "optional",
+				impact: "may_recover_omitted_core",
+				command: ["mm", "thread", "thin-stub", "--full", "--agent"],
+				threadId: "thin-stub",
+			},
+		]);
+		expect(
+			evidence.next.filter(({ priority }) => priority === "recommended"),
+		).toHaveLength(1);
+		expect(evidence.packing.recommendFullThreadIds).toEqual([
+			"wide-skip",
+			"thin-stub",
+			"primary",
+		]);
+	});
+
+	test("orders non-primary thread_full steps by skip, omitted ratio, then id", () => {
+		const evidence = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: false,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				packedThread({
+					threadId: "complete-primary",
+					totalPosts: 100,
+					omittedPosts: 0,
+					skip: 0,
+					reasons: ["substantive_thread_depth"],
+				}),
+				packedThread({
+					threadId: "b-tie",
+					totalPosts: 20,
+					omittedPosts: 10,
+					skip: 9,
+				}),
+				packedThread({
+					threadId: "a-tie",
+					totalPosts: 20,
+					omittedPosts: 10,
+					skip: 9,
+				}),
+				packedThread({
+					threadId: "higher-ratio",
+					totalPosts: 10,
+					omittedPosts: 9,
+					skip: 9,
+				}),
+				packedThread({
+					threadId: "widest-skip",
+					totalPosts: 20,
+					omittedPosts: 12,
+					skip: 12,
+				}),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 5,
+				returnedThreads: 5,
+			},
+			warnings: [],
+		});
+		expect(evidence.next.map(({ threadId }) => threadId)).toEqual([
+			"widest-skip",
+			"higher-ratio",
+			"a-tie",
+			"b-tie",
+		]);
+		expect(evidence.next.map(({ priority }) => priority)).toEqual([
+			"recommended",
+			"optional",
+			"optional",
+			"optional",
+		]);
+	});
+
+	test("recommends reading a media-only post that follows the last ticket mention", () => {
+		const evidence = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				threadWithPosts("t1", [
+					evidencePost({ id: "p1", createAt: 10, message: "BTB-1 broke" }),
+					evidencePost({
+						id: "p2",
+						createAt: 20,
+						message: "наверное так и сделаю",
+					}),
+					evidencePost({
+						id: "p3",
+						createAt: 30,
+						message: "",
+						files: ["file-1"],
+					}),
+				]),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+			subjectTicket: "BTB-1",
+		});
+		const step = evidence.next.find(
+			({ action }) => action === "read_attachments",
+		);
+		expect(step).toMatchObject({
+			reason: "media_only_outcome_post",
+			priority: "recommended",
+			impact: "may_contradict_visible_text",
+			threadId: "t1",
+			postId: "p3",
+		});
+		assertArgv(step?.command);
+		expect(step?.command).toEqual(["mm", "file", "file-1", "--agent"]);
+	});
+
+	test("stays quiet for media-only posts before the last ticket mention", () => {
+		const evidence = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				threadWithPosts("t1", [
+					evidencePost({
+						id: "p1",
+						createAt: 10,
+						message: "",
+						files: ["file-1"],
+					}),
+					evidencePost({ id: "p2", createAt: 20, message: "BTB-1 fixed" }),
+				]),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+			subjectTicket: "BTB-1",
+		});
+		expect(
+			evidence.next.some(({ action }) => action === "read_attachments"),
+		).toBe(false);
+	});
+
+	test("without a subject ticket only the trailing media-only post counts", () => {
+		const trailing = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				threadWithPosts("t1", [
+					evidencePost({ id: "p1", createAt: 10, message: "context" }),
+					evidencePost({ id: "p2", createAt: 20, message: "", files: ["f"] }),
+				]),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+		});
+		expect(
+			trailing.next.find(({ action }) => action === "read_attachments"),
+		).toMatchObject({ postId: "p2" });
+
+		const middle = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				threadWithPosts("t1", [
+					evidencePost({ id: "p1", createAt: 10, message: "", files: ["f"] }),
+					evidencePost({ id: "p2", createAt: 20, message: "and then" }),
+				]),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+		});
+		expect(
+			middle.next.some(({ action }) => action === "read_attachments"),
+		).toBe(false);
+	});
+
+	test("names cutoff-bounded conversations, selected ones first", () => {
+		const evidence = buildEvidence({
+			searchCoverageComplete: false,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [
+				{
+					...freshChannel,
+					alias: "zeta-unselected",
+					conversationId: "channel-2",
+					coverageComplete: false,
+					oldestCoveredAt: 86_400_000,
+				},
+				{
+					...freshChannel,
+					alias: "alpha-selected",
+					conversationId: "channel-1",
+					coverageComplete: false,
+					oldestCoveredAt: 172_800_000,
+				},
+				{ ...freshChannel, alias: "complete", conversationId: "channel-3" },
+			],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				packedThread({
+					threadId: "t1",
+					totalPosts: 3,
+					omittedPosts: 0,
+					skip: 0,
+				}),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+		});
+		expect(evidence.history?.cutoffBounded).toEqual([
+			{
+				alias: "alpha-selected",
+				conversationId: "channel-1",
+				oldestIndexedAt: "1970-01-03T00:00:00.000Z",
+				inSelectedThreads: true,
+			},
+			{
+				alias: "zeta-unselected",
+				conversationId: "channel-2",
+				oldestIndexedAt: "1970-01-02T00:00:00.000Z",
+				inSelectedThreads: false,
+			},
+		]);
+	});
+
+	test("omits history when every searched conversation is fully covered", () => {
+		const evidence = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				packedThread({
+					threadId: "t1",
+					totalPosts: 3,
+					omittedPosts: 0,
+					skip: 0,
+				}),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+		});
+		expect(evidence.history).toBeUndefined();
+	});
+
+	test("reports droppedNoMatch so ranking-only drops are visible", () => {
+		const evidence = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				packedThread({
+					threadId: "t1",
+					totalPosts: 3,
+					omittedPosts: 0,
+					skip: 0,
+				}),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 3,
+				returnedThreads: 1,
+				droppedNoMatch: 2,
+			},
+			warnings: [],
+		});
+		expect(evidence.selection.droppedNoMatch).toBe(2);
 	});
 });

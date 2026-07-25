@@ -118,6 +118,21 @@ describe("thread command API", () => {
 		store.close();
 	});
 
+	test("names the conversation in incomplete_history", async () => {
+		const store = await seededStore();
+		const result = await getMattermostThread(
+			{ target: REPLY, local: true },
+			{ config: configFixture(), store },
+		);
+		expect(
+			result.warnings.find(({ kind }) => kind === "incomplete_history")
+				?.message,
+		).toBe(
+			"Local thread evidence comes from cutoff-bounded history: payments.",
+		);
+		store.close();
+	});
+
 	test("uses fresh local evidence without forcing remote hydrate", async () => {
 		const store = await seededStore({ fresh: true });
 		const client = new FakeContextClient();
