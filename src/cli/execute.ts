@@ -2,6 +2,7 @@ import {
 	type LoadConfigOptions,
 	loadMattermostConfig,
 } from "../config/config.ts";
+import type { SearchInput } from "../context/index.ts";
 import { parseCommandResultV1 } from "../contracts/contracts.ts";
 import { projectAgentResult } from "../output/agent-view.ts";
 import { formatHumanResult } from "../output/format.ts";
@@ -69,22 +70,9 @@ export async function executeCommand(
 				return await contextCommand(
 					config,
 					{
-						subject: commandOptions.subject,
-						ticket: commandOptions.ticket,
-						queries: commandOptions.query,
-						repositories: commandOptions.repository,
-						scopes: commandOptions.scope,
-						channels: commandOptions.channel,
-						from: commandOptions.from,
-						after: commandOptions.after,
-						before: commandOptions.before,
-						hasFile: commandOptions.hasFile,
-						file: commandOptions.file,
+						...retrievalInput(commandOptions),
 						fresh: commandOptions.fresh,
-						local: commandOptions.local,
 						remoteSearch: commandOptions.remoteSearch,
-						noWiden: commandOptions.widen === false,
-						includeAutomation: commandOptions.includeAutomation,
 						short: commandOptions.short,
 						navigate: commandOptions.navigate,
 						brief: commandOptions.brief,
@@ -94,20 +82,7 @@ export async function executeCommand(
 				);
 			case "search":
 				return await searchCommand(config, {
-					subject: commandOptions.subject,
-					ticket: commandOptions.ticket,
-					queries: commandOptions.query,
-					repositories: commandOptions.repository,
-					scopes: commandOptions.scope,
-					channels: commandOptions.channel,
-					from: commandOptions.from,
-					after: commandOptions.after,
-					before: commandOptions.before,
-					hasFile: commandOptions.hasFile,
-					file: commandOptions.file,
-					local: commandOptions.local,
-					noWiden: commandOptions.widen === false,
-					includeAutomation: commandOptions.includeAutomation,
+					...retrievalInput(commandOptions),
 					limit: commandOptions.limit,
 					excerpts: commandOptions.excerpts,
 				});
@@ -169,6 +144,31 @@ export async function executeCommand(
 	} catch (error) {
 		return commandFailure(command, error, [resolvedToken]);
 	}
+}
+
+/**
+ * The subject, routing, and filter options `context` and `search` share. Both
+ * commands expose the same retrieval flags, so the mapping lives in one place.
+ */
+function retrievalInput(
+	commandOptions: CommandOptions,
+): Omit<SearchInput, "limit" | "excerpts"> {
+	return {
+		subject: commandOptions.subject,
+		ticket: commandOptions.ticket,
+		queries: commandOptions.query,
+		repositories: commandOptions.repository,
+		scopes: commandOptions.scope,
+		channels: commandOptions.channel,
+		from: commandOptions.from,
+		after: commandOptions.after,
+		before: commandOptions.before,
+		hasFile: commandOptions.hasFile,
+		file: commandOptions.file,
+		local: commandOptions.local,
+		noWiden: commandOptions.widen === false,
+		includeAutomation: commandOptions.includeAutomation,
+	};
 }
 
 function resolveFilesSelector(
