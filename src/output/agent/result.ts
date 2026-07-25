@@ -6,6 +6,7 @@ import type {
 	SelectionEvidence,
 	ThreadResult,
 } from "../../context/index.ts";
+import type { PersonRef } from "../../context/people.ts";
 import { pickPrimaryThreadIndex } from "../../context/selection.ts";
 import { buildEvidence } from "../../evidence/evidence.ts";
 import type { PackedThread } from "../../evidence/packing.ts";
@@ -181,6 +182,7 @@ function projectContext(
 		...(data.remoteSearch.performed || data.remoteSearch.requested
 			? { remoteSearch: data.remoteSearch }
 			: {}),
+		...(data.people?.length ? { people: data.people.map(projectPerson) } : {}),
 		...(relatedTickets.length ? { relatedTickets } : {}),
 		...(messages?.length ? { messages } : {}),
 		threads,
@@ -188,6 +190,25 @@ function projectContext(
 			? { background: data.background.map(projectBackgroundThread) }
 			: {}),
 		warnings,
+	};
+}
+
+/**
+ * Roster entry for the agent view: username and role only. Display names add
+ * bytes and a second name for the same person without changing what the packet
+ * can be used for — `username` is the identifier every other field cites.
+ */
+function projectPerson(person: PersonRef): {
+	username: string;
+	role?: string;
+	roleSource?: "profile" | "config";
+	isBot?: true;
+} {
+	return {
+		username: person.username,
+		...(person.role ? { role: person.role } : {}),
+		...(person.roleSource ? { roleSource: person.roleSource } : {}),
+		...(person.isBot ? { isBot: true as const } : {}),
 	};
 }
 

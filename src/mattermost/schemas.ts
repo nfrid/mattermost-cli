@@ -9,6 +9,7 @@ export const mattermostUserSchema = z.object({
 	first_name: z.string().default(""),
 	last_name: z.string().default(""),
 	nickname: z.string().default(""),
+	position: z.string().default(""),
 	delete_at: timestampSchema.default(0),
 	is_bot: z.boolean().default(false),
 });

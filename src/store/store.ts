@@ -183,6 +183,12 @@ export class MattermostStore implements StoreHandle {
 		return reads.getUser(this, userId);
 	}
 
+	authorActivity(
+		conversationIds?: readonly string[],
+	): Array<{ userId: string; messages: number; latestAt: number }> {
+		return reads.authorActivity(this, conversationIds);
+	}
+
 	threadReplyCount(threadId: string): number {
 		return reads.threadReplyCount(this, threadId);
 	}

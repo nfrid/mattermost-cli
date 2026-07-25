@@ -333,6 +333,12 @@ exports[`ranking regression snapshots locks populated deterministic search and c
       },
     ],
     "freshnessMode": "local",
+    "people": [
+      {
+        "displayName": "Alice Example",
+        "username": "alice",
+      },
+    ],
     "probes": [
       {
         "phrases": [],

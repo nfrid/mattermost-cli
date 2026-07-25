@@ -611,6 +611,13 @@ const evidenceStatusSchema = z.object({
 		})
 		.optional(),
 });
+const personRefSchema = z.object({
+	username: z.string(),
+	displayName: z.string().optional(),
+	role: z.string().optional(),
+	roleSource: z.enum(["profile", "config"]).optional(),
+	isBot: z.literal(true).optional(),
+});
 const contextDataSchema = z.object({
 	subject: subjectSchema,
 	probes: z.array(probeSchema),
@@ -642,6 +649,7 @@ const contextDataSchema = z.object({
 	brief: z.boolean().optional(),
 	timeline: z.boolean().optional(),
 	signals: z.boolean().optional(),
+	people: z.array(personRefSchema).optional(),
 });
 const threadDataSchema = z.object({
 	subject: subjectSchema,
@@ -685,6 +693,17 @@ export const contextResultV1Schema = successResult(
 	contextDataSchema,
 );
 export const threadResultV1Schema = successResult("thread", threadDataSchema);
+const peopleDataSchema = z.object({
+	people: z.array(
+		personRefSchema.extend({
+			messages: z.number().int().nonnegative(),
+			latestAt: z.number().int().nonnegative(),
+		}),
+	),
+	total: z.number().int().nonnegative(),
+	conversations: z.array(z.string()),
+});
+export const peopleResultV1Schema = successResult("people", peopleDataSchema);
 const fileDataSchema = z.object({
 	id: z.string(),
 	name: z.string(),
@@ -769,6 +788,7 @@ export const commandResultV1Schema = z.union([
 	searchResultV1Schema,
 	contextResultV1Schema,
 	threadResultV1Schema,
+	peopleResultV1Schema,
 	fileResultV1Schema,
 	filesResultV1Schema,
 	failureResultV1Schema,
@@ -785,6 +805,7 @@ export type SyncCommandResultV1 = z.output<typeof syncResultV1Schema>;
 export type SearchCommandResultV1 = z.output<typeof searchResultV1Schema>;
 export type ContextCommandResultV1 = z.output<typeof contextResultV1Schema>;
 export type ThreadCommandResultV1 = z.output<typeof threadResultV1Schema>;
+export type PeopleCommandResultV1 = z.output<typeof peopleResultV1Schema>;
 export type FileCommandResultV1 = z.output<typeof fileResultV1Schema>;
 export type FilesCommandResultV1 = z.output<typeof filesResultV1Schema>;
 

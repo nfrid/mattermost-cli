@@ -52,6 +52,8 @@ export interface IndexedUser {
 	firstName: string;
 	lastName: string;
 	nickname: string;
+	/** Mattermost profile title, empty when the user never set one. */
+	position: string;
 	deleteAt: number;
 	isBot: boolean;
 }

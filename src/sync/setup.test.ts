@@ -159,6 +159,7 @@ describe("configured conversations", () => {
 					first_name: "Alice",
 					last_name: "",
 					nickname: "",
+					position: "",
 					delete_at: 0,
 					is_bot: false,
 				});

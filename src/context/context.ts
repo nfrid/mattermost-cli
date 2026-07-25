@@ -25,6 +25,7 @@ import {
 } from "./helpers.ts";
 import { resolveDirectTarget } from "./hydrate.ts";
 import { ThreadPacker } from "./pack-threads.ts";
+import { peopleInThreads } from "./people.ts";
 import { assertRemoteSearchAllowed, prepareSearch } from "./prepare.ts";
 import { resolveRelatedTicketPointers } from "./related-tickets.ts";
 import { searchRemoteCandidates } from "./remote-search.ts";
@@ -451,6 +452,7 @@ export async function getMattermostContext(
 			: input.fresh
 				? "forced"
 				: "network";
+		const people = peopleInThreads(config, store, threads);
 		const background = findBackgroundThreads({
 			config,
 			store,
@@ -526,6 +528,7 @@ export async function getMattermostContext(
 			...(input.navigate ? { navigate: true } : {}),
 			...(input.brief ? { brief: true } : {}),
 			...(input.timeline ? { timeline: true } : {}),
+			...(people.length ? { people } : {}),
 			...(input.signals ? { signals: true } : {}),
 		};
 	});

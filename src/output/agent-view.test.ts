@@ -40,6 +40,7 @@ describe("agent projection", () => {
 			status: {
 				freshness: "local",
 			},
+			people: [{ username: "alice" }],
 			evidence: expect.objectContaining({
 				adequacy: "usable",
 				currency: "local_only",

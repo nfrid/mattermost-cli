@@ -121,4 +121,13 @@ CREATE TABLE search_index_config (
 ALTER TABLE users ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		// Mattermost profile title ("Product manager", "Backend"). Whose statement
+		// a chat message is carries weight, and the packet had no way to say.
+		version: 8,
+		sql: `
+ALTER TABLE users ADD COLUMN position TEXT NOT NULL DEFAULT '';
+CREATE INDEX posts_author_activity ON posts(user_id, create_at) WHERE delete_at = 0;
+`,
+	},
 ] as const;

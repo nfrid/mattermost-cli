@@ -16,6 +16,7 @@ import type {
 import type { Warning } from "../shared/command-result.ts";
 import type { ConversationRecord, MattermostStore } from "../store/index.ts";
 import type { SyncClient } from "../sync/sync.ts";
+import type { PersonRef } from "./people.ts";
 
 export const DEFAULT_SEARCH_LIMIT = 10;
 /**
@@ -281,6 +282,8 @@ export interface ContextResult {
 	brief?: boolean;
 	/** True when the selected threads were merged into one chronology. */
 	timeline?: boolean;
+	/** Authors of the packed posts with their role, when one is known. */
+	people?: PersonRef[];
 	/** True when advisory signals were requested for `--agent` projection. */
 	signals?: boolean;
 }

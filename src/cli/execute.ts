@@ -19,6 +19,7 @@ import {
 	doctorCommand,
 	fileCommand,
 	filesCommand,
+	peopleCommand,
 	searchCommand,
 	syncCommand,
 	threadCommand,
@@ -81,6 +82,11 @@ export async function executeCommand(
 					},
 					dependencies,
 				);
+			case "people":
+				return await peopleCommand(config, {
+					channels: commandOptions.channel,
+					limit: commandOptions.limit,
+				});
 			case "search":
 				return await searchCommand(config, {
 					...retrievalInput(commandOptions),

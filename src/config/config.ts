@@ -74,6 +74,11 @@ const localConfigSchema = z
 		synonyms: searchSynonymsSchema,
 		concepts: searchConceptsSchema,
 		suppressAuthors: stringListSchema,
+		// Optional local override for who a username is. Mattermost profile
+		// `position` is used first; this fills the gap where nobody set one.
+		people: z
+			.record(z.string().trim().min(1), z.string().trim().min(1).max(80))
+			.default({}),
 		budgets: outputBudgetsSchema,
 		channels: z
 			.record(z.string().trim().min(1), configuredChannelSchema)
@@ -143,11 +148,13 @@ export type LocalMattermostConfig = z.output<typeof localConfigSchema>;
 export interface MattermostConfig
 	extends Omit<
 		LocalMattermostConfig,
-		"synonyms" | "concepts" | "suppressAuthors"
+		"synonyms" | "concepts" | "suppressAuthors" | "people"
 	> {
 	synonyms?: LocalMattermostConfig["synonyms"];
 	concepts?: SearchConcepts;
 	suppressAuthors?: LocalMattermostConfig["suppressAuthors"];
+	/** Username → role, filling in for an unset Mattermost profile title. */
+	people?: LocalMattermostConfig["people"];
 	url: string;
 	configPath: string;
 	databasePath: string;

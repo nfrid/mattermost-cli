@@ -99,17 +99,18 @@ export function upsertUser(store: StoreHandle, user: MattermostUser): void {
 		.get(user.id);
 	store.database
 		.query(`
-INSERT INTO users (id, username, first_name, last_name, nickname, delete_at, is_bot)
-VALUES ($id, $username, $firstName, $lastName, $nickname, $deleteAt, $isBot)
+INSERT INTO users (id, username, first_name, last_name, nickname, position, delete_at, is_bot)
+VALUES ($id, $username, $firstName, $lastName, $nickname, $position, $deleteAt, $isBot)
 ON CONFLICT(id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name,
-  last_name=excluded.last_name, nickname=excluded.nickname, delete_at=excluded.delete_at,
-  is_bot=excluded.is_bot`)
+  last_name=excluded.last_name, nickname=excluded.nickname, position=excluded.position,
+  delete_at=excluded.delete_at, is_bot=excluded.is_bot`)
 		.run({
 			$id: user.id,
 			$username: user.username,
 			$firstName: user.first_name,
 			$lastName: user.last_name,
 			$nickname: user.nickname,
+			$position: user.position,
 			$deleteAt: user.delete_at,
 			$isBot: user.is_bot ? 1 : 0,
 		});

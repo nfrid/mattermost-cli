@@ -2,6 +2,7 @@ import type { MattermostConfig } from "../config/config.ts";
 import {
 	type ContextInput,
 	getMattermostContext,
+	getMattermostPeople,
 	getMattermostThread,
 	type SearchInput,
 	searchMattermost,
@@ -89,6 +90,26 @@ export async function doctorCommand(
 		"doctor",
 		await runDoctor(config, () => createClient(config, dependencies)),
 	);
+}
+
+export async function peopleCommand(
+	config: MattermostConfig,
+	input: { channels?: readonly string[]; limit?: number },
+): Promise<CommandResult<unknown>> {
+	const data = await getMattermostPeople(input, { config });
+	const unknownRoles = data.people.filter(({ role }) => !role).length;
+	// Profile titles land in the index only when a sync touches that user, so a
+	// cold index reports "role unknown" for people who do have one upstream.
+	const warnings: Warning[] =
+		data.people.length && unknownRoles > data.people.length / 2
+			? [
+					{
+						kind: "roles_unindexed",
+						message: `${unknownRoles} of ${data.people.length} listed people have no indexed role; run mm sync to refresh Mattermost profiles.`,
+					},
+				]
+			: [];
+	return commandSuccess("people", data, warnings);
 }
 
 export async function contextCommand(

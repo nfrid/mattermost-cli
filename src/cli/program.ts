@@ -303,6 +303,27 @@ export function createProgram(
 			});
 		});
 
+	const people = program
+		.command("people")
+		.description(
+			"List indexed authors with their Mattermost role, busiest first.",
+		)
+		.option(
+			"--channel <alias>",
+			"restrict to a configured alias (repeatable)",
+			collect,
+			[],
+		)
+		.option("--limit <n>", "max people to return", (value) => Number(value))
+		.addHelpText("after", GLOBAL_HELP)
+		.action(async () => {
+			await run(
+				"people",
+				program.opts<GlobalOptions>(),
+				people.opts<CommandOptions>(),
+			);
+		});
+
 	const sync = program
 		.command("sync")
 		.description("Synchronize configured conversations into the local index.")

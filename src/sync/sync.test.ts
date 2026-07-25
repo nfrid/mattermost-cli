@@ -559,6 +559,7 @@ class FakeClient implements SyncClient {
 			first_name: "",
 			last_name: "",
 			nickname: "",
+			position: "",
 			delete_at: 0,
 			is_bot: false,
 		}));

@@ -135,6 +135,33 @@ export function getUsers(
 		.map(rowToUser);
 }
 
+/**
+ * Indexed authors with their message counts, newest activity first. Scoped to
+ * the given conversations when provided — an allowlist the caller resolved, so
+ * this read never widens beyond configured conversations.
+ */
+export function authorActivity(
+	store: StoreHandle,
+	conversationIds?: readonly string[],
+): Array<{ userId: string; messages: number; latestAt: number }> {
+	const scoped = conversationIds?.length
+		? `AND conversation_id IN (${conversationIds.map(() => "?").join(", ")})`
+		: "";
+	return store.database
+		.query<
+			{ user_id: string; messages: number; latest_at: number },
+			string[]
+		>(`SELECT user_id, COUNT(*) AS messages, MAX(create_at) AS latest_at
+FROM posts WHERE delete_at = 0 ${scoped}
+GROUP BY user_id ORDER BY messages DESC, user_id`)
+		.all(...(conversationIds ?? []))
+		.map((row) => ({
+			userId: row.user_id,
+			messages: row.messages,
+			latestAt: row.latest_at,
+		}));
+}
+
 export function getUser(
 	store: StoreHandle,
 	userId: string,

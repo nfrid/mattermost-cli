@@ -25,6 +25,7 @@ export function rowToUser(row: Record<string, unknown>): IndexedUser {
 		firstName: String(row.first_name),
 		lastName: String(row.last_name),
 		nickname: String(row.nickname),
+		position: String(row.position ?? ""),
 		deleteAt: Number(row.delete_at),
 		isBot: Number(row.is_bot ?? 0) !== 0,
 	};

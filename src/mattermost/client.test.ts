@@ -197,6 +197,7 @@ describe("MattermostClient", () => {
 					first_name: "Alice",
 					last_name: "Example",
 					nickname: "",
+					position: "",
 					delete_at: 0,
 					unrelated: true,
 				}),

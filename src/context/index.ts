@@ -1,4 +1,12 @@
 export { getMattermostContext } from "./context.ts";
+export {
+	getMattermostPeople,
+	listPeople,
+	type PeopleResult,
+	type PersonActivity,
+	type PersonRef,
+	peopleInThreads,
+} from "./people.ts";
 export { searchMattermost } from "./search.ts";
 export { getMattermostThread } from "./thread.ts";
 export {

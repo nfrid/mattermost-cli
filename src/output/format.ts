@@ -4,6 +4,7 @@ import type {
 	SearchContextResult,
 	ThreadResult,
 } from "../context/index.ts";
+import type { PeopleResult } from "../context/people.ts";
 import { pickPrimaryThreadIndex } from "../context/selection.ts";
 import { isMediaOnlyPost, type PackedPost } from "../evidence/packing.ts";
 import {
@@ -56,6 +57,9 @@ export function formatHumanResult(result: CommandResult<unknown>): string {
 			break;
 		case "context":
 			body = formatContext(result.data as ContextResult);
+			break;
+		case "people":
+			body = formatPeople(result.data as PeopleResult);
 			break;
 		case "search":
 			body = formatSearch(result.data as SearchContextResult);
@@ -247,6 +251,20 @@ function formatContext(data: ContextResult): string {
 			),
 			`max threads ${styles.accent(String(data.budget.maxThreads))}`,
 		]),
+		...(data.people?.some(({ role }) => role)
+			? [
+					formatField(
+						"People",
+						data.people
+							.map((person) =>
+								person.role
+									? `${styles.username(`@${person.username}`)} ${styles.hint(person.role)}`
+									: styles.username(`@${person.username}`),
+							)
+							.join(", "),
+					),
+				]
+			: []),
 		...(data.timeline ? formatCrossThreadTimeline(data) : []),
 		...orderThreadsForReading(data.threads).flatMap(({ thread, rank, role }) =>
 			formatContextThread(thread, {
@@ -460,6 +478,43 @@ function formatPurposeHints(brief: ThreadBrief): string[] {
 				.join(", "),
 		),
 	];
+}
+
+/** Aliases named inline before the scope line switches to a count. */
+const SCOPE_ALIAS_LIMIT = 6;
+
+function formatPeople(data: PeopleResult): string {
+	// A full alias roster is dozens of DMs long; name them only when the scope is
+	// narrow enough that naming them is the point.
+	const scope =
+		data.conversations.length <= SCOPE_ALIAS_LIMIT
+			? data.conversations.join(", ")
+			: `${data.conversations.length} configured conversation(s)`;
+	return [
+		joinParts([
+			styles.label("Mattermost people"),
+			styles.accent(
+				data.people.length < data.total
+					? `${data.people.length}/${data.total}`
+					: `${data.total}`,
+			),
+			styles.hint(scope),
+		]),
+		...(data.people.length
+			? data.people.map((person) =>
+					joinParts([
+						styles.username(`@${person.username}`),
+						person.displayName ?? "",
+						person.role
+							? `${styles.accent(person.role)} ${styles.hint(person.roleSource ?? "")}`
+							: styles.hint("role unknown"),
+						`${styles.accent(String(person.messages))} message(s)`,
+						styles.timestamp(isoTimestamp(person.latestAt)),
+						...(person.isBot ? [styles.warning("bot")] : []),
+					]),
+				)
+			: [styles.hint("(none indexed)")]),
+	].join("\n");
 }
 
 function formatSearch(data: SearchContextResult): string {
