@@ -5,11 +5,56 @@ import {
 	commandFailure,
 	resultExitCode,
 } from "../shared/command-result.ts";
-import { emitResult, executeCommand, inferCommand } from "./execute.ts";
+import {
+	emitResult,
+	executeCommand,
+	inferCommand,
+	renderResult,
+} from "./execute.ts";
 import { createProgram } from "./program.ts";
 import type { CliContext, OutputWriter } from "./types.ts";
 
 export type { CliContext, OutputWriter } from "./types.ts";
+
+/**
+ * Retrieval commands accept `--out <path>` so a large packet can be inspected
+ * with file tools instead of being pasted through stdout. Only a successful
+ * document is redirected: an error must stay where the caller is looking.
+ */
+const OUT_REDIRECT_COMMANDS = new Set(["context", "search", "thread"]);
+
+async function emitOrWrite(
+	result: CommandResult<unknown>,
+	options: { json: boolean; pretty: boolean; agent: boolean; out?: string },
+	command: string,
+	stdout: OutputWriter,
+	stderr: OutputWriter,
+): Promise<void> {
+	const out = options.out?.trim();
+	if (!out || !OUT_REDIRECT_COMMANDS.has(command) || !result.success) {
+		emitResult(
+			result,
+			options.json,
+			options.pretty,
+			options.agent,
+			stdout,
+			stderr,
+		);
+		return;
+	}
+	const { text } = renderResult(
+		result,
+		options.json,
+		options.pretty,
+		options.agent,
+	);
+	const bytes = await Bun.write(out, text);
+	stdout.write(
+		options.json || options.agent
+			? `${JSON.stringify({ out, bytes })}\n`
+			: `Wrote ${bytes} bytes to ${out}\n`,
+	);
+}
 
 export async function runCli(
 	args: string[],
@@ -37,7 +82,13 @@ export async function runCli(
 				commandOptions,
 				context,
 			);
-			emitResult(result, json, pretty, agent, stdout, stderr);
+			await emitOrWrite(
+				result,
+				{ json, pretty, agent, out: commandOptions.out },
+				command,
+				stdout,
+				stderr,
+			);
 			emitted = true;
 			exitCode = resultExitCode(result);
 			return result;

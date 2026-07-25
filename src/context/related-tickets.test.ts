@@ -114,7 +114,6 @@ describe("resolveRelatedTicketPointers", () => {
 				threadId: SUBJECT_ROOT,
 				sourceThreadId: SUBJECT_ROOT,
 				alreadyInPacket: true,
-				hydrated: false,
 			}),
 		]);
 		store.close();
@@ -162,7 +161,6 @@ describe("resolveRelatedTicketPointers", () => {
 				key: "BTB-200",
 				threadId: RELATED_FIRST,
 				sourceThreadId: SUBJECT_ROOT,
-				hydrated: false,
 			}),
 		]);
 		expect(pointers[0]?.alreadyInPacket).toBeUndefined();
@@ -206,7 +204,6 @@ describe("resolveRelatedTicketPointers", () => {
 				key: "BTB-200",
 				sourceThreadId: SUBJECT_ROOT,
 				alreadyInPacket: true,
-				hydrated: false,
 			}),
 		]);
 		expect(pointers[0]?.threadId).toBeUndefined();

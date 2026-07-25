@@ -178,7 +178,6 @@ export function resolveRelatedTicketPointers(input: {
 				mentions: entry.mentions,
 				sourceThreadId,
 				...(alreadyInPacket ? { alreadyInPacket: true } : {}),
-				hydrated: false,
 				excerpt: entry.first.excerpt,
 			});
 			continue;
@@ -210,7 +209,6 @@ export function resolveRelatedTicketPointers(input: {
 			),
 			sourceThreadId,
 			...(alreadyInPacket ? { alreadyInPacket: true } : {}),
-			hydrated: false,
 		});
 	}
 	return pointers;

@@ -196,7 +196,6 @@ export interface AgentRelatedTicket {
 	sourceThreadId?: string;
 	/** True when the related target is already visible in the selected packet. */
 	alreadyInPacket?: true;
-	hydrated: false;
 }
 
 export type AgentAnchorKind =
@@ -1201,7 +1200,6 @@ function projectRelatedTickets(
 			? { sourceThreadId: pointer.sourceThreadId }
 			: {}),
 		...(pointer.alreadyInPacket ? { alreadyInPacket: true as const } : {}),
-		hydrated: false,
 	}));
 }
 
@@ -1213,7 +1211,7 @@ function relatedTicketsFromPosts(
 		new Set(posts.flatMap((post) => extractTicketKeys(post.message))),
 		subjectTicket,
 	);
-	return keys.map((key) => ({ key, mentions: 1, hydrated: false as const }));
+	return keys.map((key) => ({ key, mentions: 1 }));
 }
 
 function finalizeRelatedTicketKeys(

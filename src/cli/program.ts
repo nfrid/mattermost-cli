@@ -149,6 +149,10 @@ export function createProgram(
 			"--signals",
 			"include advisory signals and technicalEntities in --agent output",
 		)
+		.option(
+			"--out <path>",
+			"write the result document to this path and print only a receipt",
+		)
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (subject?: string) => {
 			await run("context", program.opts<GlobalOptions>(), {
@@ -176,6 +180,10 @@ export function createProgram(
 			(value) => Number(value),
 		)
 		.option("--local", "perform no network calls (search is always local)")
+		.option(
+			"--out <path>",
+			"write the result document to this path and print only a receipt",
+		)
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (subject?: string) => {
 			await run("search", program.opts<GlobalOptions>(), {
@@ -205,6 +213,10 @@ export function createProgram(
 		.option(
 			"--signals",
 			"include advisory signals and technicalEntities in --agent output",
+		)
+		.option(
+			"--out <path>",
+			"write the result document to this path and print only a receipt",
 		)
 		.addHelpText("after", GLOBAL_HELP)
 		.action(async (target: string) => {

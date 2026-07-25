@@ -209,6 +209,72 @@ describe("buildEvidence", () => {
 		});
 	});
 
+	test("reports budget-bounded selection separately from thread completeness", () => {
+		const build = (selection: Partial<SelectionEvidence>) =>
+			buildEvidence({
+				searchCoverageComplete: true,
+				selectedThreadsComplete: true,
+				freshnessMode: "network",
+				freshness: [
+					{
+						alias: "payments",
+						conversationId: "channel-1",
+						kind: "channel",
+						observedAt: 1_000,
+						lastSuccessAt: 1_000,
+						ageSeconds: 0,
+						stale: false,
+						coverageComplete: true,
+						oldestCoveredAt: null,
+					},
+				],
+				searchedConversations: [{ id: "channel-1" }],
+				threads: [
+					packedThread({
+						threadId: "t1",
+						totalPosts: 1,
+						omittedPosts: 0,
+						skip: 0,
+					}),
+				],
+				remoteSearch: noRemoteSearch,
+				selection: { ...emptySelection(), ...selection },
+				warnings: [],
+				subject: "BTB-2113",
+			});
+
+		// Selected threads can be complete while most candidates were never judged.
+		const bounded = build({
+			candidateThreads: 138,
+			returnedThreads: 3,
+			droppedByBudget: 135,
+		});
+		expect(bounded.completeness).toMatchObject({
+			selectedThreads: "complete",
+			selection: "budget_bounded",
+		});
+		const review = bounded.next.find(
+			({ action }) => action === "review_candidates",
+		);
+		expect(review).toMatchObject({
+			priority: "optional",
+			reason: "selection_budget_bounded",
+		});
+		assertArgv(review?.command);
+		expect(review?.command).toEqual(["mm", "search", "BTB-2113", "--agent"]);
+
+		// Judged-and-rejected candidates are not a completeness gap.
+		const judged = build({
+			candidateThreads: 138,
+			returnedThreads: 3,
+			droppedNoMatch: 135,
+		});
+		expect(judged.completeness.selection).toBe("complete");
+		expect(judged.next.map(({ action }) => action)).not.toContain(
+			"review_candidates",
+		);
+	});
+
 	test("separates fresh selected evidence from stale discovery", () => {
 		const evidence = buildEvidence({
 			searchCoverageComplete: false,
@@ -360,6 +426,7 @@ describe("buildEvidence", () => {
 		expect(evidence.currency).toBe("possibly_stale");
 		expect(evidence.completeness).toEqual({
 			selectedThreads: "truncated",
+			selection: "budget_bounded",
 			indexHistory: "cutoff_bounded",
 			discovery: "possibly_stale",
 		});

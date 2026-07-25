@@ -45,6 +45,7 @@ describe("agent projection", () => {
 				currency: "local_only",
 				completeness: {
 					selectedThreads: "complete",
+					selection: "complete",
 					indexHistory: "full",
 					discovery: "local_only",
 				},
@@ -364,7 +365,6 @@ describe("agent projection", () => {
 			relatedTickets: [
 				expect.objectContaining({
 					key: "BTBOLD-238",
-					hydrated: false,
 				}),
 			],
 		});
@@ -1018,7 +1018,47 @@ describe("agent projection", () => {
 		store.close();
 	});
 
-	test("projects surroundRelevance beside surround and alreadyInPacket on related tickets", async () => {
+	test("attaches surround that may relate to the subject", async () => {
+		const store = await seededStore();
+		const context = await getMattermostContext(
+			{ subject: "payment evidence", channels: ["payments"], local: true },
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const primary = context.threads[0];
+		if (!primary) throw new Error("Expected a primary thread.");
+		context.subject = { kind: "ticket", ticketKey: "BTB-100", raw: "BTB-100" };
+		context.threads = [
+			{
+				...primary,
+				surround: [
+					{
+						id: "ssssssssssssssssssssssssss",
+						rootId: "ssssssssssssssssssssssssss",
+						userId: "user-1",
+						authorUsername: "alice",
+						authorDisplayName: "Alice",
+						message: "payment timeout still reproducing",
+						createAt: 1,
+						updateAt: 1,
+						deleteAt: 0,
+						attachments: [],
+					},
+				],
+			},
+		];
+		const thread = (
+			projectAgentResult(
+				commandSuccess("context", context, context.warnings),
+			) as unknown as {
+				threads: Array<{ surround?: unknown[]; surroundRelevance?: string }>;
+			}
+		).threads[0];
+		expect(thread?.surround).toHaveLength(1);
+		expect(thread?.surroundRelevance).toBe("possible");
+		store.close();
+	});
+
+	test("labels unrelated surround low and marks alreadyInPacket on related tickets", async () => {
 		const store = await seededStore();
 		const context = await getMattermostContext(
 			{
@@ -1058,14 +1098,12 @@ describe("agent projection", () => {
 				threadId: ROOT,
 				sourceThreadId: ROOT,
 				alreadyInPacket: true,
-				hydrated: false,
 			},
 			{
 				key: "BTB-9999",
 				mentions: 1,
 				threadId: "zzzzzzzzzzzzzzzzzzzzzzzzzz",
 				sourceThreadId: ROOT,
-				hydrated: false,
 			},
 		];
 		const result = projectAgentResult(
@@ -1080,7 +1118,6 @@ describe("agent projection", () => {
 				relatedTickets?: Array<{
 					key: string;
 					alreadyInPacket?: true;
-					hydrated: false;
 				}>;
 			}
 		).threads[0];
@@ -1091,7 +1128,6 @@ describe("agent projection", () => {
 				relatedTickets?: Array<{
 					key: string;
 					alreadyInPacket?: true;
-					hydrated: false;
 				}>;
 			}
 		).relatedTickets;
@@ -1100,11 +1136,9 @@ describe("agent projection", () => {
 				expect.objectContaining({
 					key: "BTBOLD-238",
 					alreadyInPacket: true,
-					hydrated: false,
 				}),
 				expect.objectContaining({
 					key: "BTB-9999",
-					hydrated: false,
 				}),
 			]),
 		);

@@ -193,6 +193,29 @@ function resolveFilesSelector(
 	return { kind: "file_ids", fileIds };
 }
 
+/**
+ * The rendered document plus the stream it belongs on. Separated from
+ * {@link emitResult} so a caller redirecting output to a file can reuse the
+ * exact bytes stdout would have received.
+ */
+export function renderResult(
+	result: CommandResult<unknown>,
+	json: boolean,
+	pretty: boolean,
+	agent: boolean,
+): { text: string; stream: "stdout" | "stderr" } {
+	const validated = json || agent ? parseCommandResultV1(result) : undefined;
+	const text = agent
+		? `${JSON.stringify(projectAgentResult(validated as CommandResult<unknown>))}\n`
+		: json
+			? `${JSON.stringify(validated, null, pretty ? 2 : undefined)}\n`
+			: `${formatHumanResult(result)}\n`;
+	return {
+		text,
+		stream: json || agent || result.success ? "stdout" : "stderr",
+	};
+}
+
 export function emitResult(
 	result: CommandResult<unknown>,
 	json: boolean,
@@ -201,17 +224,8 @@ export function emitResult(
 	stdout: OutputWriter,
 	stderr: OutputWriter,
 ): void {
-	const validated = json || agent ? parseCommandResultV1(result) : undefined;
-	const text = agent
-		? `${JSON.stringify(projectAgentResult(validated as CommandResult<unknown>))}\n`
-		: json
-			? `${JSON.stringify(validated, null, pretty ? 2 : undefined)}\n`
-			: `${formatHumanResult(result)}\n`;
-	if (json || agent || result.success) {
-		stdout.write(text);
-	} else {
-		stderr.write(text);
-	}
+	const { text, stream } = renderResult(result, json, pretty, agent);
+	(stream === "stdout" ? stdout : stderr).write(text);
 }
 
 export function inferCommand(args: string[]): string {

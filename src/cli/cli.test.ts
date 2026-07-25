@@ -206,6 +206,80 @@ describe("CLI output", () => {
 		expect(requested.some((url) => url.includes("dm-id"))).toBe(false);
 	});
 
+	test("redirects a retrieval document to --out and prints only a receipt", async () => {
+		const projectRoot = await projectWithConfig();
+		const store = await MattermostStore.open(
+			join(projectRoot, ".mattermost/mattermost.sqlite3"),
+		);
+		const rootId = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: rootId,
+					channel_id: "channel-payments",
+					message: "payment timeout exact evidence",
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: rootId,
+				newestPostAt: 1,
+				oldestCoveredAt: 1,
+				lastSuccessAt: 1,
+				coverageComplete: true,
+			},
+		});
+		store.close();
+		const outPath = join(projectRoot, "packet.json");
+
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await runCli(
+			[
+				"context",
+				"payment timeout",
+				"--channel",
+				"payments",
+				"--local",
+				"--agent",
+				"--out",
+				outPath,
+			],
+			{ projectRoot, env: {}, stdout, stderr },
+		);
+
+		expect(exitCode).toBe(0);
+		const receipt = JSON.parse(stdout.text);
+		expect(receipt.out).toBe(outPath);
+		expect(receipt.bytes).toBeGreaterThan(0);
+		// The receipt is a pointer, not the packet.
+		expect(stdout.text).not.toContain("payment timeout exact evidence");
+		const written = await Bun.file(outPath).text();
+		expect(receipt.bytes).toBe(new TextEncoder().encode(written).length);
+		expect(JSON.parse(written)).toMatchObject({
+			command: "context",
+			success: true,
+		});
+		expect(stderr.text).toBe("");
+	});
+
+	test("keeps a failed retrieval on the stream instead of writing --out", async () => {
+		const projectRoot = await projectWithConfig();
+		const outPath = join(projectRoot, "unwritten.json");
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await runCli(
+			["thread", "not-a-post-id", "--local", "--agent", "--out", outPath],
+			{ projectRoot, env: {}, stdout, stderr },
+		);
+
+		expect(exitCode).not.toBe(0);
+		expect(JSON.parse(stdout.text).success).toBe(false);
+		expect(await Bun.file(outPath).exists()).toBe(false);
+	});
+
 	test("emits one bounded context JSON document and compact human search output", async () => {
 		const projectRoot = await projectWithConfig();
 		const store = await MattermostStore.open(

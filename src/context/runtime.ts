@@ -885,6 +885,7 @@ export async function getMattermostContext(
 		const evidence = buildEvidence({
 			searchCoverageComplete,
 			selectedThreadsComplete,
+			selectionBudgetBounded: hydrationBudgetSpent,
 			freshnessMode: input.local ? "local" : input.fresh ? "forced" : "network",
 			freshness,
 			searchedConversations,

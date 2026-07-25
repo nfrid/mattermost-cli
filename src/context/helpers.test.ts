@@ -18,21 +18,21 @@ function post(id: string, message: string): EvidencePost {
 }
 
 describe("scoreSurroundRelevance", () => {
-	test("returns unknown when subject ticket is missing", () => {
+	test("returns possible when subject ticket is missing", () => {
 		expect(
 			scoreSurroundRelevance(
 				[post("s1", "payment timeout discussion")],
 				undefined,
 				"BTB-100 timeout",
 			),
-		).toBe("unknown");
+		).toBe("possible");
 		expect(
 			scoreSurroundRelevance(
 				[post("s1", "payment timeout discussion")],
 				"  ",
 				"BTB-100 timeout",
 			),
-		).toBe("unknown");
+		).toBe("possible");
 	});
 
 	test("returns low when surround lacks subject mention and root overlap", () => {
@@ -45,24 +45,24 @@ describe("scoreSurroundRelevance", () => {
 		).toBe("low");
 	});
 
-	test("returns unknown when a surround post mentions the subject ticket", () => {
+	test("returns possible when a surround post mentions the subject ticket", () => {
 		expect(
 			scoreSurroundRelevance(
 				[post("s1", "earlier we saw BTB-100 failing")],
 				"BTB-100",
 				"BTB-100 payment timeout",
 			),
-		).toBe("unknown");
+		).toBe("possible");
 	});
 
-	test("returns unknown on non-trivial token overlap beyond the ticket key", () => {
+	test("returns possible on non-trivial token overlap beyond the ticket key", () => {
 		expect(
 			scoreSurroundRelevance(
 				[post("s1", "checkout payment timeout started yesterday")],
 				"BTB-100",
 				"BTB-100 payment timeout in checkout",
 			),
-		).toBe("unknown");
+		).toBe("possible");
 	});
 
 	test("ignores ticket-key-only overlap when deciding low", () => {
@@ -77,7 +77,21 @@ describe("scoreSurroundRelevance", () => {
 
 	test("still labels relevance without dropping surround posts", () => {
 		const surround = [post("s1", "unrelated standup notes about lunch")];
-		expect(scoreSurroundRelevance(surround, "BTB-100", "BTB-100")).toBe("low");
+		expect(
+			scoreSurroundRelevance(surround, "BTB-100", "BTB-100 checkout retries"),
+		).toBe("low");
 		expect(surround).toHaveLength(1);
+	});
+
+	test("reports possible when the root carries no comparable vocabulary", () => {
+		// A bare ticket link says nothing about what the surround is about, so
+		// `low` would be an unearned verdict.
+		expect(
+			scoreSurroundRelevance(
+				[post("s1", "unrelated standup notes about lunch")],
+				"BTB-100",
+				"завела https://tracker.example.test/BTB-100",
+			),
+		).toBe("possible");
 	});
 });

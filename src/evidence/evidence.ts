@@ -17,6 +17,13 @@ import { isMediaOnlyPost, largestTimelineSkip } from "./packing.ts";
 export type EvidenceAdequacy = "usable" | "thin" | "insufficient";
 export type EvidenceCurrency = "current" | "possibly_stale" | "local_only";
 export type EvidenceThreadCompleteness = "complete" | "truncated";
+/**
+ * Whether every ranked candidate was actually judged. `budget_bounded` means
+ * candidates were left unexamined because thread or character room ran out, or
+ * because the per-request hydration ceiling was reached — independent of
+ * `selectedThreads`, which only describes posts inside the selected threads.
+ */
+export type EvidenceSelectionCompleteness = "complete" | "budget_bounded";
 export type EvidenceIndexHistory = "full" | "cutoff_bounded";
 export type EvidenceDiscoveryCurrency =
 	| "current"
@@ -28,6 +35,7 @@ export type EvidenceNextAction =
 	| "thread_around"
 	| "sync"
 	| "inspect_dropped"
+	| "review_candidates"
 	| "fresh_or_remote"
 	| "read_attachments";
 
@@ -58,6 +66,8 @@ export interface EvidenceStatus {
 	currency: EvidenceCurrency;
 	completeness: {
 		selectedThreads: EvidenceThreadCompleteness;
+		/** Additive since schema version 3; absent in older packets. */
+		selection?: EvidenceSelectionCompleteness;
 		indexHistory: EvidenceIndexHistory;
 		/** Additive since schema version 2; absent in older packets. */
 		discovery?: EvidenceDiscoveryCurrency;
@@ -103,6 +113,8 @@ export interface EvidenceHistory {
 	additional?: number;
 }
 
+/** Below this, unexamined candidates are ranking tail, not a visible gap. */
+const SELECTION_REVIEW_MIN_DROPPED_BY_BUDGET = 3;
 const RECOMMEND_FULL_MIN_OMITTED_RATIO = 0.25;
 const RECOMMEND_FULL_MIN_LARGEST_SKIP = 5;
 
@@ -110,6 +122,8 @@ const RECOMMEND_FULL_MIN_LARGEST_SKIP = 5;
 export function buildEvidence(input: {
 	searchCoverageComplete: boolean;
 	selectedThreadsComplete: boolean;
+	/** Selection stopped before judging every candidate (room or hydration). */
+	selectionBudgetBounded?: boolean;
 	freshnessMode: ContextResult["freshnessMode"];
 	freshness: readonly FreshnessEvidence[];
 	searchedConversations: readonly { id: string }[];
@@ -187,6 +201,10 @@ export function buildEvidence(input: {
 		!input.selectedThreadsComplete || recommendFullThreadIds.length > 0
 			? "truncated"
 			: "complete";
+	const selectionCompleteness: EvidenceSelectionCompleteness =
+		input.selectionBudgetBounded || input.selection.droppedByBudget > 0
+			? "budget_bounded"
+			: "complete";
 	const indexHistory: EvidenceIndexHistory =
 		cutoffBoundedConversations > 0 ? "cutoff_bounded" : "full";
 
@@ -207,6 +225,8 @@ export function buildEvidence(input: {
 		adequacy,
 		currency,
 		selectedThreadsComplete: selectedThreads === "complete",
+		selectionCompleteness,
+		selectionCounts: input.selection,
 		selectedMessages,
 		droppedCandidates: input.selection.droppedCandidates,
 		freshness: input.freshness,
@@ -223,6 +243,7 @@ export function buildEvidence(input: {
 		currency,
 		completeness: {
 			selectedThreads,
+			selection: selectionCompleteness,
 			indexHistory,
 			discovery,
 		},
@@ -403,6 +424,8 @@ function collectNextActions(input: {
 	adequacy: EvidenceAdequacy;
 	currency: EvidenceCurrency;
 	selectedThreadsComplete: boolean;
+	selectionCompleteness: EvidenceSelectionCompleteness;
+	selectionCounts: SelectionEvidence;
 	selectedMessages: readonly string[];
 	droppedCandidates: readonly DroppedCandidate[];
 	freshness: readonly FreshnessEvidence[];
@@ -478,6 +501,25 @@ function collectNextActions(input: {
 						command: ["mm", "thread", droppedThreadId, "--agent"],
 						threadId: droppedThreadId,
 					}
+				: {}),
+		});
+	}
+	if (
+		input.selectionCompleteness === "budget_bounded" &&
+		input.selectionCounts.droppedByBudget >=
+			SELECTION_REVIEW_MIN_DROPPED_BY_BUDGET &&
+		input.selectionCounts.droppedByBudget >
+			input.selectionCounts.returnedThreads
+	) {
+		// The packet cannot speak for candidates it never examined; `search` lists
+		// them without spending this request's packing budget.
+		next.push({
+			action: "review_candidates",
+			reason: "selection_budget_bounded",
+			priority: "optional",
+			impact: "may_add_dropped_pointer",
+			...(input.subject
+				? { command: ["mm", "search", input.subject, "--agent"] }
 				: {}),
 		});
 	}

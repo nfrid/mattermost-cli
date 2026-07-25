@@ -547,13 +547,13 @@ const relatedTicketPointerSchema = z.object({
 	excerpt: z.string().optional(),
 	sourceThreadId: z.string().optional(),
 	alreadyInPacket: z.literal(true).optional(),
-	hydrated: z.literal(false),
 });
 const evidenceStatusSchema = z.object({
 	adequacy: z.enum(["usable", "thin", "insufficient"]),
 	currency: z.enum(["current", "possibly_stale", "local_only"]),
 	completeness: z.object({
 		selectedThreads: z.enum(["complete", "truncated"]),
+		selection: z.enum(["complete", "budget_bounded"]).optional(),
 		indexHistory: z.enum(["full", "cutoff_bounded"]),
 		discovery: z.enum(["current", "possibly_stale", "local_only"]).optional(),
 	}),
@@ -564,6 +564,7 @@ const evidenceStatusSchema = z.object({
 				"thread_around",
 				"sync",
 				"inspect_dropped",
+				"review_candidates",
 				"fresh_or_remote",
 				"read_attachments",
 			]),

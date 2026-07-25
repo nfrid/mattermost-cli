@@ -299,6 +299,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
         "discovery": "local_only",
         "indexHistory": "full",
         "selectedThreads": "complete",
+        "selection": "complete",
       },
       "currency": "local_only",
       "next": [],

@@ -68,11 +68,16 @@ export function resolveConversationSurround(
 	return localEvidence(store, preceding);
 }
 
+/** Below this, a thread root has no topic to compare surround against. */
+const MIN_COMPARABLE_ROOT_TOKENS = 2;
+
+/** URLs are addresses, not vocabulary: they must not create or deny overlap. */
+const URL_PATTERN = /https?:\/\/[^\s<>()]+/giu;
+
 /**
- * Labels DM surround for agent skip guidance. Does not drop posts — callers
- * still attach surround and only surface the label.
+ * Labels DM surround. Callers decide whether to attach it.
  *
- * - `unknown` when the subject ticket is missing, or surround looks related
+ * - `possible` when the subject ticket is missing, or surround looks related
  *   (ticket mention or non-trivial token overlap with the thread root).
  * - `low` when no surround post mentions the subject and there is no shared
  *   non-trivial token overlap with the thread root beyond the ticket key.
@@ -83,7 +88,7 @@ export function scoreSurroundRelevance(
 	threadRootMessage = "",
 ): SurroundRelevance {
 	const subject = subjectTicket?.trim();
-	if (!subject) return "unknown";
+	if (!subject) return "possible";
 
 	const subjectKey = subject.toUpperCase();
 	if (
@@ -91,16 +96,19 @@ export function scoreSurroundRelevance(
 			extractTicketKeys(post.message).includes(subjectKey),
 		)
 	) {
-		return "unknown";
+		return "possible";
 	}
 
 	const rootTokens = nontrivialOverlapTokens(threadRootMessage, subjectKey);
-	if (!rootTokens.size) return "low";
+	// A link-only or administrative root ("завела <ticket url>") carries no
+	// vocabulary to compare against, so reporting `low` would be an unearned
+	// verdict about surround this scorer cannot actually judge.
+	if (rootTokens.size < MIN_COMPARABLE_ROOT_TOKENS) return "possible";
 
 	for (const post of surroundPosts) {
 		const surroundTokens = nontrivialOverlapTokens(post.message, subjectKey);
 		for (const token of surroundTokens) {
-			if (rootTokens.has(token)) return "unknown";
+			if (rootTokens.has(token)) return "possible";
 		}
 	}
 	return "low";
@@ -111,7 +119,8 @@ function nontrivialOverlapTokens(
 	subjectTicketKey: string,
 ): Set<string> {
 	const excluded = normalizeSearchText(subjectTicketKey);
-	const tokens = message.match(/[\p{L}\p{N}_-]+/gu) ?? [];
+	const tokens =
+		message.replace(URL_PATTERN, " ").match(/[\p{L}\p{N}_-]+/gu) ?? [];
 	return new Set(
 		tokens
 			.map(normalizeSearchText)

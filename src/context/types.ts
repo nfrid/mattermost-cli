@@ -207,7 +207,6 @@ export interface RelatedTicketPointer {
 	 * Omit when the pointer resolves to an out-of-packet related thread.
 	 */
 	alreadyInPacket?: boolean;
-	hydrated: false;
 }
 
 /**
@@ -228,8 +227,13 @@ export interface BackgroundThread {
 	excerpts: string[];
 }
 
-/** Agent skip guidance for DM conversation surround posts. */
-export type SurroundRelevance = "low" | "unknown";
+/**
+ * Agent guidance for DM conversation surround posts. `low` means nothing links
+ * the surround to the subject; `possible` means a link could not be ruled out
+ * (subject mention or non-trivial token overlap with the thread root). There is
+ * no positive-relevance verdict: the scorer only rules relevance out.
+ */
+export type SurroundRelevance = "low" | "possible";
 
 export interface ContextResult {
 	subject: MattermostSubject;
