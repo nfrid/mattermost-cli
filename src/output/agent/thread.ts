@@ -44,6 +44,7 @@ import type {
 	AgentAnchor,
 	AgentAnchorKind,
 	AgentBriefDecision,
+	AgentBriefOpenQuestion,
 	AgentCluster,
 	AgentMessageGroup,
 	AgentTechnicalEntity,
@@ -177,6 +178,7 @@ export function projectPackedThread(
 		subjectTicket: options.subjectTicket,
 		reasons: options.reasons,
 		presentation,
+		omittedPosts: thread.omittedPosts,
 	});
 	const brief = projectThreadBrief(domainBrief);
 	const filesPresent = thread.posts.some((post) => post.attachments.length > 0)
@@ -375,6 +377,7 @@ function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 	if (
 		!brief.purposeHints.length &&
 		!brief.decisionPostIds.length &&
+		!brief.openQuestions?.length &&
 		!brief.outcomeWindow
 	) {
 		return undefined;
@@ -386,12 +389,33 @@ function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 			at: isoTimestamp(decision.createAt),
 			text: decision.excerpt,
 			...(decision.ackPostId ? { ackPostId: decision.ackPostId } : {}),
+			...(decision.refinements?.length
+				? {
+						refinements: decision.refinements.map((refinement) => ({
+							id: refinement.postId,
+							author: refinement.author,
+							at: isoTimestamp(refinement.createAt),
+							text: refinement.excerpt,
+						})),
+					}
+				: {}),
+		}),
+	);
+	const openQuestions = (brief.openQuestions ?? []).map(
+		(question): AgentBriefOpenQuestion => ({
+			id: question.postId,
+			author: question.author,
+			at: isoTimestamp(question.createAt),
+			text: question.excerpt,
+			repliesAfter: question.repliesAfter,
+			...(question.isThreadTail ? { isThreadTail: true as const } : {}),
 		}),
 	);
 	return {
 		purposeHints: brief.purposeHints,
 		decisionPostIds: brief.decisionPostIds,
 		...(decisions.length ? { decisions } : {}),
+		...(openQuestions.length ? { openQuestions } : {}),
 		...(brief.outcomeWindow ? { outcomeWindow: brief.outcomeWindow } : {}),
 	};
 }

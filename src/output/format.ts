@@ -314,6 +314,7 @@ function formatContextThread(
 	const brief = buildThreadBrief(thread.posts, {
 		subjectTicket: options.subjectTicket,
 		reasons: thread.reasons,
+		omittedPosts: thread.omittedPosts,
 	});
 	return [
 		`\n${joinParts([
@@ -353,6 +354,7 @@ function formatContextThread(
 		// In brief mode the transcript *is* the decision layer and marks its own
 		// candidates inline; repeating them above would double the packet's core.
 		...(options.brief ? [] : formatDecisions(brief)),
+		...(options.brief ? [] : formatOpenQuestions(brief)),
 		...(options.brief
 			? formatBriefTimeline(thread.timeline, thread.posts, brief)
 			: formatTimeline(thread.timeline)),
@@ -526,6 +528,7 @@ function formatThread(data: ThreadResult): string {
 	const brief = buildThreadBrief(data.thread.posts, {
 		subjectTicket:
 			data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+		omittedPosts: data.thread.omittedPosts,
 	});
 	return [
 		joinParts([
@@ -561,6 +564,7 @@ function formatThread(data: ThreadResult): string {
 				]
 			: []),
 		...(data.brief ? [] : formatDecisions(brief)),
+		...(data.brief ? [] : formatOpenQuestions(brief)),
 		...(data.brief
 			? formatBriefTimeline(data.thread.timeline, data.thread.posts, brief)
 			: formatTimeline(data.thread.timeline)),
@@ -655,13 +659,35 @@ function formatPost(post: PackedPost): string[] {
 	];
 }
 
+/**
+ * Inlined open questions so the text view answers "what is still hanging",
+ * symmetric to the decision block.
+ */
+function formatOpenQuestions(brief: ThreadBrief): string[] {
+	const questions = brief.openQuestions ?? [];
+	if (!questions.length) return [];
+	return [
+		`${styles.label("Open questions:")} ${styles.hint("mechanical cues; the packet contains no answer, which is not proof there is none")}`,
+		...questions.map((question) =>
+			joinParts([
+				styles.timestamp(`[${isoTimestamp(question.createAt)}]`),
+				styles.username(`@${question.author}`),
+				question.excerpt,
+				question.isThreadTail
+					? styles.warning("thread ends here")
+					: styles.hint(`${question.repliesAfter} later message(s)`),
+			]),
+		),
+	];
+}
+
 /** Inlined decision candidates so the text view answers "what was decided". */
 function formatDecisions(brief: ThreadBrief): string[] {
 	const decisions = brief.decisions ?? [];
 	if (!decisions.length) return [];
 	return [
 		`${styles.label("Decision candidates:")} ${styles.hint("mechanical cues, not verified outcomes")}`,
-		...decisions.map((decision) =>
+		...decisions.flatMap((decision) => [
 			joinParts([
 				styles.timestamp(`[${isoTimestamp(decision.createAt)}]`),
 				styles.username(`@${decision.author}`),
@@ -670,7 +696,14 @@ function formatDecisions(brief: ThreadBrief): string[] {
 					? [styles.hint(`acked by ${decision.ackPostId}`)]
 					: []),
 			]),
-		),
+			...(decision.refinements ?? []).map((refinement) =>
+				joinParts([
+					`  ${styles.warning("scope:")} ${styles.timestamp(`[${isoTimestamp(refinement.createAt)}]`)}`,
+					styles.username(`@${refinement.author}`),
+					refinement.excerpt,
+				]),
+			),
+		]),
 	];
 }
 

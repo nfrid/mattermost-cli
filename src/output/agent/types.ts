@@ -80,11 +80,41 @@ export interface AgentBriefDecision {
 	text: string;
 	/** Short acknowledgement from a different author, when paired. */
 	ackPostId?: string;
+	/**
+	 * Later posts narrowing what the decision covers. Read them before sizing an
+	 * implementation: the decision text alone is routinely wider than the scope
+	 * that was settled a few messages later.
+	 */
+	refinements?: AgentBriefRefinement[];
+}
+
+export interface AgentBriefRefinement {
+	id: string;
+	author: string;
+	at: string;
+	text: string;
+}
+
+/**
+ * Unresolved-looking question, symmetric to {@link AgentBriefDecision}.
+ * `repliesAfter: 0` means nobody spoke after it inside this packet, and
+ * `isThreadTail` means the thread stopped there — neither verifies that the
+ * question is still open, only that the packet contains no answer.
+ */
+export interface AgentBriefOpenQuestion {
+	id: string;
+	author: string;
+	at: string;
+	text: string;
+	repliesAfter: number;
+	isThreadTail?: true;
 }
 
 /** Lean brief with agent-facing timestamps and inlined decision text. */
-export interface AgentThreadBrief extends Omit<ThreadBrief, "decisions"> {
+export interface AgentThreadBrief
+	extends Omit<ThreadBrief, "decisions" | "openQuestions"> {
 	decisions?: AgentBriefDecision[];
+	openQuestions?: AgentBriefOpenQuestion[];
 }
 
 export interface AgentTechnicalEntity {

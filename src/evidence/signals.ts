@@ -105,6 +105,39 @@ export interface BriefDecision {
 	confidence: number;
 	/** Short acknowledgement from a different author, when paired. */
 	ackPostId?: string;
+	/**
+	 * Later packed posts that narrow the decision's scope ("нет, это только про
+	 * координацию"). Mechanical cue matches, not a re-negotiated outcome — but a
+	 * decision read without them is routinely implemented wider than agreed.
+	 */
+	refinements?: BriefScopeRefinement[];
+}
+
+/** One scope-narrowing follow-up to a decision candidate. */
+export interface BriefScopeRefinement {
+	postId: string;
+	author: string;
+	createAt: number;
+	excerpt: string;
+	cues: string[];
+}
+
+/**
+ * Inlined `open_question_candidate` pointer, symmetric to {@link BriefDecision}:
+ * "what is still hanging" deserves the same first-read treatment as
+ * "what was decided".
+ */
+export interface BriefOpenQuestion {
+	postId: string;
+	author: string;
+	createAt: number;
+	excerpt: string;
+	cues: string[];
+	confidence: number;
+	/** Packed posts by other authors after it; 0 means nobody answered here. */
+	repliesAfter: number;
+	/** The question is the thread's last packed post. */
+	isThreadTail?: true;
 }
 
 /**
@@ -120,6 +153,11 @@ export interface ThreadBrief {
 	 * Emitted only when non-empty, so projections may drop it.
 	 */
 	decisions?: BriefDecision[];
+	/**
+	 * Up to {@link MAX_OPEN_QUESTIONS} unresolved-looking questions, inlined.
+	 * Emitted only when non-empty.
+	 */
+	openQuestions?: BriefOpenQuestion[];
 	outcomeWindow?: OutcomeWindow;
 }
 
@@ -141,6 +179,11 @@ export interface BuildThreadBriefOptions extends BuildThreadSignalsOptions {
 	maxPurposeHints?: number;
 	/** Hard cap on decision post ids (default {@link MAX_DECISION_POST_IDS}). */
 	maxDecisionPostIds?: number;
+	/**
+	 * Posts packing left out. Non-zero suppresses `isThreadTail`: the last
+	 * *packed* post is not the last post of the thread.
+	 */
+	omittedPosts?: number;
 }
 
 /** Max advisory candidate spans per thread. */
@@ -160,6 +203,20 @@ export const MAX_PURPOSE_HINTS = 3;
 export const MAX_DECISION_POST_IDS = 5;
 /** Max evidence post ids per purpose hint (chronologically last). */
 export const MAX_HINT_EVIDENCE_POST_IDS = 5;
+/** Max inlined open questions in a lean brief. */
+export const MAX_OPEN_QUESTIONS = 3;
+/** Max scope refinements inlined per decision candidate. */
+export const MAX_REFINEMENTS_PER_DECISION = 2;
+/** Packed posts scanned after a decision for a scope refinement. */
+const REFINEMENT_LOOKAHEAD = 6;
+/**
+ * Minimum confidence for an inlined open question. Bare `?` (0.4) qualifies:
+ * unlike a decision, a question that turns out to be rhetorical costs one line,
+ * while a missed one is exactly how an unresolved fork gets implemented blind.
+ */
+const OPEN_QUESTION_INLINE_FLOOR = 0.4;
+/** Confidence floor for a question standing as the thread's last packed post. */
+const TAIL_QUESTION_CONFIDENCE = 0.55;
 /**
  * Minimum `decision_candidate` confidence to surface in lean brief
  * (matches the weakest {@link DECISION_CUES} weight).
@@ -291,6 +348,7 @@ const REJECTED_CUES: readonly CuePattern[] = [
 const OPEN_QUESTION_CUES: readonly CuePattern[] = [
 	{ cue: "?", weight: 0.4 },
 	{ cue: "не ясно", weight: 0.65 },
+	{ cue: "неясно", weight: 0.65 },
 	{ cue: "вопрос:", weight: 0.6 },
 	{ cue: "нужно уточнить", weight: 0.65 },
 	{ cue: "кто знает", weight: 0.55 },
@@ -298,6 +356,56 @@ const OPEN_QUESTION_CUES: readonly CuePattern[] = [
 	{ cue: "open question", weight: 0.7 },
 	{ cue: "unclear", weight: 0.55 },
 	{ cue: "tbd", exact: true, weight: 0.5 },
+	// Deferral and fork phrasing: the shape an unresolved architectural choice
+	// actually takes here ("надо будет с Аней обсудить", "capabilities или
+	// отдельный роут?"). Without these a design fork scores like a stray `?`.
+	// Pending-work phrasing. A bare infinitive (`обсудить`) is not enough: it
+	// fires on `успели всё обсудить`, which is the opposite of an open question.
+	{ cue: "надо будет", weight: 0.55 },
+	{ cue: "нужно будет", weight: 0.55 },
+	{ cue: "предстоит", weight: 0.55 },
+	{ cue: "надо обсудить", weight: 0.65 },
+	{ cue: "надо будет обсудить", weight: 0.65 },
+	{ cue: "нужно обсудить", weight: 0.65 },
+	{ cue: "надо решить", weight: 0.65 },
+	{ cue: "нужно решить", weight: 0.65 },
+	{ cue: "не решили", weight: 0.65 },
+	{ cue: "не определились", weight: 0.65 },
+	{ cue: "не договорились", weight: 0.6 },
+	{ cue: "как лучше", weight: 0.6 },
+	{ cue: "какой вариант", weight: 0.6 },
+	{ cue: "что выбрать", weight: 0.6 },
+	{ cue: "стоит ли", weight: 0.55 },
+	{ cue: "имеет ли смысл", weight: 0.55 },
+	{ cue: "нужно ли", weight: 0.55 },
+	{ cue: "непонятно", weight: 0.6 },
+	{ cue: "need to decide", weight: 0.65 },
+	{ cue: "still open", weight: 0.6 },
+	{ cue: "which one", weight: 0.55 },
+];
+
+/**
+ * Cues that narrow an already-taken decision ("нет, это только про
+ * координацию"). Matched only in packed posts that follow a decision candidate.
+ */
+const SCOPE_REFINEMENT_CUES: readonly CuePattern[] = [
+	// Deliberately narrow: generic discourse markers (`только в`, `точнее`) also
+	// open unrelated small talk, and a false "scope:" line reads as an
+	// authoritative narrowing of what was agreed.
+	{ cue: "только про", weight: 0.65 },
+	{ cue: "только для", weight: 0.65 },
+	{ cue: "не про", weight: 0.55 },
+	{ cue: "не для", weight: 0.5 },
+	{ cue: "имеется в виду", weight: 0.65 },
+	{ cue: "то бишь", weight: 0.55 },
+	{ cue: "речь про", weight: 0.6 },
+	{ cue: "речь идёт", weight: 0.6 },
+	{ cue: "уточню", weight: 0.6 },
+	{ cue: "уточнение", weight: 0.6 },
+	{ cue: "only for", weight: 0.6 },
+	{ cue: "only about", weight: 0.6 },
+	{ cue: "to be clear", weight: 0.6 },
+	{ cue: "i mean", weight: 0.55 },
 ];
 
 const ROLE_HINT_CUES: Readonly<Record<RoleHintLabel, readonly CuePattern[]>> = {
@@ -436,6 +544,20 @@ export function buildThreadBrief(
 		cappedDecisionIds.has(span.postId),
 	);
 
+	const chronological = chronologicalPosts(posts);
+	const openQuestions = buildOpenQuestions(
+		chronological,
+		signals.candidateSpans,
+		{
+			// A post already inlined as a decision must not reappear as an open
+			// question: the same excerpt framed both ways contradicts itself.
+			excludePostIds: cappedDecisionIds,
+			// A truncated packet has no standing to say which post the thread ended
+			// on — the same rule the `tail` field follows.
+			packingComplete: (options.omittedPosts ?? 0) === 0,
+		},
+	);
+
 	const purposeHints = collectPurposeHints(posts, signals, {
 		reasons: options.reasons,
 		presentation: options.presentation,
@@ -443,16 +565,92 @@ export function buildThreadBrief(
 		hasDecision: decisionPostIds.length > 0,
 		decisionPostIds,
 		decisionSpans: cappedDecisionSpans,
+		openQuestions,
 	}).slice(0, maxPurpose);
 
-	const decisions = buildBriefDecisions(posts, cappedDecisionSpans);
+	const decisions = buildBriefDecisions(
+		chronological,
+		cappedDecisionSpans,
+		options.excerptLimit ?? POINTER_EXCERPT_LIMIT,
+	);
 
 	return {
 		purposeHints,
 		decisionPostIds,
 		...(decisions.length ? { decisions } : {}),
+		...(openQuestions.length ? { openQuestions } : {}),
 		...(signals.outcomeWindow ? { outcomeWindow: signals.outcomeWindow } : {}),
 	};
+}
+
+function chronologicalPosts(
+	posts: readonly EvidencePost[],
+): readonly EvidencePost[] {
+	return [...posts].sort(
+		(left, right) =>
+			left.createAt - right.createAt || left.id.localeCompare(right.id),
+	);
+}
+
+/**
+ * Inline the questions a reader would otherwise have to find by tailing the
+ * transcript. `repliesAfter` and `isThreadTail` stay mechanical: they describe
+ * position, never whether anyone actually answered.
+ */
+function buildOpenQuestions(
+	chronological: readonly EvidencePost[],
+	spans: readonly CandidateSpan[],
+	options: {
+		excludePostIds: ReadonlySet<string>;
+		packingComplete: boolean;
+	},
+): BriefOpenQuestion[] {
+	const byId = new Map(chronological.map((post) => [post.id, post]));
+	const live = chronological.filter(
+		(post) => !post.deleteAt && post.message.trim(),
+	);
+	const lastId = options.packingComplete
+		? live[live.length - 1]?.id
+		: undefined;
+	const questions: BriefOpenQuestion[] = [];
+	const seen = new Set<string>();
+	for (const span of spans) {
+		if (span.kind !== "open_question_candidate") continue;
+		if (span.confidence < OPEN_QUESTION_INLINE_FLOOR) continue;
+		if (options.excludePostIds.has(span.postId)) continue;
+		if (seen.has(span.postId)) continue;
+		const post = byId.get(span.postId);
+		if (!post) continue;
+		seen.add(span.postId);
+		const index = live.findIndex((candidate) => candidate.id === post.id);
+		const repliesAfter =
+			index < 0
+				? 0
+				: live.slice(index + 1).filter((later) => later.userId !== post.userId)
+						.length;
+		questions.push({
+			postId: post.id,
+			author: post.authorUsername,
+			createAt: post.createAt,
+			excerpt: span.excerpt,
+			cues: [...span.cues],
+			confidence: span.confidence,
+			repliesAfter,
+			...(post.id === lastId ? { isThreadTail: true as const } : {}),
+		});
+	}
+	// Dangling questions first, then the strongest cue; a question nobody
+	// answered inside the packet is the one worth carrying.
+	return questions
+		.sort(
+			(left, right) =>
+				Number(right.isThreadTail ?? false) -
+					Number(left.isThreadTail ?? false) ||
+				left.repliesAfter - right.repliesAfter ||
+				right.confidence - left.confidence ||
+				right.createAt - left.createAt,
+		)
+		.slice(0, MAX_OPEN_QUESTIONS);
 }
 
 /**
@@ -461,14 +659,22 @@ export function buildThreadBrief(
  * output layer's concern.
  */
 function buildBriefDecisions(
-	posts: readonly EvidencePost[],
+	chronological: readonly EvidencePost[],
 	cappedDecisionSpans: readonly CandidateSpan[],
+	excerptLimit: number,
 ): BriefDecision[] {
-	const byId = new Map(posts.map((post) => [post.id, post]));
+	const byId = new Map(chronological.map((post) => [post.id, post]));
+	const decisionIds = new Set(cappedDecisionSpans.map(({ postId }) => postId));
 	const decisions: BriefDecision[] = [];
 	for (const span of cappedDecisionSpans) {
 		const post = byId.get(span.postId);
 		if (!post) continue;
+		const refinements = collectScopeRefinements(
+			chronological,
+			post,
+			decisionIds,
+			excerptLimit,
+		);
 		decisions.push({
 			postId: span.postId,
 			author: post.authorUsername,
@@ -477,9 +683,44 @@ function buildBriefDecisions(
 			cues: [...span.cues],
 			confidence: span.confidence,
 			...(span.ackPostId ? { ackPostId: span.ackPostId } : {}),
+			...(refinements.length ? { refinements } : {}),
 		});
 	}
 	return decisions;
+}
+
+/**
+ * Packed posts shortly after a decision that narrow its scope. Bounded by
+ * {@link REFINEMENT_LOOKAHEAD} and stopped by the next decision candidate, so a
+ * refinement is never attributed across two separate decisions.
+ */
+function collectScopeRefinements(
+	chronological: readonly EvidencePost[],
+	decision: EvidencePost,
+	decisionIds: ReadonlySet<string>,
+	excerptLimit: number,
+): BriefScopeRefinement[] {
+	const start = chronological.findIndex((post) => post.id === decision.id);
+	if (start < 0) return [];
+	const refinements: BriefScopeRefinement[] = [];
+	let scanned = 0;
+	for (const post of chronological.slice(start + 1)) {
+		scanned += 1;
+		if (scanned > REFINEMENT_LOOKAHEAD) break;
+		if (post.deleteAt || !post.message.trim()) continue;
+		if (decisionIds.has(post.id)) break;
+		const matched = matchCues(post.message, SCOPE_REFINEMENT_CUES);
+		if (!matched.cues.length) continue;
+		refinements.push({
+			postId: post.id,
+			author: post.authorUsername,
+			createAt: post.createAt,
+			excerpt: truncateExcerpt(post.message, excerptLimit),
+			cues: matched.cues,
+		});
+		if (refinements.length >= MAX_REFINEMENTS_PER_DECISION) break;
+	}
+	return refinements;
 }
 
 /**
@@ -492,7 +733,10 @@ function buildBriefDecisions(
  * an empty thread.
  */
 export function briefRetainedPostIds(
-	brief: Pick<ThreadBrief, "decisionPostIds" | "decisions" | "outcomeWindow">,
+	brief: Pick<
+		ThreadBrief,
+		"decisionPostIds" | "decisions" | "openQuestions" | "outcomeWindow"
+	>,
 	posts: readonly EvidencePost[],
 	anchorPostId?: string,
 ): Set<string> {
@@ -503,7 +747,14 @@ export function briefRetainedPostIds(
 	for (const decision of brief.decisions ?? []) {
 		retained.add(decision.postId);
 		if (decision.ackPostId) retained.add(decision.ackPostId);
+		// A decision shown without the post that narrowed it invites building
+		// wider than what was agreed.
+		for (const refinement of decision.refinements ?? []) {
+			retained.add(refinement.postId);
+		}
 	}
+	for (const question of brief.openQuestions ?? [])
+		retained.add(question.postId);
 	if (anchorPostId) retained.add(anchorPostId);
 	if (!retained.size) {
 		let latest: EvidencePost | undefined;
@@ -526,6 +777,7 @@ function collectPurposeHints(
 		/** Already capped to {@link MAX_DECISION_POST_IDS}. */
 		decisionPostIds: readonly string[];
 		decisionSpans: readonly CandidateSpan[];
+		openQuestions: readonly BriefOpenQuestion[];
 	},
 ): PurposeHint[] {
 	const chronological = [...posts]
@@ -565,24 +817,33 @@ function collectPurposeHints(
 
 	// Questions are their own purpose: folding them into `debugging` labeled every
 	// thread containing a `?` as debugging.
-	const openQuestions = signals.candidateSpans.filter(
+	const questionSpans = signals.candidateSpans.filter(
 		(span) => span.kind === "open_question_candidate",
 	);
 	const questionPostIds = [
-		...new Set(openQuestions.map((span) => span.postId)),
+		...new Set(questionSpans.map((span) => span.postId)),
 	];
 	const strongestQuestion = Math.max(
 		0,
-		...openQuestions.map((span) => span.confidence),
+		...questionSpans.map((span) => span.confidence),
 	);
-	// Bare `?` alone is noise; require a real cue or a recurring pattern.
+	// A thread whose last packed post is a question stopped on that question.
+	// Without this, the single unresolved fork in an architecture thread scored
+	// like a stray `?` and the thread reported no purpose at all.
+	const tailQuestion = options.openQuestions.find(
+		(question) => question.isThreadTail,
+	);
+	// Bare `?` alone is noise; require a real cue, a recurring pattern, or a tail.
 	if (
 		strongestQuestion >= OPEN_QUESTION_CONFIDENCE_FLOOR ||
-		questionPostIds.length >= OPEN_QUESTION_MIN_POSTS
+		questionPostIds.length >= OPEN_QUESTION_MIN_POSTS ||
+		tailQuestion
 	) {
 		hints.push({
 			label: "open_question",
-			confidence: strongestQuestion,
+			confidence: tailQuestion
+				? Math.max(strongestQuestion, TAIL_QUESTION_CONFIDENCE)
+				: strongestQuestion,
 			evidencePostIds: capEvidence(questionPostIds),
 		});
 	}

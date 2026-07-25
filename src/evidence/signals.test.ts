@@ -716,6 +716,126 @@ describe("buildThreadBrief", () => {
 			"purposeHints",
 		]);
 	});
+
+	test("inlines open questions and reports how many messages followed", () => {
+		const posts = [
+			post("q1", "BTB-1 давайте решим: capabilities или отдельный роут?", 10),
+			post("q2", "я за отдельный роут", 20, { author: "bob" }),
+			post("q3", "надо будет с Аней обсудить", 30),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-1" });
+
+		const questions = brief.openQuestions ?? [];
+		expect(questions.length).toBeGreaterThan(0);
+		const tail = questions.find((question) => question.isThreadTail);
+		expect(tail?.postId).toBe("q3");
+		expect(tail?.repliesAfter).toBe(0);
+		const first = questions.find((question) => question.postId === "q1");
+		expect(first?.repliesAfter).toBe(1);
+		assertBriefCitationsWithin(brief, posts);
+	});
+
+	test("reports open_question when the thread stops on a question", () => {
+		const posts = [
+			post("t1", "BTB-2 смотрим отчёт", 10),
+			post("t2", "а по координаторам что делаем?", 20, { author: "bob" }),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-2" });
+
+		const hint = brief.purposeHints.find(
+			({ label }) => label === "open_question",
+		);
+		// A bare `?` scores 0.4 and used to leave the thread with no purpose at all.
+		expect(hint?.confidence).toBeGreaterThanOrEqual(0.55);
+	});
+
+	test("attaches scope refinements that narrow a decision", () => {
+		const posts = [
+			post("d0", "BTB-3 обсуждаем ограничения", 10),
+			post("d1", "решили: будем разрешать остальным роли", 20),
+			post("d2", "так кс не сможет проводить модерацию", 30, { author: "bob" }),
+			post("d3", "нет, это только про координацию", 40),
+			post("d4", "хорошо", 50, { author: "bob" }),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-3" });
+
+		const decision = brief.decisions?.find(({ postId }) => postId === "d1");
+		expect(decision?.refinements?.map(({ postId }) => postId)).toEqual(["d3"]);
+		expect(decision?.refinements?.[0]?.excerpt).toContain(
+			"только про координацию",
+		);
+	});
+
+	test("never frames the same post as both a decision and an open question", () => {
+		const posts = [
+			post("m1", "BTB-4 стартуем", 10),
+			post("m2", "решили: катим в прод, но надо решить детали с Аней", 20),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-4" });
+
+		expect(brief.decisionPostIds).toContain("m2");
+		expect(
+			brief.openQuestions?.map(({ postId }) => postId) ?? [],
+		).not.toContain("m2");
+	});
+
+	test("does not claim a thread tail when packing omitted posts", () => {
+		const posts = [
+			post("o1", "BTB-5 контекст", 10),
+			post("o2", "а что с координаторами?", 20, { author: "bob" }),
+		];
+		const complete = buildThreadBrief(posts, { subjectTicket: "BTB-5" });
+		const truncated = buildThreadBrief(posts, {
+			subjectTicket: "BTB-5",
+			omittedPosts: 4,
+		});
+
+		expect(complete.openQuestions?.[0]?.isThreadTail).toBe(true);
+		expect(truncated.openQuestions?.[0]?.isThreadTail).toBeUndefined();
+	});
+
+	test("does not read a finished discussion as an open question", () => {
+		const posts = [
+			post("f1", "BTB-6 созвон", 10),
+			post(
+				"f2",
+				"созвонились и успели всё обсудить, договорились по плану",
+				20,
+			),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-6" });
+
+		expect(brief.openQuestions ?? []).toEqual([]);
+	});
+
+	test("ignores generic discourse markers as scope refinements", () => {
+		const posts = [
+			post("g1", "решили: выпилю старый роут", 10),
+			post("g2", "кстати я в отпуске только в пятницу заканчиваю", 20, {
+				author: "bob",
+			}),
+			post("g3", "точнее, созвон в среду, а не в четверг", 30, {
+				author: "bob",
+			}),
+		];
+		const brief = buildThreadBrief(posts, {});
+
+		expect(brief.decisions?.[0]?.refinements).toBeUndefined();
+	});
+
+	test("never attributes a refinement across two decisions", () => {
+		const posts = [
+			post("r1", "решили: выпилю старый роут", 10),
+			post("r2", "решили: перепишу валидацию", 20),
+			post("r3", "то бишь только для координаторов", 30),
+		];
+		const brief = buildThreadBrief(posts, {});
+
+		const first = brief.decisions?.find(({ postId }) => postId === "r1");
+		const second = brief.decisions?.find(({ postId }) => postId === "r2");
+		expect(first?.refinements).toBeUndefined();
+		expect(second?.refinements?.map(({ postId }) => postId)).toEqual(["r3"]);
+	});
 });
 
 function assertCitationsWithin(
