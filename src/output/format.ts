@@ -195,6 +195,16 @@ function formatContext(data: ContextResult): string {
 							"threads",
 							styles.accent(data.evidence.completeness.selectedThreads),
 						),
+						...(data.evidence.completeness.selection
+							? [
+									formatField(
+										"selection",
+										data.evidence.completeness.selection === "complete"
+											? styles.accent("complete")
+											: styles.warning("budget_bounded"),
+									),
+								]
+							: []),
 						formatField(
 							"index",
 							styles.accent(data.evidence.completeness.indexHistory),
