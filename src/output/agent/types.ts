@@ -76,8 +76,15 @@ export interface AgentBriefDecision {
 	id: string;
 	author: string;
 	at: string;
-	/** Verbatim truncated excerpt from the packed post only. */
+	/** Verbatim excerpt from the packed post; bounded, never a summary. */
 	text: string;
+	/**
+	 * The post carries more text than `text` shows. The cut tail is where a
+	 * decision's conditions usually sit, so read post `id` before sizing anything
+	 * against this decision — in `posts[]` here, or via `mm thread` in the
+	 * projections that carry no transcript (`--navigate`).
+	 */
+	textTruncated?: true;
 	/** Short acknowledgement from a different author, when paired. */
 	ackPostId?: string;
 	/**
@@ -93,6 +100,8 @@ export interface AgentBriefRefinement {
 	author: string;
 	at: string;
 	text: string;
+	/** The post carries more text than `text` shows. */
+	textTruncated?: true;
 }
 
 /**
@@ -106,6 +115,8 @@ export interface AgentBriefOpenQuestion {
 	author: string;
 	at: string;
 	text: string;
+	/** The post carries more text than `text` shows. */
+	textTruncated?: true;
 	repliesAfter: number;
 	isThreadTail?: true;
 }

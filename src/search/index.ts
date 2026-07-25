@@ -20,6 +20,8 @@ export {
 } from "./fusion.ts";
 export { searchThreads } from "./lexical.ts";
 export {
+	DECISION_EXCERPT_LIMIT,
+	excerptWithTruncation,
 	POINTER_EXCERPT_LIMIT,
 	SEARCH_EXCERPT_LIMIT,
 	truncateExcerpt,

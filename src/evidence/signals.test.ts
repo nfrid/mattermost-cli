@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { POINTER_EXCERPT_LIMIT } from "../search/match-utils.ts";
+import {
+	DECISION_EXCERPT_LIMIT,
+	POINTER_EXCERPT_LIMIT,
+} from "../search/match-utils.ts";
 import type { EvidencePost } from "./packing.ts";
 import {
 	buildThreadBrief,
@@ -444,6 +447,97 @@ describe("buildThreadBrief", () => {
 		assertBriefCitationsWithin(brief, posts);
 	});
 
+	test("inlines the whole decision when it fits the decision budget", () => {
+		// The BTB-2080 failure: the condition that qualifies the decision sat past
+		// the pointer excerpt limit, so `brief` showed an unconditional decision.
+		const condition = `${"подробное обоснование ".repeat(10)}но только если у них нет активных смен`;
+		const posts = [
+			post("d1", `BTB-2080 решили: ${condition}`, 10),
+			post("d2", "ок", 20, { author: "bob" }),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-2080" });
+		const decision = brief.decisions?.[0];
+
+		expect(decision?.excerpt.length).toBeGreaterThan(POINTER_EXCERPT_LIMIT);
+		expect(decision?.excerpt).toContain("если у них нет активных смен");
+		expect(decision?.excerptTruncated).toBeUndefined();
+	});
+
+	test("flags a decision, refinement, and open question the budget did cut", () => {
+		const long = "очень длинное сообщение ".repeat(40);
+		const posts = [
+			post("d1", `BTB-2080 решили так: ${long}`, 10),
+			post("r1", `уточню: только про импорт ${long}`, 20, { author: "bob" }),
+			post("q1", `а что делать со старыми? ${long}`, 30, { author: "carol" }),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-2080" });
+		const decision = brief.decisions?.[0];
+
+		expect(decision?.excerptTruncated).toBe(true);
+		expect(decision?.excerpt.endsWith("…")).toBe(true);
+		expect(decision?.refinements?.[0]?.excerptTruncated).toBe(true);
+		expect(brief.openQuestions?.[0]?.excerptTruncated).toBe(true);
+	});
+
+	test("refinements and open questions get the decision budget, not the pointer one", () => {
+		// Sized between the two budgets: at the pointer limit these would be cut,
+		// at the decision limit they survive whole.
+		const medium = "у".repeat(300);
+		const posts = [
+			post("d1", "BTB-2080 решили выпилить", 10),
+			post("r1", `уточню: только про импорт ${medium}`, 20, { author: "bob" }),
+			post("q1", `а что со старыми? ${medium}`, 30, { author: "carol" }),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-2080" });
+
+		for (const text of [
+			brief.decisions?.[0]?.refinements?.[0]?.excerpt,
+			brief.openQuestions?.[0]?.excerpt,
+		]) {
+			expect([...(text ?? "")].length).toBeGreaterThan(POINTER_EXCERPT_LIMIT);
+			expect(text).toContain(medium);
+		}
+		expect(brief.decisions?.[0]?.refinements?.[0]?.excerptTruncated).toBe(
+			undefined,
+		);
+		expect(brief.openQuestions?.[0]?.excerptTruncated).toBe(undefined);
+	});
+
+	test("a message the author ended with an ellipsis is not reported as cut", () => {
+		const posts = [post("d1", "BTB-1 решили подождать…", 10)];
+		const decision = buildThreadBrief(posts, { subjectTicket: "BTB-1" })
+			.decisions?.[0];
+
+		expect(decision?.excerpt).toBe("BTB-1 решили подождать…");
+		expect(decision?.excerptTruncated).toBe(undefined);
+	});
+
+	test("candidate spans stay pointer-sized while the brief inlines more", () => {
+		// `signals` spans are navigation pointers; only the decision layer, which is
+		// read *instead of* the post, earns the larger budget.
+		const posts = [post("d1", `BTB-1 решили: ${"д".repeat(400)}`, 10)];
+		const spans = buildThreadSignals(posts, {
+			subjectTicket: "BTB-1",
+		}).candidateSpans;
+		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-1" });
+
+		expect([...(spans[0]?.excerpt ?? "")]).toHaveLength(POINTER_EXCERPT_LIMIT);
+		expect([...(brief.decisions?.[0]?.excerpt ?? "")].length).toBeGreaterThan(
+			POINTER_EXCERPT_LIMIT,
+		);
+	});
+
+	test("honours an explicit brief excerpt budget", () => {
+		const posts = [post("d1", `BTB-1 решили: ${"x".repeat(500)}`, 10)];
+		const brief = buildThreadBrief(posts, {
+			subjectTicket: "BTB-1",
+			briefExcerptLimit: 20,
+		});
+
+		expect([...(brief.decisions?.[0]?.excerpt ?? "")]).toHaveLength(20);
+		expect(brief.decisions?.[0]?.excerptTruncated).toBe(true);
+	});
+
 	test("катим surfaces as status not decision", () => {
 		const posts = [post("s1", "BTB-2080 катим в прод сегодня", 10)];
 		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-2080" });
@@ -693,7 +787,7 @@ describe("buildThreadBrief", () => {
 		);
 		expect(
 			cappedBrief.decisions?.every(
-				(item) => item.excerpt.length <= POINTER_EXCERPT_LIMIT,
+				(item) => [...item.excerpt].length <= DECISION_EXCERPT_LIMIT,
 			),
 		).toBe(true);
 	});

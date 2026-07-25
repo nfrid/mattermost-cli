@@ -392,6 +392,7 @@ function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 			author: decision.author,
 			at: isoTimestamp(decision.createAt),
 			text: decision.excerpt,
+			...(decision.excerptTruncated ? { textTruncated: true as const } : {}),
 			...(decision.ackPostId ? { ackPostId: decision.ackPostId } : {}),
 			...(decision.refinements?.length
 				? {
@@ -400,6 +401,9 @@ function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 							author: refinement.author,
 							at: isoTimestamp(refinement.createAt),
 							text: refinement.excerpt,
+							...(refinement.excerptTruncated
+								? { textTruncated: true as const }
+								: {}),
 						})),
 					}
 				: {}),
@@ -411,6 +415,7 @@ function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 			author: question.author,
 			at: isoTimestamp(question.createAt),
 			text: question.excerpt,
+			...(question.excerptTruncated ? { textTruncated: true as const } : {}),
 			repliesAfter: question.repliesAfter,
 			...(question.isThreadTail ? { isThreadTail: true as const } : {}),
 		}),

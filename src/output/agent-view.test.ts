@@ -538,6 +538,44 @@ describe("agent projection", () => {
 		store.close();
 	});
 
+	test("marks a decision whose text the packet had to cut", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture(), userFixture({ id: "user-2", username: "bob" })],
+			posts: [
+				postFixture({ id: ROOT, message: "BTB-2080 импорт", create_at: 10 }),
+				postFixture({
+					id: REPLY,
+					root_id: ROOT,
+					user_id: "user-2",
+					message: `решили выпилить логику ${"с очень длинным обоснованием ".repeat(30)}`,
+					create_at: 20,
+				}),
+			],
+		});
+		const context = await getMattermostContext(
+			{ subject: "BTB-2080", channels: ["payments"], local: true },
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		);
+		const decision = (
+			result as unknown as {
+				threads: Array<{
+					brief?: {
+						decisions?: Array<{ text: string; textTruncated?: true }>;
+					};
+				}>;
+			}
+		).threads[0]?.brief?.decisions?.[0];
+
+		expect(decision?.textTruncated).toBe(true);
+		expect(decision?.text.endsWith("…")).toBe(true);
+		store.close();
+	});
+
 	test("marks an untruncated thread that stops on a question", async () => {
 		const store = await MattermostStore.open(":memory:");
 		store.writePage({

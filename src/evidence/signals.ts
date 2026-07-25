@@ -1,5 +1,7 @@
 import { extractTicketKeys } from "../search/extract.ts";
 import {
+	DECISION_EXCERPT_LIMIT,
+	excerptWithTruncation,
 	POINTER_EXCERPT_LIMIT,
 	truncateExcerpt,
 } from "../search/match-utils.ts";
@@ -99,8 +101,15 @@ export interface BriefDecision {
 	author: string;
 	/** Epoch milliseconds; ISO projection belongs to the output layer. */
 	createAt: number;
-	/** Verbatim truncated excerpt from the packed post only. */
+	/**
+	 * Verbatim excerpt from the packed post, bounded by
+	 * {@link DECISION_EXCERPT_LIMIT}. When {@link BriefDecision.excerptTruncated}
+	 * is set the post carries more text — read the post before relying on the
+	 * decision's conditions.
+	 */
 	excerpt: string;
+	/** The excerpt is shorter than the post; the tail is not shown here. */
+	excerptTruncated?: true;
 	cues: string[];
 	confidence: number;
 	/** Short acknowledgement from a different author, when paired. */
@@ -119,6 +128,8 @@ export interface BriefScopeRefinement {
 	author: string;
 	createAt: number;
 	excerpt: string;
+	/** The excerpt is shorter than the post; the tail is not shown here. */
+	excerptTruncated?: true;
 	cues: string[];
 }
 
@@ -132,6 +143,8 @@ export interface BriefOpenQuestion {
 	author: string;
 	createAt: number;
 	excerpt: string;
+	/** The excerpt is shorter than the post; the tail is not shown here. */
+	excerptTruncated?: true;
 	cues: string[];
 	confidence: number;
 	/** Packed posts by other authors after it; 0 means nobody answered here. */
@@ -184,6 +197,12 @@ export interface BuildThreadBriefOptions extends BuildThreadSignalsOptions {
 	 * *packed* post is not the last post of the thread.
 	 */
 	omittedPosts?: number;
+	/**
+	 * Character budget for inlined decision-layer texts (default
+	 * {@link DECISION_EXCERPT_LIMIT}). Separate from `excerptLimit`, which sizes
+	 * pointer excerpts in `signals`.
+	 */
+	briefExcerptLimit?: number;
 }
 
 /** Max advisory candidate spans per thread. */
@@ -544,11 +563,13 @@ export function buildThreadBrief(
 		cappedDecisionIds.has(span.postId),
 	);
 
+	const briefExcerptLimit = options.briefExcerptLimit ?? DECISION_EXCERPT_LIMIT;
 	const chronological = chronologicalPosts(posts);
 	const openQuestions = buildOpenQuestions(
 		chronological,
 		signals.candidateSpans,
 		{
+			briefExcerptLimit,
 			// A post already inlined as a decision must not reappear as an open
 			// question: the same excerpt framed both ways contradicts itself.
 			excludePostIds: cappedDecisionIds,
@@ -571,7 +592,7 @@ export function buildThreadBrief(
 	const decisions = buildBriefDecisions(
 		chronological,
 		cappedDecisionSpans,
-		options.excerptLimit ?? POINTER_EXCERPT_LIMIT,
+		briefExcerptLimit,
 	);
 
 	return {
@@ -603,6 +624,7 @@ function buildOpenQuestions(
 	options: {
 		excludePostIds: ReadonlySet<string>;
 		packingComplete: boolean;
+		briefExcerptLimit: number;
 	},
 ): BriefOpenQuestion[] {
 	const byId = new Map(chronological.map((post) => [post.id, post]));
@@ -628,11 +650,16 @@ function buildOpenQuestions(
 				? 0
 				: live.slice(index + 1).filter((later) => later.userId !== post.userId)
 						.length;
+		const excerpt = excerptWithTruncation(
+			post.message,
+			options.briefExcerptLimit,
+		);
 		questions.push({
 			postId: post.id,
 			author: post.authorUsername,
 			createAt: post.createAt,
-			excerpt: span.excerpt,
+			excerpt: excerpt.text,
+			...(excerpt.truncated ? { excerptTruncated: true as const } : {}),
 			cues: [...span.cues],
 			confidence: span.confidence,
 			repliesAfter,
@@ -675,11 +702,13 @@ function buildBriefDecisions(
 			decisionIds,
 			excerptLimit,
 		);
+		const excerpt = excerptWithTruncation(post.message, excerptLimit);
 		decisions.push({
 			postId: span.postId,
 			author: post.authorUsername,
 			createAt: post.createAt,
-			excerpt: span.excerpt,
+			excerpt: excerpt.text,
+			...(excerpt.truncated ? { excerptTruncated: true as const } : {}),
 			cues: [...span.cues],
 			confidence: span.confidence,
 			...(span.ackPostId ? { ackPostId: span.ackPostId } : {}),
@@ -711,11 +740,13 @@ function collectScopeRefinements(
 		if (decisionIds.has(post.id)) break;
 		const matched = matchCues(post.message, SCOPE_REFINEMENT_CUES);
 		if (!matched.cues.length) continue;
+		const excerpt = excerptWithTruncation(post.message, excerptLimit);
 		refinements.push({
 			postId: post.id,
 			author: post.authorUsername,
 			createAt: post.createAt,
-			excerpt: truncateExcerpt(post.message, excerptLimit),
+			excerpt: excerpt.text,
+			...(excerpt.truncated ? { excerptTruncated: true as const } : {}),
 			cues: matched.cues,
 		});
 		if (refinements.length >= MAX_REFINEMENTS_PER_DECISION) break;

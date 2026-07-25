@@ -795,12 +795,21 @@ function formatOpenQuestions(brief: ThreadBrief): string[] {
 				styles.timestamp(`[${isoTimestamp(question.createAt)}]`),
 				styles.username(`@${question.author}`),
 				question.excerpt,
+				...(question.excerptTruncated ? [truncatedTextHint()] : []),
 				question.isThreadTail
 					? styles.warning("thread ends here")
 					: styles.hint(`${question.repliesAfter} later message(s)`),
 			]),
 		),
 	];
+}
+
+/**
+ * Marks a decision-layer text the packet had to cut. Without it the only sign
+ * of loss is a trailing `…`, which an author may equally have typed themselves.
+ */
+function truncatedTextHint(): string {
+	return styles.warning("[text truncated — read the post]");
 }
 
 /** Inlined decision candidates so the text view answers "what was decided". */
@@ -814,6 +823,7 @@ function formatDecisions(brief: ThreadBrief): string[] {
 				styles.timestamp(`[${isoTimestamp(decision.createAt)}]`),
 				styles.username(`@${decision.author}`),
 				decision.excerpt,
+				...(decision.excerptTruncated ? [truncatedTextHint()] : []),
 				...(decision.ackPostId
 					? [styles.hint(`acked by ${decision.ackPostId}`)]
 					: []),
@@ -823,6 +833,7 @@ function formatDecisions(brief: ThreadBrief): string[] {
 					`  ${styles.warning("scope:")} ${styles.timestamp(`[${isoTimestamp(refinement.createAt)}]`)}`,
 					styles.username(`@${refinement.author}`),
 					refinement.excerpt,
+					...(refinement.excerptTruncated ? [truncatedTextHint()] : []),
 				]),
 			),
 		]),
