@@ -472,7 +472,7 @@ export function packThread(
 }
 
 /** Build chronological timeline with skip markers for omitted spans. */
-export function buildTimeline(
+function buildTimeline(
 	chronological: readonly EvidencePost[],
 	selected: ReadonlySet<string>,
 	returned: readonly PackedPost[],
@@ -943,9 +943,7 @@ export function renderedPostUnits(post: EvidencePost): number {
 	].reduce((total, value) => total + [...value].length, 0);
 }
 
-export function renderedAttachmentUnits(
-	attachment: EvidenceAttachment,
-): number {
+function renderedAttachmentUnits(attachment: EvidenceAttachment): number {
 	return [...renderedAttachmentText(attachment)].length;
 }
 

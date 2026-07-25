@@ -1,7 +1,6 @@
 import { segmentThreadByTicketProximity } from "../evidence/ticket-segments.ts";
 import type {
 	IndexedPost,
-	LexicalRetrievalSource,
 	MattermostStore,
 	TicketThreadRelationship,
 } from "../store/index.ts";
@@ -10,7 +9,7 @@ import {
 	extractTicketKeys,
 	MULTI_TICKET_BULLETIN_MIN_KEYS,
 } from "./extract.ts";
-import { deduplicateMatches, excerpt } from "./match-utils.ts";
+import { deduplicateMatches } from "./match-utils.ts";
 import { matchesQueryExpansion } from "./query-expansion.ts";
 import { routeReason, routeWeight } from "./routing.ts";
 import {
@@ -28,7 +27,6 @@ import type {
 	RetrievalProbe,
 	RoutedConversation,
 	SearchMatch,
-	StructuredSearchMatch,
 	ThreadCandidate,
 	ThreadRankingEvidence,
 } from "./types.ts";

@@ -1,9 +1,7 @@
 import type {
 	ConversationRecord,
-	IndexedPost,
 	LexicalRetrievalSource,
 	StructuredEntityHit,
-	TicketThreadRelationship,
 } from "../store/index.ts";
 import type { QueryExpansion } from "./query-expansion.ts";
 import type { ConceptQueryMatch } from "./search-concepts.ts";

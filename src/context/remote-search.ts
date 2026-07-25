@@ -1,6 +1,5 @@
 import type { MattermostPostList } from "../mattermost/schemas.ts";
 import {
-	type MattermostSubject,
 	mergeRemoteSearchCandidate,
 	mergeThreadCandidates,
 	type RetrievalProbe,
@@ -8,10 +7,8 @@ import {
 	remoteSearchCandidate,
 	type ThreadCandidate,
 } from "../search/index.ts";
-import type { Warning } from "../shared/command-result.ts";
 import { deadlineReached } from "../shared/limits.ts";
-import type { MattermostStore } from "../store/index.ts";
-import { indexedPost, isRecoverableRemoteError } from "./helpers.ts";
+import { indexedPost } from "./helpers.ts";
 import type { ContextClient, RemoteSearchEvidence } from "./types.ts";
 
 const MAX_REMOTE_SEARCH_PROBES = 4;

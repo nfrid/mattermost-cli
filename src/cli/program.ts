@@ -22,7 +22,7 @@ function collect(value: string, previous: string[]): string[] {
 }
 
 /** Shared retrieval option block for context/search commands. */
-export function addRetrievalOptions(command: Command): Command {
+function addRetrievalOptions(command: Command): Command {
 	return command
 		.option("--ticket <key>", "explicit issue tracker key")
 		.option(

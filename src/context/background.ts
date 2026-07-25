@@ -12,7 +12,7 @@ import { postLink } from "./helpers.ts";
 import type { BackgroundThread } from "./types.ts";
 
 /** Background pointers returned per packet. */
-export const BACKGROUND_LIMIT = 5;
+const BACKGROUND_LIMIT = 5;
 /** Distinct excerpts kept per background pointer. */
 const BACKGROUND_EXCERPTS = 2;
 

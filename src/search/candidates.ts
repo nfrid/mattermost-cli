@@ -1,4 +1,4 @@
-import type { IndexedPost, MattermostStore } from "../store/index.ts";
+import type { IndexedPost } from "../store/index.ts";
 import { reciprocalRankFusionScore } from "./fusion.ts";
 import { deduplicateMatches, excerpt } from "./match-utils.ts";
 import { routeReason, routeWeight } from "./routing.ts";
@@ -10,7 +10,6 @@ import type {
 	RankingReason,
 	RoutedConversation,
 	ScoreVector,
-	SearchMatch,
 	StructuredSearchMatch,
 	ThreadCandidate,
 } from "./types.ts";

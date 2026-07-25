@@ -22,11 +22,7 @@ import {
 	STOP_WORDS,
 } from "../search/text.ts";
 import type { Warning } from "../shared/command-result.ts";
-import {
-	AppError,
-	ConfigError,
-	MattermostDataError,
-} from "../shared/errors.ts";
+import { AppError, MattermostDataError } from "../shared/errors.ts";
 import type {
 	ConversationRecord,
 	IndexedFile,
@@ -280,7 +276,7 @@ export function reevaluateCandidate(
 	};
 }
 
-export function postMatchesProbeTerm(
+function postMatchesProbeTerm(
 	message: string,
 	probe: RetrievalProbe,
 	term: string,

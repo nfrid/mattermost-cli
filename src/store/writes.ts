@@ -1,4 +1,3 @@
-import type { SearchConcepts } from "../config/config.ts";
 import type {
 	MattermostFileInfo,
 	MattermostPost,
@@ -18,12 +17,7 @@ import type { StoreHandle } from "./handle.ts";
 import { rowToPost } from "./mappers.ts";
 import { getPost, migrationVersions } from "./reads.ts";
 import { migrations } from "./schema.ts";
-import type {
-	ConversationRecord,
-	IndexedPost,
-	PageWrite,
-	SyncCheckpoint,
-} from "./types.ts";
+import type { ConversationRecord, PageWrite, SyncCheckpoint } from "./types.ts";
 
 export function finalizeFullSync(
 	store: StoreHandle,

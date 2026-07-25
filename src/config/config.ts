@@ -1,4 +1,3 @@
-import { dirname } from "node:path";
 import { z } from "zod";
 import { normalizeSearchText } from "../search/text.ts";
 import { ConfigError } from "../shared/errors.ts";

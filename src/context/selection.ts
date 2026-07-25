@@ -6,15 +6,11 @@ import type {
 	ThreadCandidate,
 } from "../search/index.ts";
 import { postLink } from "./helpers.ts";
-import type {
-	DroppedCandidate,
-	DroppedCandidateReason,
-	SelectionEvidence,
-} from "./types.ts";
+import type { DroppedCandidate, DroppedCandidateReason } from "./types.ts";
 
 const URL_PATTERN = /https?:\/\/[^\s<>()]+/giu;
 
-export const DROPPED_CANDIDATES_LIMIT = 5;
+const DROPPED_CANDIDATES_LIMIT = 5;
 
 /** Prefer substantive / deeper threads over thin announce stubs. */
 export function pickPrimaryThreadIndex(
@@ -47,24 +43,6 @@ export function pickPrimaryThreadIndex(
 		}
 	}
 	return bestIndex;
-}
-
-export function selectionEvidence(input: {
-	candidateThreads: number;
-	returnedThreads: number;
-	droppedThin: number;
-	droppedByBudget: number;
-	droppedNoMatch: number;
-	droppedCandidates?: readonly DroppedCandidate[];
-}): SelectionEvidence {
-	return {
-		candidateThreads: input.candidateThreads,
-		returnedThreads: input.returnedThreads,
-		droppedThin: input.droppedThin,
-		droppedByBudget: input.droppedByBudget,
-		droppedNoMatch: input.droppedNoMatch,
-		droppedCandidates: [...(input.droppedCandidates ?? [])],
-	};
 }
 
 /**

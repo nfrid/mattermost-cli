@@ -5,7 +5,6 @@ import type {
 	MattermostStore,
 	StructuredEntityHit,
 	ThreadSearchFilters,
-	TicketThreadRelationship,
 } from "../store/index.ts";
 import { trigramSearchPolicy } from "../store/index.ts";
 import { compareCandidates, createCandidateGroup } from "./candidates.ts";
@@ -14,11 +13,9 @@ import {
 	weightedReciprocalRankFusionScore,
 } from "./fusion.ts";
 import { excerpt } from "./match-utils.ts";
-import { matchesQueryExpansion } from "./query-expansion.ts";
 import { candidateFromGroup } from "./ranking.ts";
 import { conceptToken } from "./search-concepts.ts";
 import {
-	analyzeSearchToken,
 	morphSearchTerms,
 	normalizeMorphText,
 } from "./search-token-normalization.ts";
@@ -29,11 +26,7 @@ import type {
 	RankFusionContribution,
 	RankFusionSource,
 	RetrievalProbe,
-	RoutedConversation,
 	RoutingResult,
-	SearchMatch,
-	SearchResult,
-	StructuredSearchMatch,
 	ThreadCandidate,
 	TypoFallbackKind,
 } from "./types.ts";
