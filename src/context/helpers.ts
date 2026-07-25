@@ -22,7 +22,11 @@ import {
 	STOP_WORDS,
 } from "../search/text.ts";
 import type { Warning } from "../shared/command-result.ts";
-import { AppError, ConfigError } from "../shared/errors.ts";
+import {
+	AppError,
+	ConfigError,
+	MattermostDataError,
+} from "../shared/errors.ts";
 import type {
 	ConversationRecord,
 	IndexedFile,
@@ -118,6 +122,12 @@ function nontrivialOverlapTokens(
 	);
 }
 
+/**
+ * Verifies that a set of posts really is the requested thread. Failures are
+ * data faults (a moved, re-rooted, or partially inaccessible thread), never
+ * configuration or routing decisions, so callers can recover by falling back to
+ * indexed evidence or by dropping the thread.
+ */
 export function assertThreadBoundary(
 	posts: readonly { id: string; rootId: string; conversationId: string }[],
 	expectedConversationId: string,
@@ -125,13 +135,13 @@ export function assertThreadBoundary(
 	requiredPostId?: string,
 ): void {
 	if (!posts.some(({ id }) => id === expectedRootPostId)) {
-		throw new ConfigError(
+		throw new MattermostDataError(
 			"Mattermost thread root is missing or inaccessible.",
 			"thread_not_found",
 		);
 	}
 	if (requiredPostId && !posts.some(({ id }) => id === requiredPostId)) {
-		throw new ConfigError(
+		throw new MattermostDataError(
 			"The directly requested post is missing from its current thread.",
 			"post_not_found",
 		);
@@ -143,9 +153,9 @@ export function assertThreadBoundary(
 				(id !== expectedRootPostId && rootId !== expectedRootPostId),
 		)
 	) {
-		throw new ConfigError(
-			"Mattermost thread crossed the routed conversation or thread boundary.",
-			"conversation_not_allowed",
+		throw new MattermostDataError(
+			"Mattermost thread posts do not all share the expected conversation and root; the thread is inconsistent.",
+			"thread_boundary_mismatch",
 		);
 	}
 }

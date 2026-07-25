@@ -70,3 +70,16 @@ export class ConfigError extends AppError {
 		this.name = "ConfigError";
 	}
 }
+
+/**
+ * Mattermost returned structurally inconsistent data (a thread that does not
+ * hang together, a post that moved). Not a configuration or routing decision,
+ * so it must not be reported as one, and it is recoverable: callers may fall
+ * back to local evidence or drop the affected candidate.
+ */
+export class MattermostDataError extends AppError {
+	constructor(message: string, kind: string, options?: ErrorOptions) {
+		super(message, "mattermost", kind, 1, options);
+		this.name = "MattermostDataError";
+	}
+}

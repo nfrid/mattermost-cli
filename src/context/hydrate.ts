@@ -3,7 +3,7 @@ import type { MattermostPost } from "../mattermost/schemas.ts";
 import type { RoutedConversation } from "../search/index.ts";
 import type { Warning } from "../shared/command-result.ts";
 import { mapWithConcurrency } from "../shared/concurrency.ts";
-import { ConfigError } from "../shared/errors.ts";
+import { AppError, ConfigError } from "../shared/errors.ts";
 import type { IndexedPost, MattermostStore } from "../store/index.ts";
 import {
 	assertThreadBoundary,
@@ -155,7 +155,18 @@ export async function hydrateThread(
 			source: "network",
 		};
 	} catch (error) {
-		if (isRecoverableRemoteError(error) && localUsable) {
+		// A directly requested post that the server no longer places in this
+		// thread must fail: serving the indexed copy would answer a question the
+		// caller did not ask.
+		const missingRequiredPost =
+			Boolean(requiredPostId) &&
+			error instanceof AppError &&
+			error.kind === "post_not_found";
+		if (
+			isRecoverableRemoteError(error) &&
+			localUsable &&
+			!missingRequiredPost
+		) {
 			options.warnings?.push({
 				kind: "remote_hydrate_failed",
 				message:

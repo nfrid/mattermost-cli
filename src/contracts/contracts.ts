@@ -530,7 +530,7 @@ const selectionEvidenceSchema = z.object({
 			conversationId: z.string(),
 			conversationAlias: z.string(),
 			conversationKind: z.enum(["channel", "direct_message"]),
-			dropReason: z.enum(["budget", "no_match", "thin"]),
+			dropReason: z.enum(["budget", "no_match", "thin", "unavailable"]),
 			reasons: z.array(rankingReasonSchema),
 			excerpt: z.string().optional(),
 			excerpts: z.array(z.string()).max(2).optional(),

@@ -168,7 +168,12 @@ export interface SelectionEvidence {
 	droppedCandidates: DroppedCandidate[];
 }
 
-export type DroppedCandidateReason = "budget" | "no_match" | "thin";
+/** `unavailable`: retrieval failed for that thread, so it was never judged. */
+export type DroppedCandidateReason =
+	| "budget"
+	| "no_match"
+	| "thin"
+	| "unavailable";
 
 /** Ranked candidate omitted from the context packet (no extra hydrate). */
 export interface DroppedCandidate {

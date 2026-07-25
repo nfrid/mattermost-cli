@@ -138,6 +138,8 @@ export function buildDroppedCandidates(input: {
 	candidates: readonly ThreadCandidate[];
 	selectedIds: ReadonlySet<string>;
 	noMatchIds: ReadonlySet<string>;
+	/** Candidates whose thread could not be retrieved this request. */
+	unavailableIds?: ReadonlySet<string>;
 	config: MattermostConfig;
 	limit?: number;
 }): DroppedCandidate[] {
@@ -148,6 +150,7 @@ export function buildDroppedCandidates(input: {
 		const dropReason = resolveDropReason(
 			candidate,
 			input.noMatchIds.has(candidate.threadId),
+			Boolean(input.unavailableIds?.has(candidate.threadId)),
 		);
 		const reasons = [...candidate.reasons];
 		if (
@@ -307,7 +310,9 @@ function compareDroppedCandidates(
 function resolveDropReason(
 	candidate: ThreadCandidate,
 	noMatch: boolean,
+	unavailable: boolean,
 ): DroppedCandidateReason {
+	if (unavailable) return "unavailable";
 	if (noMatch) return "no_match";
 	if (candidate.reasons.includes("thin_thread")) return "thin";
 	return "budget";

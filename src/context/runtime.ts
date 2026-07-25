@@ -82,6 +82,13 @@ const MAX_REMOTE_CANDIDATE_THREADS = 12;
 const MAX_CONTEXT_FRESHEN_CONVERSATIONS = 8;
 /** Top-K related ticket keys for one-hop pointers. */
 const RELATED_TICKET_HOP_LIMIT = 3;
+/**
+ * Ceiling on candidate threads fetched from Mattermost in one context call.
+ * Selection keeps at most `defaultMaxThreads`, so this is generous headroom for
+ * candidates that turn out unselectable; beyond it, local evidence is used and
+ * the packet reports itself as possibly stale rather than stalling.
+ */
+const MAX_CANDIDATE_HYDRATIONS = 12;
 /** Soft cap for short mode; root-anchored single threads may use more. */
 const SHORT_MAX_CHARACTERS = 6_000;
 const SHORT_PER_THREAD_CHARACTERS = 2_500;
@@ -165,6 +172,19 @@ export {
 
 /** Named aliases appended to `incomplete_history` prose (opaque by contract). */
 const MAX_NAMED_CUTOFF_CONVERSATIONS = 3;
+
+/**
+ * Whether one candidate's hydration failure may be absorbed by dropping that
+ * candidate: a remote/sync fault, an inconsistent thread, or a thread the local
+ * index cannot serve once the hydration budget is spent.
+ */
+function droppableCandidateError(error: unknown): boolean {
+	if (isRecoverableRemoteError(error)) return true;
+	return (
+		error instanceof AppError &&
+		(error.kind === "thread_not_found" || error.kind === "post_not_found")
+	);
+}
 
 /**
  * `": b2b-team, backend-zone"` (or `" +2 more"` beyond the cap) for the
@@ -441,6 +461,44 @@ export async function getMattermostContext(
 			droppedNoMatch: 0,
 			droppedCandidates: [],
 		};
+		const hydrationFailures: string[] = [];
+		let hydrationBudgetSpent = false;
+		/**
+		 * Local verdict for a candidate before any fetch: whether its indexed
+		 * thread still carries a current match and passes the filters. Returns
+		 * `undefined` when the thread is not indexed (remote-search candidates),
+		 * where only a fetch can decide.
+		 */
+		const localMatchGate = (
+			candidate: ThreadCandidate,
+		):
+			| {
+					matches: boolean;
+					matchesFilters: boolean;
+					probeValues: readonly string[];
+			  }
+			| undefined => {
+			if (subject.kind === "post") return undefined;
+			if (candidate.reasons.includes("explicit_ticket_relationship"))
+				return undefined;
+			const indexed = store.getThread(candidate.rootPostId);
+			if (!indexed.length) return undefined;
+			const evidence = localEvidence(store, indexed);
+			return {
+				matches:
+					currentMatches(
+						evidence,
+						probes,
+						candidate.matchingPostIds,
+						candidate.structuredMatches,
+					).length > 0,
+				matchesFilters: evidenceMatchesFilters(
+					evidence,
+					resolvedFilters.storage,
+				),
+				probeValues: matchingProbeValues(evidence, probes),
+			};
+		};
 		const hydrateCandidates = async (
 			candidateList: readonly ThreadCandidate[],
 		): Promise<void> => {
@@ -458,21 +516,61 @@ export async function getMattermostContext(
 					({ id }) => id === candidate.conversationId,
 				);
 				if (!conversation) continue;
-				const hydrated = await hydrateThread(
-					candidate.rootPostId,
-					conversation,
-					store,
-					client,
-					subject.kind === "post" ? subject.postId : undefined,
-					{
-						forceRemote:
-							Boolean(input.fresh) ||
-							!initiallyFreshIds.has(candidate.conversationId),
-						freshnessSeconds: config.freshnessSeconds,
-						now: observedAt,
-						warnings: freshenWarnings,
-					},
-				);
+				// Candidates come from the local index, so a candidate whose match
+				// and filters already fail locally cannot become selectable by being
+				// fetched. Deciding that before hydration keeps discovery noise from
+				// costing one thread fetch (plus its users, files, and reindex) each.
+				const localGate = localMatchGate(candidate);
+				if (localGate) {
+					for (const value of localGate.probeValues)
+						matchedProbeValues.add(value);
+					if (!localGate.matchesFilters) continue;
+					if (!localGate.matches) {
+						selection.droppedNoMatch += 1;
+						noMatchIds.add(candidate.threadId);
+						continue;
+					}
+				}
+				const wantsNetwork =
+					Boolean(client) &&
+					(Boolean(input.fresh) ||
+						!initiallyFreshIds.has(candidate.conversationId));
+				// Past the hydration budget, keep going on local evidence only:
+				// `selectedEvidenceCurrent` then reports the packet as possibly stale
+				// instead of the request stalling on per-candidate fetches.
+				const withinHydrationBudget =
+					networkHydratedThreadIds.size < MAX_CANDIDATE_HYDRATIONS &&
+					!deadlineReached(deadlineAt);
+				if (wantsNetwork && !withinHydrationBudget) hydrationBudgetSpent = true;
+				const hydrationClient =
+					wantsNetwork && !withinHydrationBudget ? undefined : client;
+				let hydrated: Awaited<ReturnType<typeof hydrateThread>>;
+				try {
+					hydrated = await hydrateThread(
+						candidate.rootPostId,
+						conversation,
+						store,
+						hydrationClient,
+						subject.kind === "post" ? subject.postId : undefined,
+						{
+							forceRemote:
+								Boolean(input.fresh) ||
+								!initiallyFreshIds.has(candidate.conversationId),
+							freshnessSeconds: config.freshnessSeconds,
+							now: observedAt,
+							warnings: freshenWarnings,
+						},
+					);
+				} catch (error) {
+					// One inconsistent or unavailable candidate must not fail a
+					// multi-candidate request; it is dropped and reported instead.
+					// A direct post subject still fails loudly: it has no alternative.
+					if (subject.kind === "post" || !droppableCandidateError(error)) {
+						throw error;
+					}
+					hydrationFailures.push(candidate.threadId);
+					continue;
+				}
 				const evidence = hydrated.posts;
 				if (hydrated.source === "network") {
 					networkHydratedThreadIds.add(candidate.threadId);
@@ -685,6 +783,19 @@ export async function getMattermostContext(
 					"Local search stopped early after the soft deadline; returned evidence may be incomplete.",
 			});
 		}
+		if (hydrationFailures.length) {
+			warnings.push({
+				kind: "candidate_hydrate_failed",
+				message: `${hydrationFailures.length} candidate thread(s) could not be retrieved and were dropped from selection.`,
+			});
+		}
+		if (hydrationBudgetSpent) {
+			warnings.push({
+				kind: "hydration_budget",
+				message:
+					"The per-request thread hydration budget was spent; later candidates used locally indexed evidence only.",
+			});
+		}
 		if (input.local && freshness.some(({ stale }) => stale)) {
 			warnings.push({
 				kind: "stale_local_index",
@@ -736,6 +847,7 @@ export async function getMattermostContext(
 			candidates: seenList,
 			selectedIds,
 			noMatchIds,
+			unavailableIds: new Set(hydrationFailures),
 			config,
 		});
 		const relatedTickets = resolveRelatedTicketPointers({

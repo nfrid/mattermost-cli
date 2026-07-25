@@ -777,7 +777,7 @@ describe("context pipeline", () => {
 		store.close();
 	});
 
-	test("rejects hydrated posts that cross the routed conversation boundary", async () => {
+	test("keeps boundary-crossing hydrated posts out of the packet", async () => {
 		const store = await seededStore();
 		const client = new FakeContextClient();
 		client.thread = list(
@@ -787,16 +787,26 @@ describe("context pipeline", () => {
 				message: "payment timeout",
 			}),
 		);
-		await expect(
-			getMattermostContext(
-				{ subject: "payment timeout", channels: ["payments"] },
-				{ config: configFixture(), store, client, now: () => 8_200_000 },
+		const result = await getMattermostContext(
+			{ subject: "payment timeout", channels: ["payments"] },
+			{ config: configFixture(), store, client, now: () => 8_200_000 },
+		);
+		expect(
+			result.threads.every(
+				({ conversationId }) => conversationId === "channel-payments",
 			),
-		).rejects.toMatchObject({ kind: "conversation_not_allowed" });
+		).toBe(true);
+		expect(result.threads[0]?.posts[0]?.message).toBe(
+			"payment timeout shared evidence",
+		);
+		expect(result.warnings.map(({ kind }) => kind)).toContain(
+			"remote_hydrate_failed",
+		);
+		expect(result.evidence.currency).toBe("possibly_stale");
 		store.close();
 	});
 
-	test("rejects a same-channel response for a different requested thread", async () => {
+	test("ignores a same-channel response for a different requested thread", async () => {
 		const store = await seededStore();
 		const client = new FakeContextClient();
 		client.thread = list(
@@ -806,12 +816,156 @@ describe("context pipeline", () => {
 				message: "payment timeout",
 			}),
 		);
-		await expect(
-			getMattermostContext(
-				{ subject: "payment timeout", channels: ["payments"] },
-				{ config: configFixture(), store, client, now: () => 8_200_000 },
+		const result = await getMattermostContext(
+			{ subject: "payment timeout", channels: ["payments"] },
+			{ config: configFixture(), store, client, now: () => 8_200_000 },
+		);
+		expect(
+			result.threads.flatMap(({ posts }) => posts.map(({ id }) => id)),
+		).not.toContain(PLATFORM_ROOT);
+		expect(result.evidence.currency).toBe("possibly_stale");
+		store.close();
+	});
+
+	test("does not fetch candidates whose indexed thread carries no current match", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const MORPHOLOGY_ROOT = "eeeeeeeeeeeeeeeeeeeeeeeeee";
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: ROOT,
+					channel_id: "channel-payments",
+					message: "конфликт ролей координатора",
+					create_at: 10,
+				}),
+				postFixture({
+					id: MORPHOLOGY_ROOT,
+					channel_id: "channel-payments",
+					message: "конфликтами ролями координаторами",
+					create_at: 20,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: null,
+				newestPostAt: 20,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1,
+				coverageComplete: true,
+			},
+		});
+		const client = new FakeContextClient();
+		client.threads.set(
+			ROOT,
+			list(
+				postFixture({
+					id: ROOT,
+					channel_id: "channel-payments",
+					message: "конфликт ролей координатора",
+				}),
 			),
-		).rejects.toMatchObject({ kind: "thread_not_found" });
+		);
+		const result = await getMattermostContext(
+			{ subject: "конфликт ролей", channels: ["payments"] },
+			{ config: configFixture(), store, client, now: () => 8_200_000 },
+		);
+
+		// The morphology-only candidate cannot become selectable by being
+		// fetched, so it costs no request.
+		expect(result.selection.candidateThreads).toBe(2);
+		expect(result.selection.droppedNoMatch).toBe(1);
+		expect(client.threadRequests).toEqual([ROOT]);
+		expect(result.threads.map(({ threadId }) => threadId)).toEqual([ROOT]);
+		store.close();
+	});
+
+	test("drops an unretrievable candidate instead of failing the request", async () => {
+		const store = await seededStore({ fresh: true });
+		const remoteRoot = "rrrrrrrrrrrrrrrrrrrrrrrrrr";
+		class FailingThreadClient extends SearchContextClient {
+			override async getThread(postId: string) {
+				if (postId === remoteRoot) {
+					throw new MattermostApiError("Thread gone", 500, "");
+				}
+				return super.getThread(postId);
+			}
+		}
+		const client = new FailingThreadClient();
+		client.searchResult = list(
+			postFixture({
+				id: remoteRoot,
+				channel_id: "channel-payments",
+				message: "orphaned quasar zxqv",
+				create_at: 50,
+			}),
+		);
+		const result = await getMattermostContext(
+			{
+				subject: "orphaned quasar zxqv",
+				channels: ["payments"],
+				remoteSearch: true,
+			},
+			{ config: configFixture(), store, client, now: () => 100 },
+		);
+
+		expect(result.threads).toEqual([]);
+		expect(result.warnings.map(({ kind }) => kind)).toContain(
+			"candidate_hydrate_failed",
+		);
+		store.close();
+	});
+
+	test("stops fetching candidates once the hydration budget is spent", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const candidateIds = Array.from({ length: 20 }, (_, index) =>
+			`f${index}`.padEnd(26, "f"),
+		);
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			users: [userFixture()],
+			posts: candidateIds.map((id, index) =>
+				postFixture({
+					id,
+					channel_id: "channel-payments",
+					message: "payment timeout shared evidence",
+					create_at: 10 + index,
+				}),
+			),
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: null,
+				newestPostAt: 40,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1,
+				coverageComplete: true,
+			},
+		});
+		const client = new FakeContextClient();
+		// Every fetch reports the thread as no longer matching, so selection never
+		// fills and the loop would otherwise fetch every candidate.
+		for (const id of candidateIds) {
+			client.threads.set(
+				id,
+				list(
+					postFixture({
+						id,
+						channel_id: "channel-payments",
+						message: "no longer relevant",
+					}),
+				),
+			);
+		}
+		const result = await getMattermostContext(
+			{ subject: "payment timeout shared evidence", channels: ["payments"] },
+			{ config: configFixture(), store, client, now: () => 8_200_000 },
+		);
+
+		expect(client.threadRequests.length).toBeLessThanOrEqual(12);
+		expect(result.warnings.map(({ kind }) => kind)).toContain(
+			"hydration_budget",
+		);
 		store.close();
 	});
 
