@@ -639,6 +639,7 @@ const contextDataSchema = z.object({
 	warnings: z.array(warningSchema),
 	short: z.boolean().optional(),
 	navigate: z.boolean().optional(),
+	brief: z.boolean().optional(),
 	signals: z.boolean().optional(),
 });
 const threadDataSchema = z.object({
@@ -650,6 +651,7 @@ const threadDataSchema = z.object({
 	link: z.string(),
 	thread: packedThreadSchema,
 	warnings: z.array(warningSchema),
+	brief: z.boolean().optional(),
 	signals: z.boolean().optional(),
 });
 

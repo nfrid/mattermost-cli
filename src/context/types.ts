@@ -55,8 +55,10 @@ export interface ContextInput extends SearchFilterInput {
 	includeAutomation?: boolean;
 	/** Use the short evidence-card packing budget. */
 	short?: boolean;
-	/** Lean navigate projection (uses short packing budget). */
+	/** Lean navigate projection (default packing budget). */
 	navigate?: boolean;
+	/** Decision-only projection: evidence, brief, and the outcome window. */
+	brief?: boolean;
 	/** Opt-in advisory `signals` / `technicalEntities` in `--agent` output. */
 	signals?: boolean;
 }
@@ -99,6 +101,8 @@ export interface ThreadInput {
 	beforePosts?: number;
 	/** Asymmetric `--around` window; requires {@link around}. */
 	afterPosts?: number;
+	/** Decision-only projection: evidence, brief, and the outcome window. */
+	brief?: boolean;
 	/** Opt-in advisory `signals` / `technicalEntities` in `--agent` output. */
 	signals?: boolean;
 }
@@ -269,8 +273,10 @@ export interface ContextResult {
 	warnings: Warning[];
 	/** True when context used the short evidence-card packing budget. */
 	short?: boolean;
-	/** True when context used lean navigate packing/projection. */
+	/** True when context used the lean navigate projection. */
 	navigate?: boolean;
+	/** True when context used the decision-only brief projection. */
+	brief?: boolean;
 	/** True when advisory signals were requested for `--agent` projection. */
 	signals?: boolean;
 }
@@ -298,6 +304,8 @@ export interface ThreadResult {
 	link: string;
 	thread: PackedThread;
 	warnings: Warning[];
+	/** True when the thread used the decision-only brief projection. */
+	brief?: boolean;
 	/** True when advisory signals were requested for `--agent` projection. */
 	signals?: boolean;
 }

@@ -48,6 +48,8 @@ export interface CommandOptions {
 	includeAutomation?: boolean;
 	short?: boolean;
 	navigate?: boolean;
+	/** Decision-only `--agent` projection. */
+	brief?: boolean;
 	/** Opt-in agent emission of advisory `signals` and `technicalEntities`. */
 	signals?: boolean;
 	limit?: number;

@@ -137,13 +137,19 @@ export function createProgram(
 			new Option(
 				"--short",
 				"pack evidence cards with ticket windows, anchors, and a short timeline (legacy card+timeline)",
-			).conflicts("navigate"),
+			).conflicts(["navigate", "brief"]),
 		)
 		.addOption(
 			new Option(
 				"--navigate",
-				"short packing budget with lean agent navigation (anchors/clusters/skips; omit dense posts and messages)",
-			).conflicts("short"),
+				"lean agent navigation (anchors/clusters/skips; omit dense posts and messages)",
+			).conflicts(["short", "brief"]),
+		)
+		.addOption(
+			new Option(
+				"--brief",
+				"decision-only projection: evidence, per-thread brief, and outcome-window posts",
+			).conflicts(["short", "navigate"]),
 		)
 		.option(
 			"--signals",
@@ -209,6 +215,10 @@ export function createProgram(
 			"--after-posts <n>",
 			"posts after --around (default: match neighborhood radius; max 50)",
 			(value) => Number(value),
+		)
+		.option(
+			"--brief",
+			"decision-only projection: evidence, brief, and outcome-window posts",
 		)
 		.option(
 			"--signals",

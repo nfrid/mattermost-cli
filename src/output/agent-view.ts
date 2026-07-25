@@ -207,8 +207,13 @@ export type AgentAnchorKind =
 	| "codeish"
 	| "latest";
 
+/**
+ * One navigable post. A post that is several things at once (root that mentions
+ * the subject ticket and carries code, say) is one entry with several `kinds`,
+ * not one entry per kind repeating the same excerpt.
+ */
 export interface AgentAnchor {
-	kind: AgentAnchorKind;
+	kinds: AgentAnchorKind[];
 	postId: string;
 	at: string;
 	text?: string;
@@ -428,6 +433,7 @@ function projectContext(
 	const relatedTickets = projectRelatedTickets(data.relatedTickets);
 	const navigate = Boolean(data.navigate);
 	const short = Boolean(data.short);
+	const brief = Boolean(data.brief);
 	const includeSignals = Boolean(data.signals);
 	const primaryIndex = pickPrimaryThreadIndex(data.threads);
 	const resolved = resolvedSubject(data.subject, data.threads);
@@ -435,6 +441,7 @@ function projectContext(
 		projectContextThread(thread, {
 			short,
 			navigate,
+			brief,
 			includeSignals,
 			rank: index + 1,
 			role: index === primaryIndex ? "primary" : "secondary",
@@ -456,6 +463,9 @@ function projectContext(
 		subject: subjectValue(data.subject),
 		...(resolved ? { resolved } : {}),
 		status: status(data.freshnessMode),
+		// The packet says which projection produced it: `brief` withholds packed
+		// posts by request, and a reader must not mistake that for the transcript.
+		...(brief ? { projection: "brief" as const } : {}),
 		evidence:
 			data.evidence ??
 			buildEvidence({
@@ -563,6 +573,7 @@ function projectThread(
 		data.conversation.kind,
 		data.link,
 		{
+			brief: Boolean(data.brief),
 			includeSignals: Boolean(data.signals),
 			subjectTicket:
 				data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
@@ -619,6 +630,7 @@ function projectThread(
 		subject: subjectValue(data.subject),
 		...(resolved ? { resolved } : {}),
 		status: status(data.freshnessMode),
+		...(data.brief ? { projection: "brief" as const } : {}),
 		...(relatedTickets.length ? { relatedTickets } : {}),
 		evidence,
 		threads: [projected],
@@ -719,6 +731,7 @@ function projectContextThread(
 	options: {
 		short: boolean;
 		navigate: boolean;
+		brief: boolean;
 		includeSignals: boolean;
 		rank: number;
 		role: "primary" | "secondary";
@@ -734,6 +747,7 @@ function projectContextThread(
 		{
 			short: options.short,
 			navigate: options.navigate,
+			brief: options.brief,
 			includeSignals: options.includeSignals,
 			rank: options.rank,
 			role: options.role,
@@ -746,7 +760,7 @@ function projectContextThread(
 			reasons: thread.reasons,
 		},
 	);
-	const lean = options.short || options.navigate;
+	const lean = options.short || options.navigate || options.brief;
 	if (!thread.surround?.length || lean) return base;
 	const rootMessage =
 		thread.posts.find((post) => post.id === thread.threadId)?.message ??
@@ -771,6 +785,7 @@ function projectPackedThread(
 	options: {
 		short?: boolean;
 		navigate?: boolean;
+		brief?: boolean;
 		includeSignals?: boolean;
 		rank?: number;
 		role?: "primary" | "secondary";
@@ -864,8 +879,89 @@ function projectPackedThread(
 		...(skips?.length ? { skips } : {}),
 		...(options.navigate
 			? {}
-			: { posts: projectTimeline(thread.timeline, options.anchorPostId) }),
+			: {
+					posts: options.brief
+						? briefTimeline(thread, brief, options.anchorPostId)
+						: projectTimeline(thread.timeline, options.anchorPostId),
+				}),
 	};
+}
+
+/**
+ * Decision-only timeline: the outcome window plus the posts the brief points
+ * at. Packed posts the projection withholds collapse into `brief_projection`
+ * skips — so shown messages plus those skips always equal the packed message
+ * count — while packing's own skips pass through with their original reason.
+ * Falls back to the last packed post when a thread yielded no brief at all.
+ */
+function briefTimeline(
+	thread: PackedThread,
+	brief: AgentThreadBrief | undefined,
+	anchorPostId?: string,
+): AgentTimelineItem[] {
+	const kept = new Set<string>([
+		...(brief?.outcomeWindow?.postIds ?? []),
+		...(brief?.decisionPostIds ?? []),
+		...(brief?.decisions ?? []).flatMap((decision) =>
+			decision.ackPostId ? [decision.id, decision.ackPostId] : [decision.id],
+		),
+	]);
+	if (anchorPostId) kept.add(anchorPostId);
+	if (!kept.size) {
+		const latest = latestPackedPost(thread.posts);
+		if (latest) kept.add(latest.id);
+	}
+	const items: AgentTimelineItem[] = [];
+	let group: AgentMessageGroup | undefined;
+	let withheld = 0;
+	let files = 0;
+	let after: string | undefined;
+	const flushGroup = () => {
+		if (group) items.push(group);
+		group = undefined;
+	};
+	const flushWithheld = (before?: string) => {
+		if (withheld <= 0) return;
+		flushGroup();
+		items.push({
+			skip: {
+				posts: withheld,
+				...(after ? { after } : {}),
+				...(before ? { before } : {}),
+				reason: "brief_projection",
+				...(files > 0 ? { files } : {}),
+			},
+		});
+		withheld = 0;
+		files = 0;
+	};
+	for (const item of thread.timeline) {
+		if (item.kind === "skip") {
+			// Packing omissions keep their own reason and count: mixing them into
+			// the projection skip would make neither number attributable.
+			flushWithheld();
+			flushGroup();
+			items.push({ skip: item.skip });
+			continue;
+		}
+		if (!kept.has(item.post.id)) {
+			withheld += 1;
+			files += item.post.attachments.filter(({ deleteAt }) => !deleteAt).length;
+			continue;
+		}
+		flushWithheld(item.post.id);
+		const message = projectMessage(item.post, anchorPostId);
+		if (group && group.author === item.post.authorUsername) {
+			group.messages.push(message);
+		} else {
+			flushGroup();
+			group = { author: item.post.authorUsername, messages: [message] };
+		}
+		after = item.post.id;
+	}
+	flushWithheld();
+	flushGroup();
+	return items;
 }
 
 /**
@@ -1059,37 +1155,47 @@ function collectAnchors(
 		rootId: string;
 	},
 ): AgentAnchor[] {
-	const anchors: AgentAnchor[] = [];
-	const seen = new Set<string>();
-	const push = (anchor: AgentAnchor) => {
-		const key = `${anchor.kind}:${anchor.postId}`;
-		if (seen.has(key)) return;
-		seen.add(key);
-		anchors.push(anchor);
+	// Insertion-ordered so anchors stay chronological, one entry per post.
+	const anchors = new Map<string, AgentAnchor>();
+	const push = (kind: AgentAnchorKind, anchor: Omit<AgentAnchor, "kinds">) => {
+		const existing = anchors.get(anchor.postId);
+		if (!existing) {
+			anchors.set(anchor.postId, { kinds: [kind], ...anchor });
+			return;
+		}
+		if (!existing.kinds.includes(kind)) existing.kinds.push(kind);
+		if (anchor.matched?.length) {
+			existing.matched = [
+				...new Set([...(existing.matched ?? []), ...anchor.matched]),
+			];
+		}
+		if (!existing.files?.length && anchor.files?.length) {
+			existing.files = anchor.files;
+		}
+		if (existing.text === undefined && anchor.text !== undefined) {
+			existing.text = anchor.text;
+		}
 	};
 	const subject = options.subjectTicket?.toUpperCase();
 	const matchIds = new Set(options.matchingPostIds);
 	for (const [index, post] of posts.entries()) {
 		const keys = extractTicketKeys(post.message);
 		if (index === 0 || post.id === options.rootId) {
-			push({
-				kind: "root",
+			push("root", {
 				postId: post.id,
 				at: isoTimestamp(post.createAt),
 				text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
 			});
 		}
 		if (subject && keys.includes(subject)) {
-			push({
-				kind: "ticket_mention",
+			push("ticket_mention", {
 				postId: post.id,
 				at: isoTimestamp(post.createAt),
 				text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
 			});
 		}
 		if (matchIds.has(post.id)) {
-			push({
-				kind: "match_hit",
+			push("match_hit", {
 				postId: post.id,
 				at: isoTimestamp(post.createAt),
 				text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
@@ -1098,16 +1204,14 @@ function collectAnchors(
 		}
 		const liveFiles = post.attachments.filter((file) => !file.deleteAt);
 		if (liveFiles.length) {
-			push({
-				kind: "file",
+			push("file", {
 				postId: post.id,
 				at: isoTimestamp(post.createAt),
 				files: liveFiles.map((file) => projectFile(file)),
 			});
 		}
 		if (keys.length >= MULTI_TICKET_BULLETIN_MIN_KEYS) {
-			push({
-				kind: "multi_ticket",
+			push("multi_ticket", {
 				postId: post.id,
 				at: isoTimestamp(post.createAt),
 				text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
@@ -1121,8 +1225,7 @@ function collectAnchors(
 				["file_path", "symbol", "error_code"].includes(entity.kind),
 			)
 		) {
-			push({
-				kind: "codeish",
+			push("codeish", {
 				postId: post.id,
 				at: isoTimestamp(post.createAt),
 				text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
@@ -1131,14 +1234,13 @@ function collectAnchors(
 	}
 	const latest = posts[posts.length - 1];
 	if (latest) {
-		push({
-			kind: "latest",
+		push("latest", {
 			postId: latest.id,
 			at: isoTimestamp(latest.createAt),
 			text: truncateExcerpt(latest.message, POINTER_EXCERPT_LIMIT),
 		});
 	}
-	return anchors;
+	return [...anchors.values()];
 }
 
 function shortMessagesFromThreads(

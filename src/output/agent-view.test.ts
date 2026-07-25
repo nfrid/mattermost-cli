@@ -574,6 +574,210 @@ describe("agent projection", () => {
 		store.close();
 	});
 
+	test("navigate packs on the default budget, unlike short", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const posts = Array.from({ length: 40 }, (_, index) =>
+			postFixture({
+				id: `p${index}`.padEnd(26, "p"),
+				...(index === 0 ? {} : { root_id: "p0".padEnd(26, "p") }),
+				message: `BTB-2112 decision detail ${index} ${"подробности ".repeat(20)}`,
+				create_at: 10 + index,
+			}),
+		);
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts,
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: posts.at(-1)?.id ?? null,
+				newestPostAt: 50,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		const pack = async (mode: "default" | "navigate" | "short") =>
+			await getMattermostContext(
+				{
+					subject: "BTB-2112",
+					channels: ["payments"],
+					local: true,
+					...(mode === "navigate" ? { navigate: true } : {}),
+					...(mode === "short" ? { short: true } : {}),
+				},
+				{ config: configFixture(), store, now: () => 1_000 },
+			);
+		const [base, navigate, short] = await Promise.all([
+			pack("default"),
+			pack("navigate"),
+			pack("short"),
+		]);
+
+		// Navigate is a projection choice, not a smaller packet: it must not force
+		// a follow-up `thread --full` that costs more than the view saves.
+		expect(navigate.threads[0]?.returnedPosts).toBe(
+			base.threads[0]?.returnedPosts,
+		);
+		expect(navigate.threads[0]?.omittedPosts).toBe(
+			base.threads[0]?.omittedPosts,
+		);
+		expect(short.threads[0]?.returnedPosts).toBeLessThan(
+			base.threads[0]?.returnedPosts ?? 0,
+		);
+		store.close();
+	});
+
+	test("brief keeps decisions and reports every withheld post", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const tail = "dddddddddddddddddddddddddd";
+		const middle = Array.from({ length: 6 }, (_, index) =>
+			postFixture({
+				id: `m${index}`.padEnd(26, "m"),
+				root_id: ROOT,
+				message: `intermediate debugging step ${index}`,
+				create_at: 20 + index,
+			}),
+		);
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: ROOT,
+					message: "BTB-2112 роли конфликтуют в координации",
+					create_at: 10,
+				}),
+				...middle,
+				postFixture({
+					id: REPLY,
+					root_id: ROOT,
+					message: "BTB-2112 решили: координатор будет выше КС",
+					create_at: 40,
+				}),
+				postFixture({
+					id: tail,
+					root_id: ROOT,
+					message: "хорошо, спасибо",
+					create_at: 50,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: tail,
+				newestPostAt: 50,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		const context = await getMattermostContext(
+			{
+				subject: "BTB-2112",
+				channels: ["payments"],
+				local: true,
+				brief: true,
+			},
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		) as unknown as {
+			projection?: string;
+			messages?: unknown[];
+			threads: Array<{
+				messageCount: number;
+				surround?: unknown[];
+				brief?: { decisionPostIds?: string[] };
+				posts?: Array<
+					| { skip: { posts: number; reason?: string } }
+					| { author: string; messages: Array<{ id: string }> }
+				>;
+			}>;
+		};
+		const thread = result.threads[0];
+		if (!thread) throw new Error("Expected a thread.");
+
+		expect(result.projection).toBe("brief");
+		expect(result.messages).toBeUndefined();
+		expect(thread.brief?.decisionPostIds?.length).toBeGreaterThan(0);
+		const shown = thread.posts?.flatMap((item) =>
+			"skip" in item ? [] : item.messages.map(({ id }) => id),
+		);
+		const withheld = thread.posts?.reduce(
+			(sum, item) =>
+				"skip" in item && item.skip.reason === "brief_projection"
+					? sum + item.skip.posts
+					: sum,
+			0,
+		);
+		// Every packed post is either shown or counted as withheld — a brief
+		// packet must not read as a complete transcript.
+		expect((shown?.length ?? 0) + (withheld ?? 0)).toBe(thread.messageCount);
+		expect(shown?.length).toBeLessThan(thread.messageCount);
+		expect(
+			thread.posts?.some(
+				(item) => "skip" in item && item.skip.reason === "brief_projection",
+			),
+		).toBe(true);
+		store.close();
+	});
+
+	test("collapses one post into a single anchor carrying every kind", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: ROOT,
+					// Root + subject mention + match hit + codeish, all one post.
+					message: "BTB-2112 fails in `reconcilePayment`",
+					create_at: 10,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: ROOT,
+				newestPostAt: 10,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		const context = await getMattermostContext(
+			{
+				subject: "BTB-2112",
+				channels: ["payments"],
+				local: true,
+				navigate: true,
+			},
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const anchors = (
+			projectAgentResult(
+				commandSuccess("context", context, context.warnings),
+			) as unknown as {
+				threads: Array<{
+					anchors?: Array<{ kinds: string[]; postId: string; text?: string }>;
+				}>;
+			}
+		).threads[0]?.anchors;
+
+		expect(anchors?.filter(({ postId }) => postId === ROOT)).toHaveLength(1);
+		const anchor = anchors?.find(({ postId }) => postId === ROOT);
+		expect(anchor?.kinds).toEqual(
+			expect.arrayContaining([
+				"root",
+				"ticket_mention",
+				"match_hit",
+				"codeish",
+			]),
+		);
+		expect(anchor?.text).toBe("BTB-2112 fails in `reconcilePayment`");
+		store.close();
+	});
+
 	test("short keeps card timeline and messages; navigate omits dense posts", async () => {
 		const store = await MattermostStore.open(":memory:");
 		const root = ROOT;
@@ -672,7 +876,7 @@ describe("agent projection", () => {
 					posts?: unknown[];
 					skips?: unknown[];
 					anchors?: Array<{
-						kind: string;
+						kinds: string[];
 						files?: Array<{ downloadCommand?: string[] }>;
 					}>;
 					technicalEntities?: Array<{

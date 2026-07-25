@@ -414,7 +414,11 @@ export async function getMattermostContext(
 			});
 		}
 
-		const shortPacking = Boolean(input.short || input.navigate);
+		// `--navigate` changes only the projection: packing stays on the default
+		// budget so a lean packet does not immediately demand `thread --full`,
+		// which costs more than the navigation view saves. `--short` remains the
+		// small-budget card mode.
+		const shortPacking = Boolean(input.short);
 		const budgets = {
 			maxCharacters: shortPacking
 				? Math.min(config.budgets.defaultMaxCharacters, SHORT_MAX_CHARACTERS)
@@ -941,6 +945,7 @@ export async function getMattermostContext(
 			warnings,
 			...(input.short ? { short: true } : {}),
 			...(input.navigate ? { navigate: true } : {}),
+			...(input.brief ? { brief: true } : {}),
 			...(input.signals ? { signals: true } : {}),
 		};
 	});
@@ -1329,6 +1334,7 @@ export async function getMattermostThread(
 			link: postLink(config, target.rootId || target.id),
 			thread: packed,
 			warnings: consolidateLocalFallbackWarnings(warnings),
+			...(input.brief ? { brief: true } : {}),
 			...(input.signals ? { signals: true } : {}),
 		};
 	});
