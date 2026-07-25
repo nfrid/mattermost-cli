@@ -525,6 +525,7 @@ export async function getMattermostContext(
 			...(input.short ? { short: true } : {}),
 			...(input.navigate ? { navigate: true } : {}),
 			...(input.brief ? { brief: true } : {}),
+			...(input.timeline ? { timeline: true } : {}),
 			...(input.signals ? { signals: true } : {}),
 		};
 	});

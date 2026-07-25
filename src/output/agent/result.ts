@@ -13,6 +13,7 @@ import type { CommandResult, Warning } from "../../shared/command-result.ts";
 import type { FileBatchDownloadResult } from "../../sync/file-batch-download.ts";
 import type { FileDownloadResult } from "../../sync/file-download.ts";
 import { isoTimestamp, subjectValue } from "../shared.ts";
+import { buildCrossThreadTimeline } from "../timeline.ts";
 import { shortMessagesFromThreads } from "./messages.ts";
 import {
 	projectRelatedTickets,
@@ -110,6 +111,9 @@ function projectContext(
 	const navigate = Boolean(data.navigate);
 	const short = Boolean(data.short);
 	const brief = Boolean(data.brief);
+	const timeline = Boolean(data.timeline);
+	const subjectTicket =
+		data.subject.kind === "ticket" ? data.subject.ticketKey : undefined;
 	const includeSignals = Boolean(data.signals);
 	const primaryIndex = pickPrimaryThreadIndex(data.threads);
 	const resolved = resolvedSubject(data.subject, data.threads);
@@ -118,11 +122,13 @@ function projectContext(
 			short,
 			navigate,
 			brief,
+			// The merged chronology already carries every packed message; repeating
+			// them per thread would double the packet for no added evidence.
+			omitPosts: timeline,
 			includeSignals,
 			rank: index + 1,
 			role: index === primaryIndex ? "primary" : "secondary",
-			subjectTicket:
-				data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+			subjectTicket,
 			...(resolved ? { anchorPostId: resolved.postId } : {}),
 		}),
 	);
@@ -142,6 +148,15 @@ function projectContext(
 		// The packet says which projection produced it: `brief` withholds packed
 		// posts by request, and a reader must not mistake that for the transcript.
 		...(brief ? { projection: "brief" as const } : {}),
+		...(timeline
+			? {
+					timeline: buildCrossThreadTimeline(data.threads, {
+						brief,
+						...(subjectTicket ? { subjectTicket } : {}),
+						...(resolved ? { anchorPostId: resolved.postId } : {}),
+					}),
+				}
+			: {}),
 		evidence:
 			data.evidence ??
 			buildEvidence({

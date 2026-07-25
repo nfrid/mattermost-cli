@@ -22,6 +22,7 @@ import type {
 import type { SyncResult } from "../sync/sync.ts";
 import { conversationLabel, formatSubject, isoTimestamp } from "./shared.ts";
 import { styles } from "./styles.ts";
+import { buildCrossThreadTimeline } from "./timeline.ts";
 
 interface WhoamiResult {
 	id: string;
@@ -246,11 +247,15 @@ function formatContext(data: ContextResult): string {
 			),
 			`max threads ${styles.accent(String(data.budget.maxThreads))}`,
 		]),
+		...(data.timeline ? formatCrossThreadTimeline(data) : []),
 		...orderThreadsForReading(data.threads).flatMap(({ thread, rank, role }) =>
 			formatContextThread(thread, {
 				rank,
 				role,
 				brief: Boolean(data.brief),
+				// With a merged chronology the per-thread transcript would repeat every
+				// message; the thread sections stay as headers plus their brief.
+				omitTranscript: Boolean(data.timeline),
 				subjectTicket:
 					data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
 			}),
@@ -308,6 +313,8 @@ function formatContextThread(
 		rank: number;
 		role: "primary" | "secondary";
 		brief: boolean;
+		/** Messages travel in the merged chronology instead of per thread. */
+		omitTranscript?: boolean;
 		subjectTicket?: string;
 	},
 ): string[] {
@@ -355,10 +362,70 @@ function formatContextThread(
 		// candidates inline; repeating them above would double the packet's core.
 		...(options.brief ? [] : formatDecisions(brief)),
 		...(options.brief ? [] : formatOpenQuestions(brief)),
-		...(options.brief
-			? formatBriefTimeline(thread.timeline, thread.posts, brief)
-			: formatTimeline(thread.timeline)),
+		...(options.omitTranscript
+			? []
+			: options.brief
+				? formatBriefTimeline(thread.timeline, thread.posts, brief)
+				: formatTimeline(thread.timeline)),
 	];
+}
+
+/**
+ * Merged chronology across the selected threads. Ranking order routinely puts a
+ * "we are rolling it out" message after the report that it broke; reading the
+ * packet in time order is the only way that sequence is recoverable without
+ * re-sorting timestamps by hand.
+ */
+function formatCrossThreadTimeline(data: ContextResult): string[] {
+	const entries = buildCrossThreadTimeline(data.threads, {
+		brief: Boolean(data.brief),
+		...(data.subject.kind === "ticket"
+			? { subjectTicket: data.subject.ticketKey }
+			: {}),
+	});
+	if (!entries.length) return [];
+	const tagOf = threadTagger(data.threads);
+	return [
+		`\n${styles.label("Timeline across threads")} ${styles.hint(`(${entries.length} event(s), earliest first)`)}`,
+		...entries.map((entry) =>
+			"skip" in entry
+				? styles.hint(
+						`[${entry.at}] ${tagOf(entry)} … skipped ${entry.skip.posts} message(s)`,
+					)
+				: joinParts([
+						`${styles.timestamp(`[${entry.at}]`)} ${tagOf(entry)} ${styles.username(`@${entry.author}`)}: ${entry.text}`,
+						...(entry.files?.length
+							? [styles.warning(`${entry.files.length} attachment(s)`)]
+							: []),
+					]),
+		),
+	];
+}
+
+/**
+ * Conversation tag for a merged event, disambiguated by retrieval rank when one
+ * conversation contributed several selected threads — otherwise two unrelated
+ * discussions interleave under one identical label.
+ */
+function threadTagger(
+	threads: readonly ContextThread[],
+): (entry: { conversation: string; threadId: string }) => string {
+	const perConversation = new Map<string, number>();
+	for (const thread of threads) {
+		perConversation.set(
+			thread.conversationAlias,
+			(perConversation.get(thread.conversationAlias) ?? 0) + 1,
+		);
+	}
+	const rankOf = new Map(
+		threads.map((thread, index) => [thread.threadId, index + 1]),
+	);
+	return ({ conversation, threadId }) =>
+		styles.channel(
+			(perConversation.get(conversation) ?? 0) > 1
+				? `[${conversation} · rank ${rankOf.get(threadId) ?? "?"}]`
+				: `[${conversation}]`,
+		);
 }
 
 /**

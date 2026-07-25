@@ -79,6 +79,8 @@ export function projectContextThread(
 		short: boolean;
 		navigate: boolean;
 		brief: boolean;
+		/** Packed posts travel in the merged cross-thread timeline instead. */
+		omitPosts?: boolean;
 		includeSignals: boolean;
 		rank: number;
 		role: "primary" | "secondary";
@@ -95,6 +97,7 @@ export function projectContextThread(
 			short: options.short,
 			navigate: options.navigate,
 			brief: options.brief,
+			omitPosts: options.omitPosts,
 			includeSignals: options.includeSignals,
 			rank: options.rank,
 			role: options.role,
@@ -133,6 +136,7 @@ export function projectPackedThread(
 		short?: boolean;
 		navigate?: boolean;
 		brief?: boolean;
+		omitPosts?: boolean;
 		includeSignals?: boolean;
 		rank?: number;
 		role?: "primary" | "secondary";
@@ -226,7 +230,7 @@ export function projectPackedThread(
 		...(signals ? { signals } : {}),
 		...(brief ? { brief } : {}),
 		...(skips?.length ? { skips } : {}),
-		...(options.navigate
+		...(options.navigate || options.omitPosts
 			? {}
 			: {
 					posts: options.brief

@@ -151,6 +151,12 @@ export function createProgram(
 				"decision-only projection: evidence, per-thread brief, and outcome-window posts",
 			).conflicts(["short", "navigate"]),
 		)
+		.addOption(
+			new Option(
+				"--timeline",
+				"merge the selected threads into one cross-thread chronology",
+			).conflicts(["short", "navigate"]),
+		)
 		.option(
 			"--signals",
 			"include advisory signals and technicalEntities in --agent output",

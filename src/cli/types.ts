@@ -50,6 +50,8 @@ export interface CommandOptions {
 	navigate?: boolean;
 	/** Decision-only `--agent` projection. */
 	brief?: boolean;
+	/** Merge selected threads into one cross-thread chronology. */
+	timeline?: boolean;
 	/** Opt-in agent emission of advisory `signals` and `technicalEntities`. */
 	signals?: boolean;
 	limit?: number;

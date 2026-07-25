@@ -76,6 +76,7 @@ export async function executeCommand(
 						short: commandOptions.short,
 						navigate: commandOptions.navigate,
 						brief: commandOptions.brief,
+						timeline: commandOptions.timeline,
 						signals: commandOptions.signals,
 					},
 					dependencies,

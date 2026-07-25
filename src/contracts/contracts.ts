@@ -640,6 +640,7 @@ const contextDataSchema = z.object({
 	short: z.boolean().optional(),
 	navigate: z.boolean().optional(),
 	brief: z.boolean().optional(),
+	timeline: z.boolean().optional(),
 	signals: z.boolean().optional(),
 });
 const threadDataSchema = z.object({

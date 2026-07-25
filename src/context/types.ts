@@ -59,6 +59,8 @@ export interface ContextInput extends SearchFilterInput {
 	navigate?: boolean;
 	/** Decision-only projection: evidence, brief, and the outcome window. */
 	brief?: boolean;
+	/** Merge the selected threads into one cross-thread chronology. */
+	timeline?: boolean;
 	/** Opt-in advisory `signals` / `technicalEntities` in `--agent` output. */
 	signals?: boolean;
 }
@@ -277,6 +279,8 @@ export interface ContextResult {
 	navigate?: boolean;
 	/** True when context used the decision-only brief projection. */
 	brief?: boolean;
+	/** True when the selected threads were merged into one chronology. */
+	timeline?: boolean;
 	/** True when advisory signals were requested for `--agent` projection. */
 	signals?: boolean;
 }
