@@ -51,7 +51,7 @@ Edit `.mattermost/config.json`. Channels and direct messages are separate allowl
   },
   "suppressAuthors": ["legacy-integration"],
   "people": {
-    "a.example": "Product manager"
+    "alice": "Product manager"
   },
   "budgets": {
     "matchNeighborhoodRadius": 2,
@@ -168,7 +168,7 @@ Hard retrieval limits are fixed in code: each probe retains at most eight signif
 
 Both `context` and `search` support hard thread filters: `--from <username>`, `--after <date>`, `--before <date>`, `--has-file`, and case-insensitive attachment filename substring matching with `--file <pattern>`. Dates are normalized to ISO timestamps in JSON; date-only values use UTC, date-times require `Z` or an explicit UTC offset, `after` is inclusive, and `before` is exclusive. `--file` implies `--has-file`.
 
-Explicit `--channel` aliases are a hard V1 allowlist: sync, local search, widening, direct resolution, and final hydration cannot leave them. Without explicit channels, routing may widen once unless `--no-widen` is set.
+An unknown `--channel` alias fails with `unknown_conversation` naming the closest known alias (when one is close enough to be worth suggesting) and a capped list of known aliases, channels before direct messages; an alias that is configured but not yet indexed is reported as such with the `mm sync --channel <alias>` that would fix it, rather than as a typo. Explicit `--channel` aliases are a hard V1 allowlist: sync, local search, widening, direct resolution, and final hydration cannot leave them. Without explicit channels, routing may widen once unless `--no-widen` is set.
 
 - Normal `context` reconciles stale routed conversations and re-fetches selected threads.
 - Conversation identity for retrieval comes from configured channel/DM IDs (and the local index); Mattermost is not asked to resolve every allowlisted conversation on each `context` call. Sync/freshen still validates identities for the conversations it actually refreshes.
@@ -179,12 +179,12 @@ Explicit `--channel` aliases are a hard V1 allowlist: sync, local search, wideni
 - `--fresh` forces routed reconciliation / remote thread refresh when possible.
 - `--local` performs zero network calls and conflicts with `--remote-search`.
 - `--brief` (on `context` / `thread`) returns the decision layer only; `--navigate` returns lean navigation on the default packing budget; `--short` remains the legacy small-budget card mode. `--timeline` (on `context`) merges the selected threads into one chronology instead of repeating them per thread, and combines with `--brief`.
-- `people` lists indexed authors with their Mattermost profile role, message counts, and latest activity, scoped to the configured allowlist (`--channel` narrows it, `--limit` truncates). Roles reach the index only when a sync touches that author, so a cold index reports `role unknown` and the command warns.
+- `people` lists indexed authors with their Mattermost profile role, message counts, and latest activity, scoped to the configured allowlist (`--channel` narrows it, `--limit` truncates). Roles reach the index only when a sync touches that author, so a cold index reports `role unknown`; when most listed people lack a role the command adds a `roles_unindexed` warning pointing at `mm sync`.
 - `context`, `search`, and `thread` accept `--out <path>`: the result document is written there (overwriting an explicit path, as `mm file --out` does) and stdout carries only `{"out","bytes"}` (or a one-line human receipt). A failed command is never redirected — the error stays on the stream the caller is reading.
 - `context` defaults to network reconciliation while `search` never leaves the local index, so the two commands can see different candidate sets for the same subject; `search` emits `stale_local_index` when its index is behind, and `context --local` is the way to compare like with like.
 - `search` is always local discovery (accepts `--local` for symmetry), includes a permalink per candidate, defaults to the top 10 ranked candidates (`--limit <n>` overrides), and reports search coverage; use `context` before relying on a result. In `--agent` output each candidate carries a 1-based `rank`, its ranking `reasons[]`, and at most `--excerpts <n>` excerpts (default 3; the remainder is counted in `omittedExcerpts` and the full match list stays in `--json`).
 - Short URL/ticket-stub threads are retained but downranked below substantive discussion with the same ticket (`thin_thread` in `--json` reasons).
-- Default `context` / `thread` output is a dense bounded packet with chronological skip markers for omitted spans.
+- Default `context` / `thread` output is a dense bounded packet with chronological skip markers for omitted spans. The prose renderer prints the `role: "primary"` thread first and labels each section `[primary]` / `[secondary]` with its retrieval `rank`; `--json` / `--agent` keep threads in retrieval order, so `rank` is how the two views map onto each other.
 - `thread` follows the same freshness policy as `context`: fresh local threads stay local unless `--fresh` forces a remote refresh.
 - Only the deliberately selected `thread --full` returns an unbudgeted complete thread.
 - `file <file-id>` downloads one attachment from a configured conversation to `/tmp/mm-<id>-<name>`, or to `--out <path>` (explicit path, overwrites), or into `--out-dir <dir>` (attachment name, created if missing, never overwrites — same naming and refusal rules as `mm files`). `--out` and `--out-dir` conflict. Contents are never downloaded automatically during context/sync.
@@ -201,7 +201,7 @@ Add `--json` to emit exactly one minified JSON document on stdout. Use `--pretty
 ```json
 {
   "command": "context",
-  "schemaVersion": 2,
+  "schemaVersion": 4,
   "success": true,
   "data": {},
   "warnings": []
@@ -217,7 +217,7 @@ Zod schemas and inferred TypeScript types for every command are exported from th
 Schema policy:
 
 - compatible optional/additive fields may retain the current `schemaVersion`;
-- removing or renaming a field, changing its meaning/type, changing required ordering, or changing error source/kind semantics requires a schema-version increment;
+- removing or renaming a field, changing its meaning/type, changing required ordering, or changing error source/kind semantics requires a schema-version increment; widening an existing enum counts, since a strict consumer cannot parse the new value — `schemaVersion` 4 adds `completeness.selectedThreads: "not_applicable"` alongside the additive `people[]`, `timeline[]`, `brief.openQuestions[]`, `decisions[].refinements[]`, and the `people` command;
 - human prose is opaque and may change without a schema-version increment.
 
 ## Package API
@@ -254,7 +254,7 @@ const data = await getMattermostContext({
 
 contextResultV1Schema.parse({
   command: "context",
-  schemaVersion: 2,
+  schemaVersion: 4,
   success: true,
   data,
   warnings: [],

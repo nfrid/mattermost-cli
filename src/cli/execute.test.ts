@@ -32,7 +32,7 @@ describe("emitResult file --agent", () => {
 		const document = JSON.parse(chunks[0] ?? "");
 		expect(document).toEqual({
 			command: "file",
-			schemaVersion: 3,
+			schemaVersion: 4,
 			success: true,
 			id: "file-1",
 			name: "trace.txt",

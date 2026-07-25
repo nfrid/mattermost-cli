@@ -34,7 +34,7 @@ describe("agent projection", () => {
 
 		expect(result).toEqual({
 			command: "context",
-			schemaVersion: 3,
+			schemaVersion: 4,
 			success: true,
 			subject: "payment evidence",
 			status: {
@@ -1447,7 +1447,7 @@ describe("agent projection", () => {
 		);
 		expect(result).toEqual({
 			command: "file",
-			schemaVersion: 3,
+			schemaVersion: 4,
 			success: true,
 			id: "file-1",
 			name: "trace.txt",

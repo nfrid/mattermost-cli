@@ -50,7 +50,7 @@ describe("schema version 3 command contracts", () => {
 		expect(
 			commandResultV1Schema.safeParse({
 				command: "search",
-				schemaVersion: 3,
+				schemaVersion: 4,
 				success: true,
 				data: { freshnessMode: "local" },
 				warnings: [],
@@ -61,7 +61,7 @@ describe("schema version 3 command contracts", () => {
 	test("accepts stable failure envelopes", () => {
 		const failure = failureResultV1Schema.parse({
 			command: "context",
-			schemaVersion: 3,
+			schemaVersion: 4,
 			success: false,
 			error: {
 				source: "config",
@@ -77,7 +77,7 @@ describe("schema version 3 command contracts", () => {
 	test("accepts additive optional signals flag on context and thread data", () => {
 		const contextOk = commandResultV1Schema.safeParse({
 			command: "context",
-			schemaVersion: 3,
+			schemaVersion: 4,
 			success: true,
 			data: {
 				subject: { kind: "ticket", ticketKey: "BTB-1", raw: "BTB-1" },
@@ -104,7 +104,7 @@ describe("schema version 3 command contracts", () => {
 
 		const threadOk = commandResultV1Schema.safeParse({
 			command: "thread",
-			schemaVersion: 3,
+			schemaVersion: 4,
 			success: true,
 			data: {
 				subject: {
