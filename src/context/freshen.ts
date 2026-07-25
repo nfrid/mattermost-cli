@@ -7,7 +7,10 @@ import {
 	type ThreadCandidate,
 } from "../search/index.ts";
 import type { Warning } from "../shared/command-result.ts";
-import { ConfigError } from "../shared/errors.ts";
+import {
+	unindexedConversationError,
+	unknownConversationError,
+} from "../shared/errors.ts";
 import {
 	FRESHEN_LOCK_STALE_MS,
 	FRESHEN_LOCK_TIMEOUT_MS,
@@ -82,9 +85,16 @@ export function resolveContextConversations(
 		(alias) => !selected.some((conversation) => conversation.alias === alias),
 	);
 	if (missing.length) {
-		throw new ConfigError(
-			`Unknown or unresolved configured conversation alias: ${missing.join(", ")}.`,
-			"unknown_conversation",
+		const configured = new Set([
+			...Object.keys(config.channels),
+			...Object.keys(config.directMessages),
+		]);
+		const unindexed = missing.filter((alias) => configured.has(alias));
+		if (unindexed.length) throw unindexedConversationError(unindexed);
+		throw unknownConversationError(
+			missing,
+			all.map(({ alias, kind }) => ({ alias, kind })),
+			"conversation alias",
 		);
 	}
 	return selected;

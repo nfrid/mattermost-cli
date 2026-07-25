@@ -71,6 +71,130 @@ export class ConfigError extends AppError {
 	}
 }
 
+/** Known aliases listed inline before the message defers to `mm channels`. */
+const LISTED_ALIASES = 12;
+/** Max edit distance for a "did you mean" suggestion (short aliases: typos). */
+const SUGGESTION_MAX_DISTANCE = 3;
+/** Below this length an alias is too generic to suggest anything from. */
+const MIN_SUGGESTION_LENGTH = 3;
+
+/**
+ * The alias exists in configuration but carries no local index yet, so it can
+ * be searched only after a sync. Reporting it as unknown sends the caller
+ * hunting for a typo that is not there.
+ */
+export function unindexedConversationError(
+	aliases: readonly string[],
+): ConfigError {
+	const command =
+		aliases.length === 1 && aliases[0]
+			? `\`mm sync --channel ${aliases[0]}\``
+			: "`mm sync`";
+	return new ConfigError(
+		`Configured but not indexed yet: ${aliases.join(", ")}. Run ${command} first.`,
+		"unknown_conversation",
+	);
+}
+
+/**
+ * One `unknown_conversation` error for every caller, so a mistyped `--channel`
+ * always answers the only question worth asking next: which aliases exist.
+ */
+export function unknownConversationError(
+	unknown: readonly string[],
+	known: readonly KnownConversation[],
+	context = "configured conversation alias",
+): ConfigError {
+	// Channels first: a per-person DM roster is long and rarely the alias a
+	// mistyped `--channel` was reaching for.
+	const normalized: Array<{
+		alias: string;
+		kind?: "channel" | "direct_message";
+	}> = known.map((entry) =>
+		typeof entry === "string" ? { alias: entry } : entry,
+	);
+	const sorted = [
+		...new Map(normalized.map((entry) => [entry.alias, entry])).values(),
+	].sort(
+		(left, right) =>
+			Number(left.kind === "direct_message") -
+				Number(right.kind === "direct_message") ||
+			left.alias.localeCompare(right.alias),
+	);
+	const aliases = sorted.map(({ alias }) => alias);
+	const suggestions = [
+		...new Set(
+			unknown.flatMap((alias) => {
+				const match = closestAlias(alias, aliases);
+				return match ? [match] : [];
+			}),
+		),
+	];
+	const listed = aliases.slice(0, LISTED_ALIASES);
+	const remaining = aliases.length - listed.length;
+	const parts = [`Unknown ${context}: ${unknown.join(", ")}.`];
+	if (suggestions.length)
+		parts.push(`Did you mean: ${suggestions.join(", ")}?`);
+	parts.push(
+		listed.length
+			? `Known aliases: ${listed.join(", ")}${remaining > 0 ? ` (+${remaining} more)` : ""} — see \`mm channels\`.`
+			: "No conversations are configured — see `mm channels`.",
+	);
+	return new ConfigError(parts.join(" "), "unknown_conversation");
+}
+
+/** An alias, optionally with its kind so channels can be listed first. */
+export type KnownConversation =
+	| string
+	| { alias: string; kind?: "channel" | "direct_message" };
+
+/**
+ * Nearest known alias by containment, then bounded edit distance. Containment
+ * needs a substantial needle: every alias contains `""` and most contain any
+ * single letter, and a fabricated suggestion is worse than none.
+ */
+function closestAlias(
+	alias: string,
+	known: readonly string[],
+): string | undefined {
+	const needle = alias.trim().toLowerCase();
+	if (needle.length < MIN_SUGGESTION_LENGTH) return undefined;
+	const contained = known.find(
+		(candidate) =>
+			candidate.toLowerCase().includes(needle) ||
+			needle.includes(candidate.toLowerCase()),
+	);
+	if (contained) return contained;
+	let best: { alias: string; distance: number } | undefined;
+	for (const candidate of known) {
+		const distance = editDistance(needle, candidate.toLowerCase());
+		if (
+			distance <= SUGGESTION_MAX_DISTANCE &&
+			(!best || distance < best.distance)
+		) {
+			best = { alias: candidate, distance };
+		}
+	}
+	return best?.alias;
+}
+
+function editDistance(left: string, right: string): number {
+	let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+	for (let row = 1; row <= left.length; row += 1) {
+		const current = [row];
+		for (let column = 1; column <= right.length; column += 1) {
+			current[column] = Math.min(
+				(previous[column] ?? 0) + 1,
+				(current[column - 1] ?? 0) + 1,
+				(previous[column - 1] ?? 0) +
+					(left[row - 1] === right[column - 1] ? 0 : 1),
+			);
+		}
+		previous = current;
+	}
+	return previous[right.length] ?? right.length;
+}
+
 /**
  * Mattermost returned structurally inconsistent data (a thread that does not
  * hang together, a post that moved). Not a configuration or routing decision,

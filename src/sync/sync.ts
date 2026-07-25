@@ -7,7 +7,11 @@ import type {
 	MattermostUser,
 } from "../mattermost/schemas.ts";
 import { mapWithConcurrency } from "../shared/concurrency.ts";
-import { AppError, ConfigError } from "../shared/errors.ts";
+import {
+	AppError,
+	ConfigError,
+	unknownConversationError,
+} from "../shared/errors.ts";
 import type {
 	ConversationRecord,
 	MattermostStore,
@@ -152,17 +156,21 @@ export async function resolveConversations(
 	aliases?: readonly string[],
 ): Promise<ConversationRecord[]> {
 	const requested = aliases?.length ? new Set(aliases) : null;
-	const configured = new Set([
-		...Object.keys(config.channels),
-		...Object.keys(config.directMessages),
-	]);
+	const configuredKinds = [
+		...Object.keys(config.channels).map((alias) => ({
+			alias,
+			kind: "channel" as const,
+		})),
+		...Object.keys(config.directMessages).map((alias) => ({
+			alias,
+			kind: "direct_message" as const,
+		})),
+	];
+	const configured = new Set(configuredKinds.map(({ alias }) => alias));
 	if (requested) {
 		const unknown = [...requested].filter((alias) => !configured.has(alias));
 		if (unknown.length) {
-			throw new ConfigError(
-				`Unknown configured conversation alias: ${unknown.join(", ")}.`,
-				"unknown_conversation",
-			);
+			throw unknownConversationError(unknown, configuredKinds);
 		}
 	}
 

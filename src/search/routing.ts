@@ -1,5 +1,8 @@
 import type { MattermostConfig } from "../config/config.ts";
-import { ConfigError } from "../shared/errors.ts";
+import {
+	unindexedConversationError,
+	unknownConversationError,
+} from "../shared/errors.ts";
 import type { ConversationRecord, MattermostStore } from "../store/index.ts";
 import { resolveConfiguredAllowlist } from "../sync/conversations.ts";
 import type {
@@ -37,9 +40,19 @@ export function routeConversations(
 		const known = new Set(conversations.map(({ alias }) => alias));
 		const unknown = [...explicit].filter((alias) => !known.has(alias));
 		if (unknown.length) {
-			throw new ConfigError(
-				`Unknown or unindexed conversation alias: ${unknown.join(", ")}.`,
-				"unknown_conversation",
+			// A configured alias missing from routing is unindexed, not mistyped:
+			// suggesting a neighbouring alias would send the caller after a typo
+			// that does not exist.
+			const configured = new Set([
+				...Object.keys(config.channels),
+				...Object.keys(config.directMessages),
+			]);
+			const unindexed = unknown.filter((alias) => configured.has(alias));
+			if (unindexed.length) throw unindexedConversationError(unindexed);
+			throw unknownConversationError(
+				unknown,
+				conversations.map(({ alias, kind }) => ({ alias, kind })),
+				"conversation alias",
 			);
 		}
 		return routingResult(

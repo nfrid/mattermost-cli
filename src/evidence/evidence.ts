@@ -16,7 +16,15 @@ import { isMediaOnlyPost, largestTimelineSkip } from "./packing.ts";
 
 export type EvidenceAdequacy = "usable" | "thin" | "insufficient";
 export type EvidenceCurrency = "current" | "possibly_stale" | "local_only";
-export type EvidenceThreadCompleteness = "complete" | "truncated";
+/**
+ * Posts inside the selected threads. `not_applicable` when nothing was
+ * selected: with no thread there is no transcript to be complete *or*
+ * truncated, and reporting truncation reads as withheld evidence.
+ */
+export type EvidenceThreadCompleteness =
+	| "complete"
+	| "truncated"
+	| "not_applicable";
 /**
  * Whether every ranked candidate was actually judged. `budget_bounded` means
  * candidates were left unexamined because thread or character room ran out, or
@@ -197,8 +205,9 @@ export function buildEvidence(input: {
 				? "current"
 				: "possibly_stale";
 
-	const selectedThreads: EvidenceThreadCompleteness =
-		!input.selectedThreadsComplete || recommendFullThreadIds.length > 0
+	const selectedThreads: EvidenceThreadCompleteness = !input.threads.length
+		? "not_applicable"
+		: !input.selectedThreadsComplete || recommendFullThreadIds.length > 0
 			? "truncated"
 			: "complete";
 	const selectionCompleteness: EvidenceSelectionCompleteness =

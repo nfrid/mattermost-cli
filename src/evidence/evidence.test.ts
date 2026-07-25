@@ -1241,6 +1241,8 @@ describe("buildEvidence", () => {
 		});
 		expect(evidence.adequacy).toBe("insufficient");
 		expect(evidence.currency).toBe("local_only");
+		// Nothing was selected, so there is no transcript to call truncated.
+		expect(evidence.completeness.selectedThreads).toBe("not_applicable");
 	});
 
 	test("recommends exactly one thread_full and keeps the rest optional", () => {

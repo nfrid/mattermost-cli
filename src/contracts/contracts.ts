@@ -552,7 +552,7 @@ const evidenceStatusSchema = z.object({
 	adequacy: z.enum(["usable", "thin", "insufficient"]),
 	currency: z.enum(["current", "possibly_stale", "local_only"]),
 	completeness: z.object({
-		selectedThreads: z.enum(["complete", "truncated"]),
+		selectedThreads: z.enum(["complete", "truncated", "not_applicable"]),
 		selection: z.enum(["complete", "budget_bounded"]).optional(),
 		indexHistory: z.enum(["full", "cutoff_bounded"]),
 		discovery: z.enum(["current", "possibly_stale", "local_only"]).optional(),
