@@ -17,6 +17,9 @@
 		]
 	},
 	"suppressAuthors": [],
+	"people": {
+		"alice": "Product manager"
+	},
 	"channels": {
 		"engineering": {
 			"name": "engineering",
