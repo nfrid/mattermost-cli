@@ -4,8 +4,13 @@ import type {
 	SearchContextResult,
 	ThreadResult,
 } from "../context/index.ts";
+import { pickPrimaryThreadIndex } from "../context/selection.ts";
 import { isMediaOnlyPost, type PackedPost } from "../evidence/packing.ts";
-import { buildThreadBrief } from "../evidence/signals.ts";
+import {
+	briefRetainedPostIds,
+	buildThreadBrief,
+	type ThreadBrief,
+} from "../evidence/signals.ts";
 import type { CommandResult } from "../shared/command-result.ts";
 import type { FileBatchDownloadResult } from "../sync/file-batch-download.ts";
 import type { FileDownloadResult } from "../sync/file-download.ts";
@@ -241,44 +246,15 @@ function formatContext(data: ContextResult): string {
 			),
 			`max threads ${styles.accent(String(data.budget.maxThreads))}`,
 		]),
-		...data.threads.flatMap((thread) => {
-			return [
-				`\n${joinParts([
-					formatConversation(thread.conversationKind, thread.conversationAlias),
-					styles.link(thread.link),
-				])}`,
-				formatField(
-					"Why",
-					thread.reasons.map((reason) => styles.accent(reason)).join(", "),
-				),
-				joinParts([
-					formatField(
-						"Posts",
-						styles.accent(`${thread.returnedPosts}/${thread.totalPosts}`),
-					),
-					`omitted ${styles.warning(String(thread.omittedPosts))}`,
-					`attachments ${styles.accent(String(thread.returnedAttachments))} returned/${styles.warning(String(thread.totalOmittedAttachments))} omitted`,
-				]),
-				joinParts([
-					formatField(
-						"Thread budget",
-						styles.accent(`${thread.budget.used}/${thread.budget.limit}`),
-					),
-					`strategy ${thread.selectionStrategy.map((strategy) => styles.hint(strategy)).join(", ")}`,
-				]),
-				...thread.omittedAttachments.map(formatOmittedAttachment),
-				...(thread.unreportedOmittedAttachments
-					? [
-							`${styles.warning("Unreported omitted attachments:")} ${styles.warning(String(thread.unreportedOmittedAttachments))}`,
-						]
-					: []),
-				...formatDecisions(
-					thread.posts,
+		...orderThreadsForReading(data.threads).flatMap(({ thread, rank, role }) =>
+			formatContextThread(thread, {
+				rank,
+				role,
+				brief: Boolean(data.brief),
+				subjectTicket:
 					data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
-				),
-				...formatTimeline(thread.timeline),
-			];
-		}),
+			}),
+		),
 		...(data.background?.length
 			? [
 					`\n${styles.label("Background (outside ticket routing, not hydrated):")}`,
@@ -297,6 +273,124 @@ function formatContext(data: ContextResult): string {
 				]
 			: []),
 	].join("\n");
+}
+
+/**
+ * Substance before retrieval order: `role: primary` is the thread picked for
+ * depth, and burying it under a higher-ranked stub puts the most informative
+ * transcript below the fold. `rank` stays printed so the reading order can be
+ * mapped back to the `--agent` `threads[]` order, which never changes.
+ */
+function orderThreadsForReading(threads: readonly ContextThread[]): Array<{
+	thread: ContextThread;
+	rank: number;
+	role: "primary" | "secondary";
+}> {
+	const primaryIndex = pickPrimaryThreadIndex(threads);
+	return threads
+		.map((thread, index) => ({
+			thread,
+			rank: index + 1,
+			role: (index === primaryIndex ? "primary" : "secondary") as
+				| "primary"
+				| "secondary",
+		}))
+		.sort(
+			(left, right) =>
+				Number(right.role === "primary") - Number(left.role === "primary") ||
+				left.rank - right.rank,
+		);
+}
+
+function formatContextThread(
+	thread: ContextThread,
+	options: {
+		rank: number;
+		role: "primary" | "secondary";
+		brief: boolean;
+		subjectTicket?: string;
+	},
+): string[] {
+	const brief = buildThreadBrief(thread.posts, {
+		subjectTicket: options.subjectTicket,
+		reasons: thread.reasons,
+	});
+	return [
+		`\n${joinParts([
+			formatConversation(thread.conversationKind, thread.conversationAlias),
+			options.role === "primary"
+				? styles.accent("[primary]")
+				: styles.hint("[secondary]"),
+			styles.hint(`rank ${options.rank}`),
+			styles.link(thread.link),
+		])}`,
+		formatField(
+			"Why",
+			thread.reasons.map((reason) => styles.accent(reason)).join(", "),
+		),
+		joinParts([
+			formatField(
+				"Posts",
+				styles.accent(`${thread.returnedPosts}/${thread.totalPosts}`),
+			),
+			`omitted ${styles.warning(String(thread.omittedPosts))}`,
+			`attachments ${styles.accent(String(thread.returnedAttachments))} returned/${styles.warning(String(thread.totalOmittedAttachments))} omitted`,
+		]),
+		joinParts([
+			formatField(
+				"Thread budget",
+				styles.accent(`${thread.budget.used}/${thread.budget.limit}`),
+			),
+			`strategy ${formatSelectionStrategy(thread.selectionStrategy)}`,
+		]),
+		...formatPurposeHints(brief),
+		...thread.omittedAttachments.map(formatOmittedAttachment),
+		...(thread.unreportedOmittedAttachments
+			? [
+					`${styles.warning("Unreported omitted attachments:")} ${styles.warning(String(thread.unreportedOmittedAttachments))}`,
+				]
+			: []),
+		// In brief mode the transcript *is* the decision layer and marks its own
+		// candidates inline; repeating them above would double the packet's core.
+		...(options.brief ? [] : formatDecisions(brief)),
+		...(options.brief
+			? formatBriefTimeline(thread.timeline, thread.posts, brief)
+			: formatTimeline(thread.timeline)),
+	];
+}
+
+/**
+ * Collapse consecutive repeats (`a, b, b, b` → `a, b ×3`): a packing strategy
+ * repeated once per neighborhood says nothing more than its count.
+ */
+function formatSelectionStrategy(strategies: readonly string[]): string {
+	const runs: Array<{ value: string; count: number }> = [];
+	for (const strategy of strategies) {
+		const last = runs[runs.length - 1];
+		if (last?.value === strategy) last.count += 1;
+		else runs.push({ value: strategy, count: 1 });
+	}
+	return runs
+		.map(({ value, count }) =>
+			count > 1 ? styles.hint(`${value} ×${count}`) : styles.hint(value),
+		)
+		.join(", ");
+}
+
+/** Advisory purpose hints, so the text view says what a thread is *for*. */
+function formatPurposeHints(brief: ThreadBrief): string[] {
+	if (!brief.purposeHints.length) return [];
+	return [
+		formatField(
+			"Purpose",
+			brief.purposeHints
+				.map(
+					({ label, confidence }) =>
+						`${styles.accent(label)} ${styles.hint(String(confidence))}`,
+				)
+				.join(", "),
+		),
+	];
 }
 
 function formatSearch(data: SearchContextResult): string {
@@ -364,6 +458,50 @@ function formatFilters(filters: {
 		: "";
 }
 
+/**
+ * Decision-only transcript: the posts the brief points at, with everything the
+ * projection withholds collapsed into an explicit marker. Packing's own skips
+ * keep their own counts, so the two omission kinds stay attributable.
+ */
+function formatBriefTimeline(
+	timeline: ContextThread["timeline"],
+	posts: readonly PackedPost[],
+	brief: ThreadBrief,
+): string[] {
+	const retained = briefRetainedPostIds(brief, posts);
+	const decisionIds = new Set(brief.decisionPostIds);
+	const lines: string[] = [];
+	let withheld = 0;
+	const flush = () => {
+		if (!withheld) return;
+		lines.push(
+			styles.hint(`… withheld ${withheld} message(s) (brief projection)`),
+		);
+		withheld = 0;
+	};
+	for (const item of timeline) {
+		if (item.kind === "skip") {
+			flush();
+			lines.push(...formatTimeline([item]));
+			continue;
+		}
+		if (!retained.has(item.post.id)) {
+			withheld += 1;
+			continue;
+		}
+		flush();
+		const [head, ...rest] = formatPost(item.post);
+		lines.push(
+			decisionIds.has(item.post.id)
+				? `${styles.warning("[decision candidate]")} ${head}`
+				: (head ?? ""),
+			...rest,
+		);
+	}
+	flush();
+	return lines;
+}
+
 function formatTimeline(timeline: ContextThread["timeline"]): string[] {
 	const lines: string[] = [];
 	for (const item of timeline) {
@@ -385,6 +523,10 @@ function formatTimeline(timeline: ContextThread["timeline"]): string[] {
 }
 
 function formatThread(data: ThreadResult): string {
+	const brief = buildThreadBrief(data.thread.posts, {
+		subjectTicket:
+			data.subject.kind === "ticket" ? data.subject.ticketKey : undefined,
+	});
 	return [
 		joinParts([
 			styles.label("Mattermost thread"),
@@ -409,15 +551,19 @@ function formatThread(data: ThreadResult): string {
 				"Budget",
 				`${styles.accent(`${data.thread.budget.used}/${data.thread.budget.limit}`)} ${styles.hint(data.thread.budget.measurement)}`,
 			),
-			`strategy ${data.thread.selectionStrategy.map((strategy) => styles.hint(strategy)).join(", ")}`,
+			`strategy ${formatSelectionStrategy(data.thread.selectionStrategy)}`,
 		]),
+		...formatPurposeHints(brief),
 		...data.thread.omittedAttachments.map(formatOmittedAttachment),
 		...(data.thread.unreportedOmittedAttachments
 			? [
 					`${styles.warning("Unreported omitted attachments:")} ${styles.warning(String(data.thread.unreportedOmittedAttachments))}`,
 				]
 			: []),
-		...formatTimeline(data.thread.timeline),
+		...(data.brief ? [] : formatDecisions(brief)),
+		...(data.brief
+			? formatBriefTimeline(data.thread.timeline, data.thread.posts, brief)
+			: formatTimeline(data.thread.timeline)),
 	].join("\n");
 }
 
@@ -510,11 +656,7 @@ function formatPost(post: PackedPost): string[] {
 }
 
 /** Inlined decision candidates so the text view answers "what was decided". */
-function formatDecisions(
-	posts: readonly PackedPost[],
-	subjectTicket?: string,
-): string[] {
-	const brief = buildThreadBrief(posts, { subjectTicket });
+function formatDecisions(brief: ThreadBrief): string[] {
 	const decisions = brief.decisions ?? [];
 	if (!decisions.length) return [];
 	return [

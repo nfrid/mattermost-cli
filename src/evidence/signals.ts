@@ -482,6 +482,39 @@ function buildBriefDecisions(
 	return decisions;
 }
 
+/**
+ * Post ids a decision-only projection keeps: the outcome window, the decision
+ * candidates with their acknowledgements, and the requested anchor. Shared by
+ * every `--brief` renderer so prose and `--agent` withhold the same posts.
+ *
+ * A thread that yielded no brief at all still keeps its last packed post: a
+ * projection that shows nothing but a withheld count is indistinguishable from
+ * an empty thread.
+ */
+export function briefRetainedPostIds(
+	brief: Pick<ThreadBrief, "decisionPostIds" | "decisions" | "outcomeWindow">,
+	posts: readonly EvidencePost[],
+	anchorPostId?: string,
+): Set<string> {
+	const retained = new Set<string>([
+		...(brief.outcomeWindow?.postIds ?? []),
+		...brief.decisionPostIds,
+	]);
+	for (const decision of brief.decisions ?? []) {
+		retained.add(decision.postId);
+		if (decision.ackPostId) retained.add(decision.ackPostId);
+	}
+	if (anchorPostId) retained.add(anchorPostId);
+	if (!retained.size) {
+		let latest: EvidencePost | undefined;
+		for (const post of posts) {
+			if (!latest || post.createAt > latest.createAt) latest = post;
+		}
+		if (latest) retained.add(latest.id);
+	}
+	return retained;
+}
+
 function collectPurposeHints(
 	posts: readonly EvidencePost[],
 	signals: ThreadSignals,

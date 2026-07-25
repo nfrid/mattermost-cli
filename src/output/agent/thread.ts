@@ -7,8 +7,10 @@ import {
 	largestTimelineSkip,
 } from "../../evidence/packing.ts";
 import {
+	briefRetainedPostIds,
 	buildThreadBrief,
 	buildThreadSignals,
+	type ThreadBrief,
 	type ThreadSignals,
 } from "../../evidence/signals.ts";
 import {
@@ -171,11 +173,12 @@ export function projectPackedThread(
 		options.reasons?.includes("multi_ticket_root")
 			? ("announce" as const)
 			: undefined;
-	const brief = projectThreadBrief(thread.posts, {
+	const domainBrief = buildThreadBrief(thread.posts, {
 		subjectTicket: options.subjectTicket,
 		reasons: options.reasons,
 		presentation,
 	});
+	const brief = projectThreadBrief(domainBrief);
 	const filesPresent = thread.posts.some((post) => post.attachments.length > 0)
 		? (true as const)
 		: undefined;
@@ -225,7 +228,7 @@ export function projectPackedThread(
 			? {}
 			: {
 					posts: options.brief
-						? briefTimeline(thread, brief, options.anchorPostId)
+						? briefTimeline(thread, domainBrief, options.anchorPostId)
 						: projectTimeline(thread.timeline, options.anchorPostId),
 				}),
 	};
@@ -240,21 +243,10 @@ export function projectPackedThread(
  */
 function briefTimeline(
 	thread: PackedThread,
-	brief: AgentThreadBrief | undefined,
+	brief: ThreadBrief,
 	anchorPostId?: string,
 ): AgentTimelineItem[] {
-	const kept = new Set<string>([
-		...(brief?.outcomeWindow?.postIds ?? []),
-		...(brief?.decisionPostIds ?? []),
-		...(brief?.decisions ?? []).flatMap((decision) =>
-			decision.ackPostId ? [decision.id, decision.ackPostId] : [decision.id],
-		),
-	]);
-	if (anchorPostId) kept.add(anchorPostId);
-	if (!kept.size) {
-		const latest = latestPackedPost(thread.posts);
-		if (latest) kept.add(latest.id);
-	}
+	const kept = briefRetainedPostIds(brief, thread.posts, anchorPostId);
 	const items: AgentTimelineItem[] = [];
 	let group: AgentMessageGroup | undefined;
 	let withheld = 0;
@@ -379,15 +371,7 @@ function threadTail(
 	return { kind, postId: latest.id, at: isoTimestamp(latest.createAt) };
 }
 
-function projectThreadBrief(
-	posts: readonly PackedPost[],
-	options: {
-		subjectTicket?: string;
-		reasons?: readonly string[];
-		presentation?: "announce";
-	},
-): AgentThreadBrief | undefined {
-	const brief = buildThreadBrief(posts, options);
+function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 	if (
 		!brief.purposeHints.length &&
 		!brief.decisionPostIds.length &&
