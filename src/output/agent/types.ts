@@ -382,6 +382,9 @@ export interface AgentCandidate {
 	latestAt: string;
 	/** Why this thread ranked: content matches first, then ordering artifacts. */
 	reasons: string[];
+	/** Probe values that contributed retrieval matches; not full-probe claims. */
+	contributingProbes?: string[];
+	omittedContributingProbes?: number;
 	excerpts: string[];
 	/** Excerpts beyond `--excerpts`; the full set stays in `--json`. */
 	omittedExcerpts?: number;

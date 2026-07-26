@@ -8,7 +8,7 @@ import {
 	widenedRouting,
 } from "../search/index.ts";
 import type { MattermostStore, ThreadSearchFilters } from "../store/index.ts";
-import { postLink } from "./helpers.ts";
+import { localEvidence, matchingProbeValues, postLink } from "./helpers.ts";
 import type { BackgroundThread } from "./types.ts";
 
 /** Background pointers returned per packet. */
@@ -86,9 +86,17 @@ export function findBackgroundThreads(input: {
 		// recognize. A trigram or prefix hit surfaces "rotating ssh keys" for the
 		// probe «idempotency keys» — which reads as evidence the probe worked and
 		// crowds out the pointers that earned their place.
+		const qualifiedProbes = new Set(
+			matchingProbeValues(
+				localEvidence(input.store, input.store.getThread(candidate.threadId)),
+				probes,
+			),
+		);
 		const strongMatches = candidate.matches.filter(
 			(match) =>
-				!match.lexicalSource || !WEAK_LEXICAL_SOURCES.has(match.lexicalSource),
+				qualifiedProbes.has(match.probe) &&
+				(!match.lexicalSource ||
+					!WEAK_LEXICAL_SOURCES.has(match.lexicalSource)),
 		);
 		if (!strongMatches.length) continue;
 		const excerpts = [

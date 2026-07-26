@@ -234,6 +234,7 @@ describe("agent projection", () => {
 					url: `https://chat.example.test/_redirect/pl/${ROOT}`,
 					latestAt: "1970-01-01T00:00:00.020Z",
 					reasons: expect.arrayContaining(["all_terms_in_thread"]),
+					contributingProbes: ["payment evidence"],
 					excerpts: [
 						"synthetic payment evidence",
 						"payment evidence confirmed",

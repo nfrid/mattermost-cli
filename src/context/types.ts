@@ -270,6 +270,10 @@ export interface ProbeCoverage {
 	/** Background pointers this probe matched; 0 when none or none were built. */
 	backgroundThreads: number;
 	status: "matched_selected" | "background_only" | "no_match";
+	/** Exact mechanical qualification used; never a semantic-equivalence claim. */
+	matchMode?: "normalized_terms_or_expansions";
+	/** Original normalized terms/phrases that had to qualify. */
+	retrievalCriteria?: string[];
 }
 
 /**

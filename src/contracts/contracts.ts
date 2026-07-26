@@ -310,6 +310,16 @@ const candidateSchema = z.object({
 			threadPostCount: z.number().int().nonnegative().optional(),
 			substantivePostCount: z.number().int().nonnegative().optional(),
 			threadDepthScore: z.number().int().nonnegative().optional(),
+			thinTicketStub: z.boolean().optional(),
+			multiTicketRoot: z.boolean().optional(),
+			ticketDensity: z.number().nonnegative().optional(),
+			nearestTicketDistance: z
+				.number()
+				.int()
+				.nonnegative()
+				.nullable()
+				.optional(),
+			rootAnchoredFocused: z.boolean().optional(),
 			latestRelevantMatchAt: z.number().int().nonnegative().nullable(),
 		})
 		.optional(),
@@ -477,6 +487,8 @@ const probeCoverageSchema = z.object({
 	matchedSelectedEvidence: z.boolean(),
 	backgroundThreads: z.number().int().nonnegative(),
 	status: z.enum(["matched_selected", "background_only", "no_match"]),
+	matchMode: z.literal("normalized_terms_or_expansions").optional(),
+	retrievalCriteria: z.array(z.string()).optional(),
 });
 const backgroundThreadSchema = z.object({
 	threadId: z.string(),

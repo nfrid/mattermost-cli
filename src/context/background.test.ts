@@ -111,12 +111,16 @@ describe("background threads", () => {
 				matchedSelectedEvidence: true,
 				backgroundThreads: 0,
 				status: "matched_selected",
+				matchMode: "normalized_terms_or_expansions",
+				retrievalCriteria: ["btb-1"],
 			},
 			{
 				probe: "idempotency keys",
 				matchedSelectedEvidence: false,
 				backgroundThreads: 1,
 				status: "background_only",
+				matchMode: "normalized_terms_or_expansions",
+				retrievalCriteria: ["idempotency", "keys"],
 			},
 		]);
 		expect(
@@ -165,6 +169,26 @@ describe("background threads", () => {
 		for (const coverage of context.probeCoverage ?? []) {
 			expect(coverage.matchedSelectedEvidence).toBe(false);
 		}
+		store.close();
+	});
+
+	test("a strong partial-term hit is not attributed as a full probe match", async () => {
+		const store = await seededStore();
+		const context = await getMattermostContext(
+			{ subject: "BTB-1", queries: ["idempotency bananas"], local: true },
+			{ config: configFixture(), store, now: () => 2_000 },
+		);
+
+		expect(
+			context.background?.some(({ matchedProbes }) =>
+				matchedProbes.includes("idempotency bananas"),
+			),
+		).toBeFalsy();
+		expect(
+			context.probeCoverage?.find(
+				({ probe }) => probe === "idempotency bananas",
+			)?.status,
+		).toBe("no_match");
 		store.close();
 	});
 

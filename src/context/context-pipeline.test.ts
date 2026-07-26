@@ -160,7 +160,12 @@ describe("context pipeline", () => {
 		]);
 		expect(result.warnings).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ kind: "unmapped_routing_hint" }),
+				expect.objectContaining({
+					kind: "unmapped_routing_hint",
+					message: expect.stringContaining(
+						"Known values on eligible conversations: payment",
+					),
+				}),
 				expect.objectContaining({ kind: "unmatched_retrieval_probe" }),
 			]),
 		);

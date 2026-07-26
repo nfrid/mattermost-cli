@@ -126,7 +126,7 @@ export async function searchMattermost(
 		if (freshness.some(({ coverageComplete }) => !coverageComplete)) {
 			warnings.push(incompleteHistoryWarning(freshness));
 		}
-		warnings.push(...routingHintWarnings(routing));
+		warnings.push(...routingHintWarnings(routing, config));
 		if (input.queries?.length || input.probes?.length) {
 			// `search` hydrates nothing, so it has no background pointers to
 			// distinguish: every unmatched probe here really did match nothing.

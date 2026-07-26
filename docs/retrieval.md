@@ -41,7 +41,10 @@ warning when that happens. Unknown repository or scope metadata hints emit the
 informational `unmapped_routing_hint` rather than being ignored silently. These
 hints are exact configured metadata values, not workspace names inferred from a
 ticket: an unmapped hint did not narrow routing, but does not make otherwise
-selected evidence invalid.
+selected evidence invalid. The informational warning lists capped known values
+only from conversations eligible for this request, so callers can correct an
+exact metadata alias without exposing unrelated config; it never auto-normalizes
+or widens routing.
 
 Probes change *which* threads are selected, not only how the selected ones are
 ordered: a packet built with `--query` is not a superset of the same subject

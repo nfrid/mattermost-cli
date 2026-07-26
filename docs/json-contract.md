@@ -91,8 +91,11 @@ entry per probe with `matchedSelectedEvidence`, `backgroundThreads`, and
 
 `background_only` means the probe matched no selected evidence but is exactly
 why a `background[]` pointer exists, which is a reportable outcome rather than a
-defect. Only `no_match` also raises the `unmatched_retrieval_probe` warning, so
-that warning no longer fires on every probed request.
+defect. `matchMode: "normalized_terms_or_expansions"` and
+`retrievalCriteria[]` name the exact full-probe qualification used here; they are
+not a semantic-equivalence claim. Only `no_match` also raises the
+`unmatched_retrieval_probe` warning, so that warning no longer fires on every
+probed request.
 
 ## Schema policy
 
@@ -127,7 +130,11 @@ as a V1 compatibility alias even when the recommended action is bounded
 `evidence.next[].action` enum; this release begins emitting it for skips with a
 usable boundary. `file --inspect` additively attaches either a bounded textual
 `inspection` preview or an explicit `not_interpreted` state to the existing file
-result.
+result. Search-agent candidates may carry capped `contributingProbes[]` (match
+contributors, not full-probe claims); raw JSON now retains
+additional already-computed ranking evidence (`thinTicketStub`,
+`multiTicketRoot`, ticket distance/density, and root focus) instead of stripping
+it during schema parsing.
 
 ## Schemas and fixtures
 

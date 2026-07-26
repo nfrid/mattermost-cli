@@ -31,6 +31,7 @@ import type {
 } from "./types.ts";
 
 const SHORT_MESSAGE_LIMIT = 8;
+const SEARCH_CONTRIBUTING_PROBES_LIMIT = 12;
 
 /** Neutral placeholders for projections with no discovery of their own. */
 const NO_REMOTE_SEARCH: RemoteSearchEvidence = {
@@ -242,6 +243,9 @@ function projectSearch(
 		subject: subjectValue(data.subject),
 		status: status(data.freshnessMode),
 		candidates: data.candidates.map((candidate, index): AgentCandidate => {
+			const contributingProbes = [
+				...new Set(candidate.matches.map(({ probe }) => probe)),
+			].filter(Boolean);
 			const excerpts = [
 				...new Set(candidate.matches.map(({ excerpt }) => excerpt)),
 			].filter((excerpt) => excerpt.length > 0);
@@ -253,6 +257,21 @@ function projectSearch(
 				url: candidate.link,
 				latestAt: isoTimestamp(candidate.latestActivityAt),
 				reasons: [...candidate.reasons],
+				...(contributingProbes.length
+					? {
+							contributingProbes: contributingProbes.slice(
+								0,
+								SEARCH_CONTRIBUTING_PROBES_LIMIT,
+							),
+							...(contributingProbes.length > SEARCH_CONTRIBUTING_PROBES_LIMIT
+								? {
+										omittedContributingProbes:
+											contributingProbes.length -
+											SEARCH_CONTRIBUTING_PROBES_LIMIT,
+									}
+								: {}),
+						}
+					: {}),
 				excerpts: excerpts.slice(0, data.excerptLimit),
 				...(excerpts.length > data.excerptLimit
 					? { omittedExcerpts: excerpts.length - data.excerptLimit }

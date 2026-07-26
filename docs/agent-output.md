@@ -53,8 +53,10 @@ Every command shares one top-level `threads[]` array — there is no `packet`
 wrapper object. `thread --agent` emits `threads: [thread]` plus context-like
 `evidence`. The duplicated singular `thread` key was removed in schema version 3.
 
-Ranking `why` reasons stay in `--json` only; agent ranking order encodes
-strength. For context packets each thread carries a 1-based retrieval `rank`,
+Opaque numeric score vectors stay in `--json`; agent ranking order encodes
+strength. `search --agent` candidates carry bounded `reasons[]` and
+`contributingProbes[]` so retrieval contributions can be attributed without
+claiming every term matched or exposing score internals. For context packets each thread carries a 1-based retrieval `rank`,
 independent of `role`.
 
 ### Counts

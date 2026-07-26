@@ -493,7 +493,7 @@ export async function getMattermostContext(
 				message: "No matching Mattermost thread was found.",
 			});
 		}
-		warnings.push(...routingHintWarnings(routing));
+		warnings.push(...routingHintWarnings(routing, config));
 		warnings.push(...probeWarnings(probeCoverage));
 
 		const searchCoverageComplete =

@@ -362,18 +362,38 @@ export function currentMatches(
 	return [...matches].sort();
 }
 
-export function routingHintWarnings(routing: RoutingResult): Warning[] {
+export function routingHintWarnings(
+	routing: RoutingResult,
+	config?: MattermostConfig,
+): Warning[] {
 	const warnings: Warning[] = [];
+	const known = (kind: "repositories" | "scopes") => {
+		if (!config) return "";
+		const values = [
+			...new Set(
+				routing.conversations.flatMap((conversation) => {
+					const metadata =
+						conversation.kind === "channel"
+							? config.channels[conversation.alias]
+							: config.directMessages[conversation.alias];
+					return metadata?.[kind] ?? [];
+				}),
+			),
+		].sort();
+		if (!values.length) return " No values of this kind are configured.";
+		const shown = values.slice(0, 12);
+		return ` Known values on eligible conversations: ${shown.join(", ")}${values.length > shown.length ? ` (+${values.length - shown.length} more)` : ""}.`;
+	};
 	if (routing.unmatchedHints.repositories.length) {
 		warnings.push({
 			kind: "unmapped_routing_hint",
-			message: `Repository routing hint(s) matched no configured conversation metadata: ${routing.unmatchedHints.repositories.join(", ")}.`,
+			message: `Informational: repository routing hint(s) matched no configured conversation metadata and did not narrow routing: ${routing.unmatchedHints.repositories.join(", ")}.${known("repositories")}`,
 		});
 	}
 	if (routing.unmatchedHints.scopes.length) {
 		warnings.push({
 			kind: "unmapped_routing_hint",
-			message: `Scope routing hint(s) matched no configured conversation metadata: ${routing.unmatchedHints.scopes.join(", ")}.`,
+			message: `Informational: scope routing hint(s) matched no configured conversation metadata and did not narrow routing: ${routing.unmatchedHints.scopes.join(", ")}.${known("scopes")}`,
 		});
 	}
 	return warnings;
@@ -420,6 +440,12 @@ export function buildProbeCoverage(
 			probe: probe.value,
 			...(probe.kind ? { kind: probe.kind } : {}),
 			matchedSelectedEvidence: selected,
+			matchMode: "normalized_terms_or_expansions" as const,
+			retrievalCriteria: probe.terms.length
+				? [...probe.terms]
+				: probe.phrases.length
+					? [...probe.phrases]
+					: [probe.value],
 			backgroundThreads,
 			status: selected
 				? "matched_selected"
