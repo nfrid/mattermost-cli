@@ -1,7 +1,7 @@
 [
 	{
 		"command": "whoami",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": true,
 		"data": {
 			"id": "user-1",
@@ -12,7 +12,7 @@
 	},
 	{
 		"command": "channels",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": true,
 		"data": {
 			"channels": [],
@@ -22,7 +22,7 @@
 	},
 	{
 		"command": "channels.validate",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": true,
 		"data": {
 			"valid": true,
@@ -33,7 +33,7 @@
 	},
 	{
 		"command": "doctor",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": true,
 		"data": {
 			"healthy": true,
@@ -43,7 +43,7 @@
 	},
 	{
 		"command": "sync",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": true,
 		"data": {
 			"conversations": []
@@ -52,7 +52,7 @@
 	},
 	{
 		"command": "search",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": true,
 		"data": {
 			"subject": {
@@ -91,7 +91,7 @@
 	},
 	{
 		"command": "context",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": true,
 		"data": {
 			"subject": {
@@ -134,7 +134,7 @@
 	},
 	{
 		"command": "thread",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": true,
 		"data": {
 			"subject": {
@@ -186,7 +186,7 @@
 	},
 	{
 		"command": "file",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": true,
 		"data": {
 			"id": "file-1",
@@ -201,7 +201,7 @@
 	},
 	{
 		"command": "files",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": true,
 		"data": {
 			"outDir": "/tmp/mm-files-batch",
@@ -248,7 +248,7 @@
 	},
 	{
 		"command": "context",
-		"schemaVersion": 4,
+		"schemaVersion": 5,
 		"success": false,
 		"error": {
 			"source": "config",

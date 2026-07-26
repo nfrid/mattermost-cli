@@ -217,7 +217,8 @@ Zod schemas and inferred TypeScript types for every command are exported from th
 Schema policy:
 
 - compatible optional/additive fields may retain the current `schemaVersion`;
-- removing or renaming a field, changing its meaning/type, changing required ordering, or changing error source/kind semantics requires a schema-version increment; widening an existing enum counts, since a strict consumer cannot parse the new value — `schemaVersion` 4 adds `completeness.selectedThreads: "not_applicable"` alongside the additive `people[]`, `timeline[]`, `brief.openQuestions[]`, `decisions[].refinements[]`, and the `people` command, and carries the later additive `evidence.verdict`, `evidence.selection.droppedByBudgetSubjectMatched`, `probeCoverage[]`, per-thread `totalPosts`, and the `brief` decision-layer fields (`kind`, `textTruncated`);
+- removing or renaming a field, changing its meaning/type, changing required ordering, or changing error source/kind semantics requires a schema-version increment; widening an existing enum counts, since a strict consumer cannot parse the new value — `schemaVersion` 4 adds `completeness.selectedThreads: "not_applicable"` alongside the additive `people[]`, `timeline[]`, `brief.openQuestions[]`, `decisions[].refinements[]`, and the `people` command;
+- `schemaVersion` 5 widens `evidence.next[].impact` with `may_verify_quantitative_claim` and reorders `brief.decisions[]` by `kind` before confidence, alongside the additive `evidence.verdict`, `evidence.selection.droppedByBudgetSubjectMatched`, `probeCoverage[]`, `permalinks[]`, per-thread `totalPosts`, `conversation_not_allowed` `error.details`, and the `brief` decision-layer fields (`kind`, `textTruncated`);
 - human prose is opaque and may change without a schema-version increment.
 
 ## Package API

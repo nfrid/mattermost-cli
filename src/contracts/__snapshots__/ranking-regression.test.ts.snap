@@ -276,7 +276,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
     "warnings": [],
     "widened": false,
   },
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "success": true,
   "warnings": [],
 }
@@ -528,7 +528,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
       "performed": false,
     },
   },
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "success": true,
   "warnings": [],
 }

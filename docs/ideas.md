@@ -188,3 +188,58 @@ retrieval benchmark, so any change needs a before/after benchmark run and a
 concrete cue hypothesis (message length, code-fence density, and
 question/commitment ratio are the obvious candidates). Do not hand-tune
 thresholds against this one packet.
+
+---
+
+## Candidate pools with their own budgets
+
+**Status:** open (raised by the Phase 7 field report; the reporting half shipped)
+
+**Problem.** The report saw 176 candidates with 173 `droppedByBudget` and could
+not tell whether anything real went unexamined — the pool mixes exact ticket
+mentions with morphology, transliteration and typo rescue, so `budget_bounded`
+looked alarming on every probed request.
+
+**What shipped instead.** `selection.droppedByBudgetSubjectMatched` counts the
+unexamined candidates that actually named the subject (ticket reasons, exact
+phrase, structured entity), and `evidence.verdict.mayHaveMissedOtherThreads`
+keys off that rather than the raw count. That answers the question the agent was
+asking the numbers.
+
+**Direction to explore later.** Real per-pool budgets — a guaranteed allowance
+for exact ticket mentions, then related-ticket evidence, then probe background,
+then weak lexical — change `selection` and `packing`, the hot path the retrieval
+benchmark exists to protect. It needs a before/after benchmark and a decision
+about what a guaranteed allowance costs the other pools, not a quiet tweak.
+
+---
+
+## Structured spreadsheet / CSV preview
+
+**Status:** declined (Phase 7 field report)
+
+**Problem.** A decision's numbers often live only in an attached XLSX or CSV, so
+the report asked for a safe in-tool preview (sheet names, columns, row counts,
+first rows).
+
+**Why not.** XLSX is a zip of XML: previewing it means a third-party parser
+inside a read-only tool that holds a Mattermost PAT — new dependency, new
+attack surface, and a new class of "the tool said" evidence — to save a step the
+caller can already take. `evidence.next` now recommends the download
+(`data_file_on_decision_post`) with `mimeType` and `size`; reading the file is
+the caller's job, with their own tools.
+
+---
+
+## Consuming structured `mg ticket` output
+
+**Status:** declined for now (Phase 7 field report)
+
+**Problem.** Mattermost links in a ticket description had to be copied by hand
+into `mm`.
+
+**What shipped instead.** A repeatable `--permalink` folds them into one packet
+with per-link resolution reporting. That removes the manual reconciliation
+without coupling `mm` to another tool's output format — the caller still decides
+which links are worth passing, which is also the boundary that keeps `mm`
+usable outside this workspace.
