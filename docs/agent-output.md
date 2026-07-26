@@ -21,7 +21,7 @@ posts + decision layer). Explicit `--brief --navigate` is also allowed.
 | --- | --- |
 | default (non-ticket) | dense `posts` and `messages`, per-thread `brief`, `evidence` |
 | ticket `--agent` default / `--brief` | decision layer only (`projection: "brief"`) |
-| ticket `--agent --full-posts` | dense posts **and** top-level merged `brief` / `researchSummary` (no `projection: "brief"`) |
+| ticket `--agent --full-posts` | dense posts **and** top-level merged `brief` / `researchSummary` (`projection: "brief"` so agents see the decision layer is present) |
 | `--navigate` | lean navigation: `anchors` / `clusters` / `skips` / packing hints; ticket `--agent` still emits top-level `brief` |
 | `--timeline` | one merged chronology instead of per-thread `posts[]` |
 | `--short` | legacy card + timeline projection |
@@ -29,9 +29,10 @@ posts + decision layer). Explicit `--brief --navigate` is also allowed.
 
 For a **ticket** subject, `context … --agent` applies the brief projection
 automatically (`projection: "brief"` on the envelope). Pass `--full-posts` to
-keep dense posts **while still emitting** top-level `brief`, or `--navigate` /
-`--short` for those modes. Free-text and post subjects keep the dense default
-unless `--brief` is explicit. Start ticket research with `context KEY --agent`.
+keep dense posts **while still emitting** top-level `brief` (envelope still
+marked `projection: "brief"`), or `--navigate` / `--short` for those modes.
+Free-text and post subjects keep the dense default unless `--brief` is
+explicit. Start ticket research with `context KEY --agent`.
 
 When brief filtering or packing omits chronology, `timelineComplete: false`
 marks that the visible timeline is incomplete.
@@ -70,9 +71,11 @@ collapses into a `{ "skip": { "reason": "brief_projection" } }` marker and the
 envelope is marked `projection: "brief"` — shown messages plus skip counts always
 equal `messageCount`. The top-level `brief` merges `decisions[]` and
 `openQuestions[]` across selected threads (unresolved open questions are never
-dropped from the merge; answered ones fill remaining slots); each entry carries
-`threadId`. Per-thread briefs remain for locality. Use `--full-posts` when you
-need the dense transcript **together with** the decision brief.
+dropped from the merge; `possibly_answered` / answered ones fill remaining
+slots); each entry carries `threadId`. Per-thread briefs remain for locality.
+Use `--full-posts` when you need the dense transcript **together with** the
+decision brief — the envelope still carries `projection: "brief"` whenever
+top-level `brief` is present.
 
 **`--timeline`** adds a top-level `timeline[]` merging every selected thread into
 one chronology (`at` / `conversation` / `threadId` / `author` / `postId` /
@@ -239,7 +242,8 @@ when any exist, otherwise highest ticket signal / non-noise purpose — agent
 `decisionThreadIds` (threads that contribute brief decisions, strongest-first),
 `decisionsByKind` (zeros omitted), `unresolvedOpenQuestions` (packet-local
 resolutions other than `possibly_answered` / `answered`; matches the unresolved
-entries kept in top-level `brief.openQuestions[]`),
+count among top-level `brief.openQuestions[]`, which may also keep
+`possibly_answered` fillers up to the merge cap),
 `blockedOrUnresolvedPermalinks` (caller inputs with status `not_allowed` /
 `unresolved` / `invalid`), and `recommendedNext` (action names from
 `evidence.next` steps with `priority: "recommended"`). Counts and ids only — never
@@ -350,11 +354,13 @@ range boundary.
 
 Do not invent optional `sync` / `inspect_dropped` follow-ups when absent.
 `inspect_dropped`, when emitted for thin/ticket actionable drops, stays
-`optional`. When `droppedByBudgetSubjectMatched > 0` and a non-thin
-subject-matched drop remains, `inspect_dropped` is `recommended` (thin bulletin
-excerpts are still withheld). It carries
+`optional`. When `droppedByBudgetSubjectMatched > 0`, a `review_candidates`
+re-run with a higher `--max-threads` is always `recommended` (so
+`--follow-recommended` can bump the budget). A non-thin subject-matched drop
+also emits `inspect_dropped` as `recommended` (thin bulletin excerpts are still
+withheld). That inspect step carries
 `["mm","thread",<droppedId>,"--agent"]` — copy that argv rather than re-running
-`context`.
+`context` when you only need the dropped thread.
 
 Match and dropped-candidate excerpts best-effort redact login/password/token
 phrases (`[REDACTED]`); this is not an anonymization guarantee.

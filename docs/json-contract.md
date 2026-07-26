@@ -190,8 +190,8 @@ Agent projection may emit `hints.readOrder` and `timelineComplete`. Informationa
 Subject-matched / permalink threads are probe-pinned so `--query` cannot drop
 them as no_match. Request-scoped `--max-threads` / `--max-characters` /
 `--per-thread-characters` override config budgets without changing defaults
-when omitted. Subject-matched budget drops recommend both `inspect_dropped`
-and a `review_candidates` re-run with a higher `--max-threads`.
+when omitted. Subject-matched budget drops always recommend a `review_candidates` re-run with
+a higher `--max-threads`; a non-thin drop also recommends `inspect_dropped`.
 
 ## Schemas and fixtures
 

@@ -510,7 +510,7 @@ function mayHaveMissedNoActionReason(
 		case "local_discovery":
 			return "discovery used the local index only; no refresh step is available for this packet";
 		case "subject_matched_budget_drops":
-			return "subject-matched candidates were dropped by budget but no inspect_dropped step is available";
+			return "subject-matched candidates were dropped by budget but no review_candidates or inspect_dropped step is available";
 		default:
 			return "mayHaveMissedOtherThreads is set but no follow-up command is available";
 	}
@@ -1144,30 +1144,36 @@ function collectNextActions(input: {
 					}
 				: {}),
 		});
-		if (subjectMatchedOnly && input.subject) {
-			const bumpedMaxThreads = Math.min(
-				20,
-				Math.max(
-					5,
-					input.selectionCounts.returnedThreads +
-						input.selectionCounts.droppedByBudgetSubjectMatched,
-				),
-			);
-			next.push({
-				action: "review_candidates",
-				reason: "subject_matched_budget_drops",
-				priority: "recommended",
-				impact: "may_add_dropped_pointer",
-				command: [
-					"mm",
-					"context",
-					input.subject,
-					"--max-threads",
-					String(bumpedMaxThreads),
-					"--agent",
-				],
-			});
-		}
+	}
+	// Always recommend a higher --max-threads re-run when subject-matched
+	// candidates were budget-dropped — even if inspect_dropped was withheld for
+	// a thin bulletin — so --follow-recommended can bump the selection cap.
+	if (
+		input.selectionCounts.droppedByBudgetSubjectMatched > 0 &&
+		input.subject
+	) {
+		const bumpedMaxThreads = Math.min(
+			20,
+			Math.max(
+				5,
+				input.selectionCounts.returnedThreads +
+					input.selectionCounts.droppedByBudgetSubjectMatched,
+			),
+		);
+		next.push({
+			action: "review_candidates",
+			reason: "subject_matched_budget_drops",
+			priority: "recommended",
+			impact: "may_add_dropped_pointer",
+			command: [
+				"mm",
+				"context",
+				input.subject,
+				"--max-threads",
+				String(bumpedMaxThreads),
+				"--agent",
+			],
+		});
 	}
 	if (
 		input.selectionCompleteness === "budget_bounded" &&

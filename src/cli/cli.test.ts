@@ -499,7 +499,7 @@ describe("CLI output", () => {
 			}),
 		).toBe(0);
 		const denseDoc = JSON.parse(fullPosts.text);
-		expect(denseDoc.projection).toBeUndefined();
+		expect(denseDoc.projection).toBe("brief");
 		expect(denseDoc.brief?.decisions?.length).toBeGreaterThan(0);
 		expect(JSON.stringify(denseDoc)).toContain(
 			"промежуточное сообщение про интеграцию",

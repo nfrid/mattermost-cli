@@ -274,8 +274,12 @@ function projectContext(
 				timeline,
 			}),
 		},
-		// Lean brief withholds posts; full-posts keeps dense transcript + brief.
-		...(withholdForBrief ? { projection: "brief" as const } : {}),
+		// Mark brief whenever the decision layer is present — lean withholds posts;
+		// full-posts keeps dense transcript + brief and still sets the marker so
+		// agents keying on `projection` see that top-level brief is there.
+		...(mergedBrief || withholdForBrief
+			? { projection: "brief" as const }
+			: {}),
 		...(mergedBrief ? { brief: mergedBrief } : {}),
 		...(researchSummary ? { researchSummary } : {}),
 		...(timeline || withholdForBrief || fullPosts ? { timelineComplete } : {}),
@@ -651,9 +655,9 @@ function mergeThreadBriefs(
 	decisions.sort(compareMergedDecisions);
 	openQuestions.sort(compareMergedOpenQuestions);
 	const cappedDecisions = decisions.slice(0, MAX_DECISION_POST_IDS);
-	// Prefer every unresolved question in the merge so the list length matches
-	// `researchSummary.unresolvedOpenQuestions`; answered ones fill remaining
-	// slots up to the usual cap.
+	// Prefer every unresolved question in the merge; answered /
+	// possibly_answered ones fill remaining slots up to the usual cap. Only the
+	// unresolved count aligns with `researchSummary.unresolvedOpenQuestions`.
 	const unresolved = openQuestions.filter(isUnresolvedOpenQuestion);
 	const answered = openQuestions.filter(
 		(question) => !isUnresolvedOpenQuestion(question),

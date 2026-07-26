@@ -1955,6 +1955,7 @@ describe("evidence verdict", () => {
 	test("subject-matched budget drop still skips thin bulletin excerpts", () => {
 		const evidence = buildEvidence({
 			...baseInput(),
+			subject: "BTB-1",
 			selection: {
 				...emptySelection(),
 				candidateThreads: 4,
@@ -1983,9 +1984,18 @@ describe("evidence verdict", () => {
 		expect(evidence.next.map(({ action }) => action)).not.toContain(
 			"inspect_dropped",
 		);
-		expect(evidence.verdict.recommendedActionRequired).toBe(false);
-		expect(evidence.verdict.noActionAvailable).toBe(true);
-		expect(evidence.verdict.noActionReason).toMatch(/inspect_dropped/);
+		expect(
+			evidence.next.find(
+				(step) =>
+					step.action === "review_candidates" &&
+					step.reason === "subject_matched_budget_drops",
+			),
+		).toMatchObject({
+			priority: "recommended",
+			command: ["mm", "context", "BTB-1", "--max-threads", "5", "--agent"],
+		});
+		expect(evidence.verdict.recommendedActionRequired).toBe(true);
+		expect(evidence.verdict.noActionAvailable).toBeUndefined();
 	});
 
 	test("never contradicts the axes it is derived from", () => {
