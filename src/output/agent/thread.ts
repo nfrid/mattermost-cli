@@ -109,6 +109,8 @@ export function projectContextThread(
 			ticketDensity: thread.ticketDensity,
 			nearestTicketDistance: thread.nearestTicketDistance,
 			reasons: thread.reasons,
+			historicalNeighbor: thread.historicalNeighbor,
+			relatedTicketKey: thread.relatedTicketKey,
 		},
 	);
 	const lean = options.short || options.navigate || options.brief;
@@ -147,6 +149,8 @@ export function projectPackedThread(
 		ticketDensity?: number;
 		nearestTicketDistance?: number | null;
 		reasons?: readonly string[];
+		historicalNeighbor?: true;
+		relatedTicketKey?: string;
 		/** Requested post id, marked with `anchor` in the timeline. */
 		anchorPostId?: string;
 	} = {},
@@ -185,7 +189,7 @@ export function projectPackedThread(
 		presentation,
 		omittedPosts: thread.omittedPosts,
 	});
-	const brief = projectThreadBrief(domainBrief);
+	const brief = projectThreadBrief(domainBrief, thread.posts);
 	const filesPresent = thread.posts.some((post) => post.attachments.length > 0)
 		? (true as const)
 		: undefined;
@@ -225,6 +229,12 @@ export function projectPackedThread(
 		...(options.rank !== undefined ? { rank: options.rank } : {}),
 		...(options.role ? { role: options.role } : {}),
 		...(presentation ? { presentation } : {}),
+		...(options.historicalNeighbor
+			? { historicalNeighbor: true as const }
+			: {}),
+		...(options.relatedTicketKey
+			? { relatedTicketKey: options.relatedTicketKey }
+			: {}),
 		...(filesPresent ? { filesPresent } : {}),
 		...(!cardMode && clusters?.length ? { clusters } : {}),
 		...(card ?? {}),
@@ -380,7 +390,10 @@ function threadTail(
 	return { kind, postId: latest.id, at: isoTimestamp(latest.createAt) };
 }
 
-function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
+function projectThreadBrief(
+	brief: ThreadBrief,
+	posts: readonly PackedPost[],
+): AgentThreadBrief | undefined {
 	if (
 		!brief.purposeHints.length &&
 		!brief.decisionPostIds.length &&
@@ -389,6 +402,7 @@ function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 	) {
 		return undefined;
 	}
+	const postsById = new Map(posts.map((post) => [post.id, post]));
 	const decisions = (brief.decisions ?? []).map(
 		(decision): AgentBriefDecision => ({
 			id: decision.postId,
@@ -427,20 +441,28 @@ function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 		}),
 	);
 	const openQuestions = (brief.openQuestions ?? []).map(
-		(question): AgentBriefOpenQuestion => ({
-			id: question.postId,
-			author: question.author,
-			at: isoTimestamp(question.createAt),
-			kind: question.kind,
-			text: question.excerpt,
-			...(question.excerptTruncated ? { textTruncated: true as const } : {}),
-			repliesAfter: question.repliesAfter,
-			...(question.resolution ? { resolution: question.resolution } : {}),
-			...(question.responsePostIds?.length
-				? { responsePostIds: question.responsePostIds }
-				: {}),
-			...(question.isThreadTail ? { isThreadTail: true as const } : {}),
-		}),
+		(question): AgentBriefOpenQuestion => {
+			const responseExcerpts =
+				question.resolution === "possibly_answered" &&
+				question.responsePostIds?.length
+					? responseExcerptsFor(question.responsePostIds, postsById)
+					: undefined;
+			return {
+				id: question.postId,
+				author: question.author,
+				at: isoTimestamp(question.createAt),
+				kind: question.kind,
+				text: question.excerpt,
+				...(question.excerptTruncated ? { textTruncated: true as const } : {}),
+				repliesAfter: question.repliesAfter,
+				...(question.resolution ? { resolution: question.resolution } : {}),
+				...(question.responsePostIds?.length
+					? { responsePostIds: question.responsePostIds }
+					: {}),
+				...(responseExcerpts?.length ? { responseExcerpts } : {}),
+				...(question.isThreadTail ? { isThreadTail: true as const } : {}),
+			};
+		},
 	);
 	return {
 		purposeHints: brief.purposeHints,
@@ -449,6 +471,25 @@ function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 		...(openQuestions.length ? { openQuestions } : {}),
 		...(brief.outcomeWindow ? { outcomeWindow: brief.outcomeWindow } : {}),
 	};
+}
+
+/** Inline the packed response posts a `possibly_answered` question points at. */
+function responseExcerptsFor(
+	responsePostIds: readonly string[],
+	postsById: ReadonlyMap<string, PackedPost>,
+): NonNullable<AgentBriefOpenQuestion["responseExcerpts"]> {
+	const excerpts: NonNullable<AgentBriefOpenQuestion["responseExcerpts"]> = [];
+	for (const id of responsePostIds) {
+		const post = postsById.get(id);
+		if (!post || post.deleteAt) continue;
+		excerpts.push({
+			id: post.id,
+			author: post.authorUsername,
+			at: isoTimestamp(post.createAt),
+			text: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
+		});
+	}
+	return excerpts;
 }
 
 function projectThreadSignals(

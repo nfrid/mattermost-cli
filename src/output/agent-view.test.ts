@@ -906,6 +906,348 @@ describe("agent projection", () => {
 		store.close();
 	});
 
+	test("emits top-level merged brief under --brief with threadId on each entry", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const ack = "cccccccccccccccccccccccccc";
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture(), userFixture({ id: "user-2", username: "bob" })],
+			posts: [
+				postFixture({
+					id: ROOT,
+					message: "BTB-2112 роли конфликтуют",
+					create_at: 10,
+				}),
+				postFixture({
+					id: REPLY,
+					root_id: ROOT,
+					user_id: "user-2",
+					message: "BTB-2112 решили: координатор будет выше КС",
+					create_at: 20,
+				}),
+				postFixture({
+					id: ack,
+					root_id: ROOT,
+					message: "хорошо",
+					create_at: 30,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: ack,
+				newestPostAt: 30,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		const context = await getMattermostContext(
+			{
+				subject: "BTB-2112",
+				channels: ["payments"],
+				local: true,
+				brief: true,
+			},
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		) as unknown as {
+			projection?: string;
+			brief?: {
+				decisions?: Array<{ id: string; threadId: string; kind: string }>;
+				openQuestions?: Array<{ id: string; threadId: string }>;
+			};
+			researchSummary?: {
+				primaryThreadId?: string;
+				decisionThreadIds: string[];
+				decisionsByKind?: Record<string, number>;
+				unresolvedOpenQuestions: number;
+				recommendedNext: string[];
+			};
+			threads: Array<{
+				threadId: string;
+				role?: string;
+				brief?: { decisions?: Array<{ id: string; kind: string }> };
+			}>;
+		};
+
+		expect(result.projection).toBe("brief");
+		expect(result.brief?.decisions?.length).toBeGreaterThan(0);
+		expect(result.brief?.decisions?.[0]).toMatchObject({
+			id: REPLY,
+			threadId: ROOT,
+			kind: "approved_decision",
+		});
+		// Per-thread brief stays for locality.
+		expect(result.threads[0]?.brief?.decisions?.[0]?.id).toBe(REPLY);
+		expect(result.researchSummary?.primaryThreadId).toBe(ROOT);
+		expect(result.researchSummary?.decisionThreadIds).toEqual([ROOT]);
+		expect(result.researchSummary?.decisionsByKind?.approved_decision).toBe(1);
+		expect(result.researchSummary?.recommendedNext).toEqual([]);
+		store.close();
+	});
+
+	test("inlines responseExcerpts on possibly_answered open questions", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const answer = "cccccccccccccccccccccccccc";
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture(), userFixture({ id: "user-2", username: "bob" })],
+			posts: [
+				postFixture({
+					id: ROOT,
+					message: "BTB-1 давайте решим: capabilities или отдельный роут?",
+					create_at: 10,
+				}),
+				postFixture({
+					id: answer,
+					root_id: ROOT,
+					user_id: "user-2",
+					message: "я за отдельный роут",
+					create_at: 20,
+				}),
+				postFixture({
+					id: REPLY,
+					root_id: ROOT,
+					message: "надо будет с Аней обсудить",
+					create_at: 30,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: REPLY,
+				newestPostAt: 30,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		const context = await getMattermostContext(
+			{ subject: "BTB-1", channels: ["payments"], local: true },
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		) as unknown as {
+			brief?: unknown;
+			researchSummary?: { unresolvedOpenQuestions: number };
+			threads: Array<{
+				brief?: {
+					openQuestions?: Array<{
+						id: string;
+						resolution?: string;
+						responsePostIds?: string[];
+						responseExcerpts?: Array<{
+							id: string;
+							author: string;
+							at: string;
+							text: string;
+						}>;
+					}>;
+				};
+			}>;
+		};
+
+		// Top-level brief is brief-projection only.
+		expect(result.brief).toBeUndefined();
+		const question = result.threads[0]?.brief?.openQuestions?.find(
+			({ id }) => id === ROOT,
+		);
+		expect(question?.resolution).toBe("possibly_answered");
+		expect(question?.responsePostIds).toEqual([answer]);
+		expect(question?.responseExcerpts).toEqual([
+			{
+				id: answer,
+				author: "bob",
+				at: "1970-01-01T00:00:00.020Z",
+				text: "я за отдельный роут",
+			},
+		]);
+		expect(
+			result.researchSummary?.unresolvedOpenQuestions,
+		).toBeGreaterThanOrEqual(0);
+		store.close();
+	});
+
+	test("researchSummary counts unresolved open questions and recommended next", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: ROOT,
+					message: "BTB-2 смотрим отчёт",
+					create_at: 10,
+				}),
+				postFixture({
+					id: REPLY,
+					root_id: ROOT,
+					message: "а по координаторам что делаем?",
+					create_at: 20,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: REPLY,
+				newestPostAt: 20,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		const context = await getMattermostContext(
+			{ subject: "BTB-2", channels: ["payments"], local: true },
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		) as unknown as {
+			researchSummary?: {
+				primaryThreadId?: string;
+				decisionThreadIds: string[];
+				unresolvedOpenQuestions: number;
+				recommendedNext: string[];
+				blockedOrUnresolvedPermalinks?: string[];
+			};
+			threads: Array<{
+				brief?: {
+					openQuestions?: Array<{ resolution?: string }>;
+				};
+			}>;
+		};
+
+		expect(result.researchSummary?.primaryThreadId).toBe(ROOT);
+		expect(result.researchSummary?.decisionThreadIds).toEqual([]);
+		expect(result.researchSummary?.unresolvedOpenQuestions).toBeGreaterThan(0);
+		expect(
+			result.threads[0]?.brief?.openQuestions?.some(
+				({ resolution }) =>
+					resolution === "unanswered" || resolution === "unknown",
+			),
+		).toBe(true);
+		expect(result.researchSummary?.recommendedNext).toEqual(expect.any(Array));
+		expect(
+			result.researchSummary?.blockedOrUnresolvedPermalinks,
+		).toBeUndefined();
+		store.close();
+	});
+
+	test("researchSummary orients to decision thread over noise role=primary", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const noiseRoot = ROOT;
+		const decisionRoot = "cccccccccccccccccccccccccc";
+		const decisionPost = "dddddddddddddddddddddddddd";
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture(), userFixture({ id: "user-2", username: "bob" })],
+			posts: [
+				postFixture({
+					id: noiseRoot,
+					message: "TECHSUPP-109",
+					create_at: 10,
+				}),
+				postFixture({
+					id: REPLY,
+					root_id: noiseRoot,
+					message: "ok",
+					create_at: 20,
+				}),
+				postFixture({
+					id: decisionRoot,
+					message: "TECHSUPP-109: option A vs B?",
+					create_at: 30,
+				}),
+				postFixture({
+					id: decisionPost,
+					root_id: decisionRoot,
+					user_id: "user-2",
+					message: "TECHSUPP-109 итого: решили option B, фиксируем",
+					create_at: 40,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: decisionPost,
+				newestPostAt: 40,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		const context = await getMattermostContext(
+			{
+				subject: "TECHSUPP-109",
+				channels: ["payments"],
+				local: true,
+				brief: true,
+			},
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const noise = context.threads.find(
+			(thread) => thread.threadId === noiseRoot,
+		);
+		const decision = context.threads.find(
+			(thread) => thread.threadId === decisionRoot,
+		);
+		if (!noise || !decision) {
+			store.close();
+			throw new Error("Expected both noise and decision threads.");
+		}
+		// Force the TECHSUPP-109 shape: thin noise stub keeps role=primary while
+		// the decision lives on a secondary substantive thread.
+		context.threads = [
+			{
+				...noise,
+				reasons: ["ticket_in_root"],
+				rootAnchoredFocused: true,
+				exclusiveSubjectKey: true,
+				ticketDensity: 1,
+				totalPosts: 2,
+			},
+			{
+				...decision,
+				reasons: ["exact_phrase", "substantive_thread_depth"],
+				rootAnchoredFocused: false,
+				exclusiveSubjectKey: false,
+				ticketDensity: 0.2,
+				totalPosts: 95,
+			},
+		];
+		const result = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		) as unknown as {
+			researchSummary?: {
+				primaryThreadId?: string;
+				decisionThreadIds: string[];
+				decisionsByKind?: Record<string, number>;
+			};
+			threads: Array<{
+				threadId: string;
+				role?: string;
+				brief?: {
+					purposeHints?: Array<{ label: string }>;
+					decisions?: Array<{ kind: string }>;
+				};
+			}>;
+		};
+
+		const noiseProjected = result.threads.find(
+			(thread) => thread.threadId === noiseRoot,
+		);
+		const decisionProjected = result.threads.find(
+			(thread) => thread.threadId === decisionRoot,
+		);
+		expect(noiseProjected?.role).toBe("primary");
+		expect(decisionProjected?.role).toBe("secondary");
+		expect(decisionProjected?.brief?.decisions?.length).toBeGreaterThan(0);
+		expect(result.researchSummary?.decisionThreadIds).toEqual([decisionRoot]);
+		expect(result.researchSummary?.primaryThreadId).toBe(decisionRoot);
+		expect(result.researchSummary?.decisionsByKind).toBeDefined();
+		store.close();
+	});
+
 	test("collapses one post into a single anchor carrying every kind", async () => {
 		const store = await MattermostStore.open(":memory:");
 		store.writePage({
@@ -1703,6 +2045,208 @@ describe("agent projection", () => {
 			],
 		});
 		expect(JSON.stringify(result)).not.toContain("secret-bytes");
+	});
+
+	test("brief shrinks historical secondaries and labels relatedTicketKey", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture();
+		const relatedRoot = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const focusedRoot = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
+		const relatedPosts = [
+			postFixture({
+				id: relatedRoot,
+				message: "BTB-701 historical payment outage war room",
+				create_at: 10,
+			}),
+			...Array.from({ length: 40 }, (_, index) =>
+				postFixture({
+					id: `r${String(index).padStart(25, "0")}`,
+					root_id: relatedRoot,
+					message:
+						index === 20
+							? "Side note: BTB-1281 might be related later"
+							: `BTB-701 retry path detail ${index} ${"подробности ".repeat(8)}`,
+					create_at: 20 + index,
+				}),
+			),
+		];
+		store.writePage({
+			conversation: payments,
+			users: [userFixture()],
+			posts: [
+				...relatedPosts,
+				postFixture({
+					id: focusedRoot,
+					message: "BTB-1281 payment timeout in reconcile",
+					create_at: 200,
+				}),
+				postFixture({
+					id: "cccccccccccccccccccccccccc",
+					root_id: focusedRoot,
+					message: "BTB-1281 reproduced; shipping the retry patch",
+					create_at: 210,
+				}),
+				postFixture({
+					id: "dddddddddddddddddddddddddd",
+					root_id: focusedRoot,
+					message: "BTB-1281 approved, merging next",
+					create_at: 220,
+				}),
+			],
+			checkpoint: {
+				conversationId: payments.id,
+				newestPostId: "dddddddddddddddddddddddddd",
+				newestPostAt: 220,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		const config = configFixture({
+			budgets: {
+				...configFixture().budgets,
+				defaultMaxCharacters: 16_000,
+				defaultPerThreadCharacters: 6_000,
+			},
+		});
+		const dense = await getMattermostContext(
+			{
+				subject: "BTB-1281",
+				channels: ["payments"],
+				local: true,
+			},
+			{ config, store, now: () => 1_000 },
+		);
+		const brief = await getMattermostContext(
+			{
+				subject: "BTB-1281",
+				channels: ["payments"],
+				local: true,
+				brief: true,
+			},
+			{ config, store, now: () => 1_000 },
+		);
+		expect(brief.threads.length).toBeGreaterThanOrEqual(2);
+		expect(dense.threads.length).toBeGreaterThanOrEqual(2);
+		const briefSecondary = brief.threads.find(
+			(thread) => thread.threadId === relatedRoot,
+		);
+		const denseSecondary = dense.threads.find(
+			(thread) => thread.threadId === relatedRoot,
+		);
+		expect(briefSecondary).toMatchObject({
+			historicalNeighbor: true,
+			relatedTicketKey: "BTB-701",
+		});
+		expect(briefSecondary?.returnedPosts).toBeLessThan(
+			denseSecondary?.returnedPosts ?? Number.POSITIVE_INFINITY,
+		);
+		const projected = projectAgentResult(
+			commandSuccess("context", brief, brief.warnings),
+		) as unknown as {
+			threads: Array<{
+				threadId: string;
+				historicalNeighbor?: true;
+				relatedTicketKey?: string;
+				role?: string;
+			}>;
+		};
+		expect(
+			projected.threads.find((thread) => thread.threadId === relatedRoot),
+		).toMatchObject({
+			historicalNeighbor: true,
+			relatedTicketKey: "BTB-701",
+			role: "secondary",
+		});
+		store.close();
+	});
+
+	test("navigate keeps multiple selected threads as stubs", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture();
+		const firstRoot = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const secondRoot = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
+		store.writePage({
+			conversation: payments,
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: firstRoot,
+					message: "BTB-2112 first thread root with enough substance tokens",
+					create_at: 10,
+				}),
+				...Array.from({ length: 30 }, (_, index) =>
+					postFixture({
+						id: `f${String(index).padStart(25, "0")}`,
+						root_id: firstRoot,
+						message: `BTB-2112 first thread detail ${index} ${"x".repeat(80)}`,
+						create_at: 20 + index,
+					}),
+				),
+				postFixture({
+					id: secondRoot,
+					message: "BTB-2112 second thread root",
+					create_at: 200,
+				}),
+				postFixture({
+					id: "cccccccccccccccccccccccccc",
+					root_id: secondRoot,
+					message: "BTB-2112 second thread decision: ship it",
+					create_at: 210,
+				}),
+			],
+			checkpoint: {
+				conversationId: payments.id,
+				newestPostId: "cccccccccccccccccccccccccc",
+				newestPostAt: 210,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		const config = configFixture({
+			budgets: {
+				...configFixture().budgets,
+				defaultMaxCharacters: 3_000,
+				defaultPerThreadCharacters: 3_000,
+				defaultMaxThreads: 3,
+			},
+		});
+		const base = await getMattermostContext(
+			{
+				subject: "BTB-2112",
+				channels: ["payments"],
+				local: true,
+			},
+			{ config, store, now: () => 1_000 },
+		);
+		const navigate = await getMattermostContext(
+			{
+				subject: "BTB-2112",
+				channels: ["payments"],
+				local: true,
+				navigate: true,
+			},
+			{ config, store, now: () => 1_000 },
+		);
+		expect(base.threads.length).toBeGreaterThanOrEqual(2);
+		expect(navigate.threads.length).toBe(base.threads.length);
+		expect(
+			navigate.warnings.some(
+				({ kind }) => kind === "navigate_truncated_threads",
+			),
+		).toBe(false);
+		const projected = projectAgentResult(
+			commandSuccess("context", navigate, navigate.warnings),
+		) as unknown as {
+			threads: Array<{ posts?: unknown; anchors?: unknown[] }>;
+		};
+		expect(projected.threads).toHaveLength(navigate.threads.length);
+		for (const thread of projected.threads) {
+			expect(thread.posts).toBeUndefined();
+			expect(thread.anchors?.length).toBeGreaterThan(0);
+		}
+		store.close();
 	});
 });
 

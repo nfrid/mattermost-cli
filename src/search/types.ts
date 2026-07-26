@@ -195,6 +195,8 @@ export interface ThreadRankingEvidence {
 	ticketDensity?: number;
 	nearestTicketDistance?: number | null;
 	rootAnchoredFocused?: boolean;
+	exclusiveSubjectKey?: boolean;
+	otherTicketDominated?: boolean;
 	latestRelevantMatchAt: number | null;
 }
 
@@ -241,6 +243,7 @@ export type ScoreVector = [
 	number,
 	number,
 	number,
+	number,
 ];
 
 export interface CandidateRank {
@@ -248,6 +251,8 @@ export interface CandidateRank {
 	explicitTicketRelationship: number;
 	ticketInRoot: number;
 	ticketInReply: number;
+	/** Focused this-ticket thread vs related-mention neighborhood. */
+	ticketFocus: number;
 	subjectInRoot: number;
 	exactPhraseInRoot: number;
 	proximityTier: number;

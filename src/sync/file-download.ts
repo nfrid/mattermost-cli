@@ -20,6 +20,11 @@ export interface FileDownloadInput {
 	 */
 	outDir?: string;
 	local?: boolean;
+	/**
+	 * When true (`mm file --agent`), refuse `--out` paths ending in `.json` so
+	 * agents do not confuse binary bytes with stdout metadata (fail closed).
+	 */
+	agent?: boolean;
 	/** Download, then emit a bounded preview or an explicit not-interpreted state. */
 	inspect?: boolean;
 	/** Preview line cap for inspection (1–40); requires inspect. */
@@ -64,6 +69,7 @@ export async function downloadMattermostFile(
 	if (!fileId) {
 		throw new ConfigError("File id is required.", "invalid_file_target");
 	}
+	rejectAgentJsonOut(input);
 	if (input.previewLines !== undefined && !input.inspect) {
 		throw new ConfigError(
 			"--preview-lines requires --inspect.",
@@ -270,11 +276,30 @@ export async function pathExists(path: string): Promise<boolean> {
 	}
 }
 
+/**
+ * Keep Unicode letters/numbers and a small safe punctuation set; replace path
+ * separators and other control/special chars so names cannot traverse.
+ */
 export function sanitizeFileName(name: string): string {
 	const cleaned = name
-		.replaceAll(/[^\w.\-()+ @]/gu, "_")
+		.replaceAll(/[^\p{L}\p{N}.\-()+ @_]/gu, "_")
 		.replaceAll(/_+/g, "_")
 		.replace(/^\.+/, "")
 		.slice(0, MAX_FILE_NAME_LENGTH);
 	return cleaned || "attachment";
+}
+
+/**
+ * `--agent` prints file metadata JSON on stdout; `--out` always receives binary
+ * bytes. Rejecting `.json` destinations closes the common agent footgun of
+ * treating `file --out` like retrieval `--out` (JSON receipt).
+ */
+function rejectAgentJsonOut(input: FileDownloadInput): void {
+	if (!input.agent) return;
+	const out = input.out?.trim();
+	if (!out?.toLowerCase().endsWith(".json")) return;
+	throw new ConfigError(
+		"In --agent mode, --out must not end in .json: metadata is printed on stdout; --out receives the binary file bytes. Choose a non-.json path (or omit --out).",
+		"agent_json_out_rejected",
+	);
 }

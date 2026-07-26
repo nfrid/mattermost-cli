@@ -1,6 +1,7 @@
 import type { MattermostConfig } from "../config/config.ts";
 import {
 	extractTicketKeys,
+	isTrackerIssueHost,
 	MULTI_TICKET_BULLETIN_MIN_KEYS,
 } from "../search/extract.ts";
 import {
@@ -12,6 +13,29 @@ import { postLink } from "./helpers.ts";
 import type { ContextThread, RelatedTicketPointer } from "./types.ts";
 
 const RELATED_TICKET_HOP_LIMIT = 3;
+const URL_PATTERN = /https?:\/\/[^\s<>()]+/giu;
+
+/**
+ * Tracker issue URL beside `key` whose host is a known tracker/Jira host.
+ * Kibana (and other non-tracker) URLs that merely contain a KEY-shaped path
+ * segment never qualify — even when the key appears in the URL string.
+ */
+export function findTrackerUrlBesideKey(
+	text: string,
+	key: string,
+): string | undefined {
+	const upperKey = key.toUpperCase();
+	for (const raw of text.match(URL_PATTERN) ?? []) {
+		const value = raw.replace(/[.,;:!?\])}]+$/g, "");
+		if (!value.toUpperCase().includes(upperKey)) continue;
+		try {
+			if (isTrackerIssueHost(new URL(value).hostname)) return value;
+		} catch {
+			// Skip unparseable URL-shaped tokens.
+		}
+	}
+	return undefined;
+}
 
 export function resolveRelatedTicketPointers(input: {
 	config: MattermostConfig;
@@ -32,6 +56,7 @@ export function resolveRelatedTicketPointers(input: {
 		conversationId: string;
 		conversationAlias: string;
 		createAt: number;
+		message: string;
 		excerpt: string;
 		inWindow: boolean;
 		multiTicketBulletin: boolean;
@@ -73,6 +98,7 @@ export function resolveRelatedTicketPointers(input: {
 					conversationId: thread.conversationId,
 					conversationAlias: thread.conversationAlias,
 					createAt: post.createAt,
+					message: post.message,
 					excerpt: truncateExcerpt(post.message, POINTER_EXCERPT_LIMIT),
 					inWindow:
 						windowIds.has(post.id) || thread.matchingPostIds.includes(post.id),
@@ -167,6 +193,9 @@ export function resolveRelatedTicketPointers(input: {
 				? entry.first.threadId
 				: undefined);
 		const sourceThreadId = entry.first.threadId;
+		const trackerUrl = [...(byKey.get(entry.key) ?? [])]
+			.map((mention) => findTrackerUrlBesideKey(mention.message, entry.key))
+			.find((url): url is string => Boolean(url));
 		// In-packet only when the projected target is selected; source-only
 		// pointers (no resolved best thread) keep the in-packet mention excerpt.
 		const alreadyInPacket = bestThreadId
@@ -178,6 +207,9 @@ export function resolveRelatedTicketPointers(input: {
 				mentions: entry.mentions,
 				sourceThreadId,
 				...(alreadyInPacket ? { alreadyInPacket: true } : {}),
+				...(trackerUrl
+					? { trackerUrl }
+					: { unresolvableTracker: true as const }),
 				excerpt: entry.first.excerpt,
 			});
 			continue;
@@ -201,6 +233,7 @@ export function resolveRelatedTicketPointers(input: {
 			mentions: entry.mentions,
 			threadId: bestThreadId,
 			url: postLink(input.config, bestThreadId),
+			...(trackerUrl ? { trackerUrl } : {}),
 			...(conversation ? { conversation: conversation.alias } : {}),
 			...(latestAt ? { latestAt } : {}),
 			excerpt: truncateExcerpt(

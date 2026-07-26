@@ -139,6 +139,12 @@ export interface PackThreadOptions {
 	 * in the middle of the core. Used for primary ticket threads after reclaim.
 	 */
 	contiguousTicketCore?: boolean;
+	/**
+	 * Aggressive lean packing for brief historical/related secondaries: keep
+	 * subject-ticket mentions, match hits, root, and a short latest tail — no
+	 * radius neighborhoods, gap-fill, or structural densest windows.
+	 */
+	historicalNeighborBrief?: boolean;
 	/** Packing projection mode. Short keeps root + ticket/file/latest anchors. */
 	mode?: "default" | "short";
 	limit: number;
@@ -188,13 +194,14 @@ export function packThread(
 		if (added) strategies.push(strategy);
 	};
 	const shortMode = options.mode === "short";
+	const historicalNeighborBrief = Boolean(options.historicalNeighborBrief);
 	const subjectTicket = options.subjectTicketKey?.toUpperCase();
-	const matchRadius = Math.max(
-		1,
-		options.neighborhoodRadius ?? DEFAULT_NEIGHBORHOOD_RADIUS,
-	);
-	const ticketRadius =
-		options.ticketNeighborhoodRadius !== undefined
+	const matchRadius = historicalNeighborBrief
+		? 0
+		: Math.max(1, options.neighborhoodRadius ?? DEFAULT_NEIGHBORHOOD_RADIUS);
+	const ticketRadius = historicalNeighborBrief
+		? 0
+		: options.ticketNeighborhoodRadius !== undefined
 			? Math.max(0, options.ticketNeighborhoodRadius)
 			: Math.max(matchRadius, DEFAULT_TICKET_NEIGHBORHOOD_RADIUS);
 	const mergeGap = Math.max(
@@ -231,6 +238,7 @@ export function packThread(
 		!options.full &&
 		!options.windowOnly &&
 		!shortMode &&
+		!historicalNeighborBrief &&
 		Boolean(subjectTicket) &&
 		Boolean(ticketMetrics?.ticketHitPostIds.length) &&
 		Boolean(inTicketWindow);
@@ -336,12 +344,13 @@ export function packThread(
 			add([...beforeIds, ...afterIds], "around_neighborhood");
 		}
 
-		if (mergeGap > 0) {
+		if (mergeGap > 0 && !historicalNeighborBrief) {
 			const mergeIds = clusterMergeIds(chronological, order, mergeGap);
 			add(mergeIds, "cluster_merge");
 		}
 
-		const allowStructural = options.structuralAnchors !== false;
+		const allowStructural =
+			options.structuralAnchors !== false && !historicalNeighborBrief;
 		if (allowStructural) {
 			if (shortMode) {
 				add(
@@ -369,9 +378,11 @@ export function packThread(
 			}
 		}
 
-		const latestCount = shortMode
-			? SHORT_LATEST_PRIORITY_COUNT
-			: LATEST_PRIORITY_COUNT;
+		const latestCount = historicalNeighborBrief
+			? 1
+			: shortMode
+				? SHORT_LATEST_PRIORITY_COUNT
+				: LATEST_PRIORITY_COUNT;
 		// Keep only a short high-priority tail so gap-fill can reclaim the middle.
 		add(
 			chronological
@@ -406,8 +417,9 @@ export function packThread(
 		const latestIds = new Set(
 			chronological.slice(-LATEST_PRIORITY_COUNT).map(({ id }) => id),
 		);
-		const prioritizedOrder =
-			preferTicketWindows && inTicketWindow
+		const prioritizedOrder = historicalNeighborBrief
+			? order
+			: preferTicketWindows && inTicketWindow
 				? [
 						...order.filter((id) => inTicketWindow.has(id)),
 						// Keep only intentional off-window anchors (root / files / fences /
@@ -434,7 +446,8 @@ export function packThread(
 			options.gapFill !== false &&
 			!options.full &&
 			!options.windowOnly &&
-			!shortMode;
+			!shortMode &&
+			!historicalNeighborBrief;
 		if (gapFillEnabled) {
 			const filled = fillLargestInternalGaps(
 				chronological,
@@ -448,7 +461,12 @@ export function packThread(
 			if (filled.added) strategies.push("gap_fill");
 		}
 
-		if (!options.full && !options.windowOnly && !shortMode) {
+		if (
+			!options.full &&
+			!options.windowOnly &&
+			!shortMode &&
+			!historicalNeighborBrief
+		) {
 			let extended = false;
 			for (const post of chronological.slice().reverse()) {
 				if (selected.has(post.id)) continue;

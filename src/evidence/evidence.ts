@@ -1,5 +1,6 @@
 import {
 	isActionableDroppedCandidate,
+	isSubjectMatchedBudgetDrop,
 	pickPrimaryThreadIndex,
 	shouldRecommendInspectDropped,
 } from "../context/selection.ts";
@@ -56,7 +57,9 @@ export type EvidenceNextImpact =
 	| "may_add_dropped_pointer"
 	| "may_refresh_selected_or_discovery"
 	| "may_contradict_visible_text"
-	| "may_verify_quantitative_claim";
+	| "may_verify_quantitative_claim"
+	/** Spreadsheet bytes on a decision post; mm cannot verify quantities. */
+	| "cannot_verify_quantities";
 
 export interface EvidenceNextStep {
 	action: EvidenceNextAction;
@@ -472,6 +475,13 @@ const DATA_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
 	"txt",
 ]);
 
+/** Workbook formats mm never parses; CSV/TSV stay verifiable via `--inspect`. */
+const SPREADSHEET_DATA_EXTENSIONS: ReadonlySet<string> = new Set([
+	"xlsx",
+	"xls",
+	"ods",
+]);
+
 /**
  * A data file hanging off a decision-layer post (a decision, its refinements,
  * an open question, or the outcome window).
@@ -540,6 +550,11 @@ function findDecisionDataAttachment(
 function isDataFileName(name: string): boolean {
 	const extension = name.split(".").pop()?.toLowerCase();
 	return Boolean(extension && DATA_FILE_EXTENSIONS.has(extension));
+}
+
+function isSpreadsheetDataFileName(name: string): boolean {
+	const extension = name.split(".").pop()?.toLowerCase();
+	return Boolean(extension && SPREADSHEET_DATA_EXTENSIONS.has(extension));
 }
 
 function attachmentCommand(attachment: UnreadOutcomeAttachment): string[] {
@@ -709,7 +724,9 @@ function collectNextActions(input: {
 			// A media-only post is unreadable without its file; this post has text,
 			// so it is the second call to make, not the first.
 			priority: attachment ? "optional" : "recommended",
-			impact: "may_verify_quantitative_claim",
+			impact: isSpreadsheetDataFileName(dataFile.fileName)
+				? "cannot_verify_quantities"
+				: "may_verify_quantitative_claim",
 			command: attachmentCommand(dataFile),
 			threadId: dataFile.threadId,
 			postId: dataFile.postId,
@@ -744,8 +761,21 @@ function collectNextActions(input: {
 			isActionableDroppedCandidate(candidate) &&
 			shouldRecommendInspectDropped(candidate, input.selectedMessages),
 	);
-	if (actionableDropped) {
-		const droppedThreadId = actionableDropped.threadId;
+	// When subject-matched budget drops set mayHaveMissedOtherThreads but no
+	// thin/ticket inspect fired, point at the best budget drop that still adds
+	// an unseen excerpt — optional only; never forces recommendedActionRequired.
+	const subjectMatchedBudgetDrop =
+		!actionableDropped &&
+		input.selectionCounts.droppedByBudgetSubjectMatched > 0
+			? input.droppedCandidates.find(
+					(candidate) =>
+						isSubjectMatchedBudgetDrop(candidate) &&
+						shouldRecommendInspectDropped(candidate, input.selectedMessages),
+				)
+			: undefined;
+	const inspectDropped = actionableDropped ?? subjectMatchedBudgetDrop;
+	if (inspectDropped) {
+		const droppedThreadId = inspectDropped.threadId;
 		next.push({
 			action: "inspect_dropped",
 			reason: "selection_dropped",

@@ -216,13 +216,26 @@ export function candidateFromGroup(
 	const demoteRootTicket = thinTicketStub || multiTicketRoot;
 	const ticketDensity = rankingEvidence.ticketDensity ?? 0;
 	const rootAnchoredFocused = Boolean(rankingEvidence.rootAnchoredFocused);
+	const exclusiveSubjectKey = Boolean(rankingEvidence.exclusiveSubjectKey);
+	const otherTicketDominated = Boolean(rankingEvidence.otherTicketDominated);
 	const substantiveDepth = rankingEvidence.threadDepthScore ?? 0;
+	const hasSubjectTicket = rootHasTicket || replyHasTicket;
+	const ticketFocus = ticketFocusScore({
+		isTicketSubject: subject.kind === "ticket",
+		demoteRootTicket,
+		hasSubjectTicket,
+		otherTicketDominated,
+		rootAnchoredFocused,
+		exclusiveSubjectKey,
+		ticketDensity,
+	});
 	// Low density only hurts multi-topic threads. Root-anchored support chains
 	// (ticket only in the announce) are the opposite of off-topic.
 	const densityPenalty =
 		subject.kind === "ticket" &&
 		!demoteRootTicket &&
 		!rootAnchoredFocused &&
+		!exclusiveSubjectKey &&
 		(rankingEvidence.threadPostCount ?? 0) >= LOW_TICKET_DENSITY_MIN_POSTS &&
 		ticketDensity < LOW_TICKET_DENSITY_THRESHOLD
 			? -2
@@ -230,7 +243,7 @@ export function candidateFromGroup(
 	// Cap density boost by substantive depth so a 2-post announce with
 	// density=1 cannot outrank a long discussion thread.
 	const ticketProximityBoost =
-		subject.kind === "ticket" && !demoteRootTicket
+		subject.kind === "ticket" && !demoteRootTicket && !otherTicketDominated
 			? Math.min(
 					Math.round(ticketDensity * 10),
 					Math.max(1, substantiveDepth + 1),
@@ -262,6 +275,7 @@ export function candidateFromGroup(
 			ticketInRoot: rootHasTicket && !demoteRootTicket ? 1 : 0,
 			ticketInReply:
 				replyHasTicket || (rootHasTicket && demoteRootTicket) ? 1 : 0,
+			ticketFocus,
 			subjectInRoot: rankingEvidence.subjectInRoot && !demoteRootTicket ? 1 : 0,
 			exactPhraseInRoot: demoteRootTicket
 				? 0
@@ -298,6 +312,29 @@ export function candidateFromGroup(
 		fusionContributions,
 		...(structuredMatches.length ? { structuredMatches } : {}),
 	};
+}
+
+/** Early score-vector dim: this-ticket focus vs related-mention neighborhood. */
+function ticketFocusScore(input: {
+	isTicketSubject: boolean;
+	demoteRootTicket: boolean;
+	hasSubjectTicket: boolean;
+	otherTicketDominated: boolean;
+	rootAnchoredFocused: boolean;
+	exclusiveSubjectKey: boolean;
+	ticketDensity: number;
+}): number {
+	if (
+		!input.isTicketSubject ||
+		input.demoteRootTicket ||
+		!input.hasSubjectTicket
+	) {
+		return 0;
+	}
+	if (input.otherTicketDominated) return 0;
+	if (input.rootAnchoredFocused || input.exclusiveSubjectKey) return 3;
+	if (input.ticketDensity >= 0.4) return 2;
+	return 1;
 }
 
 function compareFusionContributions(
@@ -516,6 +553,8 @@ export function evaluateThreadEvidence(
 					ticketDensity: ticketProximity.ticketDensity,
 					nearestTicketDistance: ticketProximity.nearestTicketDistance,
 					rootAnchoredFocused: ticketProximity.rootAnchoredFocused,
+					exclusiveSubjectKey: ticketProximity.exclusiveSubjectKey,
+					otherTicketDominated: ticketProximity.otherTicketDominated,
 				}
 			: {}),
 		latestRelevantMatchAt: relevantPosts.length

@@ -6,7 +6,10 @@ import {
 	packThread,
 	ticketCorePostIds,
 } from "../evidence/packing.ts";
-import { segmentThreadByTicketProximity } from "../evidence/ticket-segments.ts";
+import {
+	isHistoricalNeighborThread,
+	segmentThreadByTicketProximity,
+} from "../evidence/ticket-segments.ts";
 import type {
 	MattermostSubject,
 	RetrievalProbe,
@@ -47,6 +50,11 @@ const SHORT_MAX_CHARACTERS = 6_000;
 const SHORT_PER_THREAD_CHARACTERS = 2_500;
 /** Short packing budget for one root-anchored primary support thread. */
 const SHORT_ROOT_ANCHORED_PER_THREAD = 4_500;
+/**
+ * Hard cap for brief-mode historical/related secondaries — decision mentions of
+ * the subject plus a stub, not the neighbor ticket's war-room transcript.
+ */
+const HISTORICAL_BRIEF_SECONDARY_CHARACTERS = 1_200;
 
 export interface ThreadPackerInput {
 	config: MattermostConfig;
@@ -62,6 +70,13 @@ export interface ThreadPackerInput {
 	fresh: boolean;
 	/** Use the small evidence-card packing budget. */
 	short: boolean;
+	/**
+	 * Lean navigate stubs: reserve a fair per-thread share of the default budget
+	 * so one fat candidate cannot silently crowd out the rest of selection.
+	 */
+	navigate: boolean;
+	/** Decision-only projection — shrink historical secondaries after primary pick. */
+	brief: boolean;
 	observedAt: number;
 	deadlineAt: number;
 	/** Collects soft-degrade warnings raised while hydrating. */
@@ -131,17 +146,25 @@ export class ThreadPacker {
 		};
 		// When only one or two strong threads fit, give each a larger share so
 		// long decision middles are less likely to collapse into a single skip.
+		// Navigate always reserves a fair share of maxThreads so a fat first
+		// candidate cannot spend the whole budget before siblings pack.
 		const expectedThreadCount = Math.min(
 			Math.max(1, input.candidateCount),
 			this.budgets.maxThreads,
 		);
-		this.perThreadCharacters =
-			!input.short && expectedThreadCount <= 2
-				? Math.max(
-						this.budgets.perThreadCharacters,
-						Math.floor(this.budgets.maxCharacters / expectedThreadCount),
-					)
-				: this.budgets.perThreadCharacters;
+		if (input.navigate) {
+			this.perThreadCharacters = Math.max(
+				1,
+				Math.floor(this.budgets.maxCharacters / this.budgets.maxThreads),
+			);
+		} else if (!input.short && expectedThreadCount <= 2) {
+			this.perThreadCharacters = Math.max(
+				this.budgets.perThreadCharacters,
+				Math.floor(this.budgets.maxCharacters / expectedThreadCount),
+			);
+		} else {
+			this.perThreadCharacters = this.budgets.perThreadCharacters;
+		}
 		this.remainingCharacters = this.budgets.maxCharacters;
 		this.selection = {
 			candidateThreads: input.candidateCount,
@@ -338,6 +361,18 @@ export class ThreadPacker {
 						ticketDensity: ticketMetrics.ticketDensity,
 						nearestTicketDistance: ticketMetrics.nearestTicketDistance,
 						rootAnchoredFocused: ticketMetrics.rootAnchoredFocused,
+						exclusiveSubjectKey: ticketMetrics.exclusiveSubjectKey,
+						otherTicketDominated: ticketMetrics.otherTicketDominated,
+						...(isHistoricalNeighborThread(ticketMetrics)
+							? {
+									historicalNeighbor: true as const,
+									...(ticketMetrics.dominantOtherTicketKey
+										? {
+												relatedTicketKey: ticketMetrics.dominantOtherTicketKey,
+											}
+										: {}),
+								}
+							: {}),
 						segments: ticketMetrics.segments,
 					}
 				: {}),
@@ -389,12 +424,16 @@ export class ThreadPacker {
 	/**
 	 * Spends leftover characters on threads that were truncated, then repairs an
 	 * internal hole inside the primary thread's subject-ticket core. Short mode
-	 * opts out: its small budget is the point.
+	 * opts out: its small budget is the point. Brief mode then shrinks historical
+	 * secondaries so a related-ticket war room cannot dominate the packet.
 	 */
 	finalizeBudget(): void {
 		if (this.input.short) return;
 		if (this.remainingCharacters > 0) this.reclaimUnusedBudget();
 		if (this.input.subject.kind === "ticket") this.repackPrimaryTicketCore();
+		if (this.input.brief && this.input.subject.kind === "ticket") {
+			this.repackHistoricalBriefSecondaries();
+		}
 	}
 
 	private reclaimUnusedBudget(): void {
@@ -467,6 +506,53 @@ export class ThreadPacker {
 		if (repacked.budget.used > maxAllowedUsed) return;
 		this.remainingCharacters -= repacked.budget.used - thread.budget.used;
 		this.threads[primaryIndex] = { ...thread, ...repacked };
+	}
+
+	/**
+	 * Under `--brief` / ticket brief default, collapse secondary threads that are
+	 * historical or related-ticket neighbors down to subject mentions + stubs.
+	 * Primary keeps its packed depth.
+	 */
+	private repackHistoricalBriefSecondaries(): void {
+		if (this.threads.length <= 1) return;
+		const primaryIndex = pickPrimaryThreadIndex(this.threads);
+		for (const [index, thread] of this.threads.entries()) {
+			if (index === primaryIndex) continue;
+			if (!thread.historicalNeighbor) continue;
+			const input = this.repackInputs.get(thread.threadId);
+			if (!input) continue;
+			const leanLimit = Math.min(
+				HISTORICAL_BRIEF_SECONDARY_CHARACTERS,
+				thread.budget.used,
+			);
+			const repacked = packThread(thread.threadId, input.posts, {
+				...input.options,
+				historicalNeighborBrief: true,
+				gapFill: false,
+				structuralAnchors: false,
+				limit: leanLimit,
+			});
+			if (repacked.budget.used >= thread.budget.used) continue;
+			const freed = thread.budget.used - repacked.budget.used;
+			this.remainingCharacters += freed;
+			this.threads[index] = {
+				...thread,
+				...repacked,
+				historicalNeighbor: true,
+				...(thread.relatedTicketKey
+					? { relatedTicketKey: thread.relatedTicketKey }
+					: {}),
+			};
+			this.repackInputs.set(thread.threadId, {
+				posts: input.posts,
+				options: {
+					...input.options,
+					historicalNeighborBrief: true,
+					gapFill: false,
+					structuralAnchors: false,
+				},
+			});
+		}
 	}
 }
 

@@ -191,9 +191,91 @@ describe("file download", () => {
 		store.close();
 	});
 
+	test("in --agent mode rejects --out paths ending in .json", async () => {
+		const store = await seededStore();
+		let downloads = 0;
+		const error = await downloadMattermostFile(
+			{
+				fileId: FILE_ID,
+				out: join(tmpdir(), "evidence.JSON"),
+				agent: true,
+			},
+			{
+				config: configFixture(),
+				store,
+				client: {
+					getFileInfo: async () => {
+						throw new Error("unused");
+					},
+					downloadFile: async () => {
+						downloads += 1;
+						return new Uint8Array();
+					},
+				},
+			},
+		).catch((cause: unknown) => cause);
+		expect(error).toBeInstanceOf(ConfigError);
+		expect((error as ConfigError).kind).toBe("agent_json_out_rejected");
+		expect((error as ConfigError).message).toMatch(/stdout/i);
+		expect((error as ConfigError).message).toMatch(/binary/i);
+		expect(downloads).toBe(0);
+		store.close();
+	});
+
+	test("in --agent mode still allows non-.json --out paths", async () => {
+		const store = await seededStore();
+		const outDir = await mkdtemp(join(tmpdir(), "mm-file-"));
+		const out = join(outDir, "evidence.bin");
+		const result = await downloadMattermostFile(
+			{ fileId: FILE_ID, out, agent: true },
+			{
+				config: configFixture(),
+				store,
+				client: {
+					getFileInfo: async () => {
+						throw new Error("should use local metadata");
+					},
+					downloadFile: async () => new TextEncoder().encode("bytes"),
+				},
+			},
+		);
+		expect(result.path).toBe(out);
+		store.close();
+		await rm(outDir, { recursive: true, force: true });
+	});
+
+	test("without --agent allows --out ending in .json", async () => {
+		const store = await seededStore();
+		const outDir = await mkdtemp(join(tmpdir(), "mm-file-"));
+		const out = join(outDir, "payload.json");
+		const result = await downloadMattermostFile(
+			{ fileId: FILE_ID, out },
+			{
+				config: configFixture(),
+				store,
+				client: {
+					getFileInfo: async () => {
+						throw new Error("should use local metadata");
+					},
+					downloadFile: async () => new TextEncoder().encode('{"ok":true}'),
+				},
+			},
+		);
+		expect(result.path).toBe(out);
+		expect(await readFile(out, "utf8")).toBe('{"ok":true}');
+		store.close();
+		await rm(outDir, { recursive: true, force: true });
+	});
+
 	test("sanitizes download filenames", () => {
 		expect(sanitizeFileName("../../etc/passwd")).toBe("_.._etc_passwd");
 		expect(sanitizeFileName("ok name.png")).toBe("ok name.png");
+		expect(sanitizeFileName("отчёт-сводка (1).png")).toBe(
+			"отчёт-сводка (1).png",
+		);
+		expect(sanitizeFileName("日本語ファイル.txt")).toBe("日本語ファイル.txt");
+		expect(sanitizeFileName("a/b\\c:d*.txt")).toBe("a_b_c_d_.txt");
+		expect(sanitizeFileName("...")).toBe("attachment");
 	});
 });
 

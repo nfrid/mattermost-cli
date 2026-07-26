@@ -42,7 +42,8 @@ Context packets additionally expose:
   `completeness` (including separate discovery freshness), actionable `next[]`,
   selection drop counts and `droppedCandidates[]`, and packing stats;
 - `selection` drop counts;
-- one-hop `relatedTickets` pointers;
+- one-hop `relatedTickets` pointers (`trackerUrl` / `unresolvableTracker`
+  when no Mattermost thread resolves);
 - per-thread ticket-window fields: `ticketDensity`, `nearestTicketDistance`,
   `segments`.
 
@@ -90,12 +91,14 @@ entry per probe with `matchedSelectedEvidence`, `backgroundThreads`, and
 `status` (`matched_selected` | `background_only` | `no_match`).
 
 `background_only` means the probe matched no selected evidence but is exactly
-why a `background[]` pointer exists, which is a reportable outcome rather than a
-defect. `matchMode: "normalized_terms_or_expansions"` and
+why a non-noise `background[]` pointer exists, which is a reportable outcome
+rather than a defect. `matchMode: "normalized_terms_or_expansions"` and
 `retrievalCriteria[]` name the exact full-probe qualification used here; they are
 not a semantic-equivalence claim. Only `no_match` also raises the
 `unmatched_retrieval_probe` warning, so that warning no longer fires on every
-probed request.
+probed request. A `no_match` may carry an informational `hint` when a Russian
+probe term looks like a truncated stem (suggest a full word form); Russian
+prefix search stays off by default.
 
 ## Schema policy
 
@@ -145,6 +148,12 @@ it during schema parsing. Warnings may add `severity: "material" |
 "informational"` (absence remains material), and strict no-match probe coverage
 may add selected-evidence `matchedTerms`, `missingTerms`, and bounded
 `partialEvidencePostIds` without changing ranking or match status.
+Agent projection may additively carry a top-level merged `brief` under
+`projection: "brief"`, `openQuestions[].responseExcerpts` for
+`possibly_answered`, and a thin deterministic `researchSummary`.
+`evidence.next[].impact` may be `cannot_verify_quantities` for workbook
+attachments on decision-layer posts. `gapRecovery` remains exclusive to
+`thread --window-only --agent`.
 
 ## Schemas and fixtures
 

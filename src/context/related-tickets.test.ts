@@ -6,7 +6,10 @@ import {
 	postFixture,
 	userFixture,
 } from "../test-fixtures.ts";
-import { resolveRelatedTicketPointers } from "./related-tickets.ts";
+import {
+	findTrackerUrlBesideKey,
+	resolveRelatedTicketPointers,
+} from "./related-tickets.ts";
 import type { ContextThread } from "./types.ts";
 
 const SUBJECT_ROOT = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -204,9 +207,180 @@ describe("resolveRelatedTicketPointers", () => {
 				key: "BTB-200",
 				sourceThreadId: SUBJECT_ROOT,
 				alreadyInPacket: true,
+				unresolvableTracker: true,
 			}),
 		]);
 		expect(pointers[0]?.threadId).toBeUndefined();
+		expect(pointers[0]?.url).toBeUndefined();
+		expect(pointers[0]?.trackerUrl).toBeUndefined();
+		store.close();
+	});
+
+	test("attaches trackerUrl when a tracker link co-occurs and no MM thread resolves", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const message =
+			"BTB-100 also linked to BTB-200 https://tracker.example/BTB-200 for checkout";
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: SUBJECT_ROOT,
+					message,
+					create_at: 10,
+					update_at: 10,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: SUBJECT_ROOT,
+				newestPostAt: 10,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+
+		const pointers = resolveRelatedTicketPointers({
+			config: configFixture(),
+			store,
+			threads: [subjectThread(message)],
+			subjectTicket: "BTB-100",
+			allowlist: new Set(),
+		});
+
+		expect(pointers).toEqual([
+			expect.objectContaining({
+				key: "BTB-200",
+				sourceThreadId: SUBJECT_ROOT,
+				alreadyInPacket: true,
+				trackerUrl: "https://tracker.example/BTB-200",
+			}),
+		]);
+		expect(pointers[0]?.threadId).toBeUndefined();
+		expect(pointers[0]?.url).toBeUndefined();
+		expect(pointers[0]?.unresolvableTracker).toBeUndefined();
+		store.close();
+	});
+
+	test("keeps Mattermost url separate when trackerUrl co-occurs on a resolved thread", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const message =
+			"BTB-100 also linked to BTB-200 https://tracker.example/BTB-200 for checkout";
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: SUBJECT_ROOT,
+					message,
+					create_at: 10,
+					update_at: 10,
+				}),
+				postFixture({
+					id: RELATED_LATER,
+					message: "BTB-200 checkout regression",
+					create_at: 5,
+					update_at: 5,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: SUBJECT_ROOT,
+				newestPostAt: 10,
+				oldestCoveredAt: 5,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+
+		const pointers = resolveRelatedTicketPointers({
+			config: configFixture(),
+			store,
+			threads: [subjectThread(message)],
+			subjectTicket: "BTB-100",
+			allowlist: new Set(["channel-payments"]),
+		});
+
+		expect(pointers).toEqual([
+			expect.objectContaining({
+				key: "BTB-200",
+				threadId: SUBJECT_ROOT,
+				url: `https://chat.example.test/_redirect/pl/${SUBJECT_ROOT}`,
+				trackerUrl: "https://tracker.example/BTB-200",
+				alreadyInPacket: true,
+			}),
+		]);
+		expect(pointers[0]?.unresolvableTracker).toBeUndefined();
+		store.close();
+	});
+
+	test("findTrackerUrlBesideKey matches key in URL path and strips trailing punctuation", () => {
+		expect(
+			findTrackerUrlBesideKey(
+				"see https://tracker.yandex.ru/BTB-200.",
+				"BTB-200",
+			),
+		).toBe("https://tracker.yandex.ru/BTB-200");
+		expect(
+			findTrackerUrlBesideKey("BTB-200 with no link", "BTB-200"),
+		).toBeUndefined();
+		expect(
+			findTrackerUrlBesideKey(
+				"https://tracker.example/OTHER-1 and BTB-200",
+				"BTB-200",
+			),
+		).toBeUndefined();
+		expect(
+			findTrackerUrlBesideKey(
+				"https://jira.mygig.tech/browse/PCRM-1555",
+				"PCRM-1555",
+			),
+		).toBe("https://jira.mygig.tech/browse/PCRM-1555");
+	});
+
+	test("rejects Kibana-style URLs as trackerUrl and does not emit API-2026", async () => {
+		const kibanaUrl =
+			"https://kibana.mygig.tech/s/kubernetes-production/app/discover#/doc/409e20ae-c74a-4f59-8f5f-ccc6c78d3b43/.ds-prod-api-2026.24-2026.06.15-000001?id=AZ7LBwvBCAmQdXddylWO";
+		expect(findTrackerUrlBesideKey(kibanaUrl, "API-2026")).toBeUndefined();
+
+		const store = await MattermostStore.open(":memory:");
+		const message = `BTB-100 logs ${kibanaUrl}`;
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: SUBJECT_ROOT,
+					message,
+					create_at: 10,
+					update_at: 10,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: SUBJECT_ROOT,
+				newestPostAt: 10,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+
+		const pointers = resolveRelatedTicketPointers({
+			config: configFixture(),
+			store,
+			threads: [subjectThread(message)],
+			subjectTicket: "BTB-100",
+			allowlist: new Set(),
+		});
+
+		expect(
+			pointers.find((pointer) => pointer.key === "API-2026"),
+		).toBeUndefined();
+		expect(pointers.every((pointer) => pointer.trackerUrl === undefined)).toBe(
+			true,
+		);
 		store.close();
 	});
 });

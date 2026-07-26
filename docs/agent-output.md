@@ -12,32 +12,41 @@ Agents should parse `--agent` JSON rather than treating it as prose.
 
 ## Projections
 
-`--brief`, `--navigate`, and `--short` are mutually exclusive.
+`--brief`, `--navigate`, `--short`, and `--full-posts` are mutually exclusive.
 
 | Projection | Contents |
 | --- | --- |
-| default | dense `posts` and `messages`, per-thread `brief`, `evidence` |
-| `--brief` | decision layer only |
+| default (non-ticket, or `--full-posts`) | dense `posts` and `messages`, per-thread `brief`, `evidence` |
+| ticket `--agent` default / `--brief` | decision layer only |
 | `--navigate` | lean navigation: `anchors` / `clusters` / `skips` / packing hints |
 | `--timeline` | one merged chronology instead of per-thread `posts[]` |
 | `--short` | legacy card + timeline projection |
 
-Start with default `context --agent`.
+For a **ticket** subject, `context … --agent` applies the brief projection
+automatically (`projection: "brief"` on the envelope). Pass `--full-posts` to
+restore dense posts, or `--navigate` / `--short` for those modes. Free-text and
+post subjects keep the dense default unless `--brief` is explicit. Start ticket
+research with `context KEY --agent`.
 
 **`--navigate`** gives `anchors` / `clusters` / `skips` and packing hints with no
-dense `posts` and no top-level `messages`. It packs on the **default** budget and
-changes only the projection, so a lean view no longer demands a follow-up
-`thread --full`. Each anchor is one post carrying every role it plays in
-`kinds[]` (`root` / `ticket_mention` / `match_hit` / `file` / `multi_ticket` /
-`codeish` / `latest`) rather than one repeated entry per role. `--short`
-conflicts with `--navigate`.
+dense `posts` and no top-level `messages`. It still uses the **default** total
+character budget, but reserves a fair per-thread share of `maxThreads` so one
+fat candidate cannot silently drop siblings; if budget still truncates selection,
+the packet warns `navigate_truncated_threads`. Each anchor is one post carrying
+every role it plays in `kinds[]` (`root` / `ticket_mention` / `match_hit` /
+`file` / `multi_ticket` / `codeish` / `latest`) rather than one repeated entry
+per role. `--short` conflicts with `--navigate`.
 
-**`--brief`** returns `evidence`, per-thread `brief`, and only the decision
-layer: outcome-window posts, decisions, acknowledgements, refinements, open
-questions, and their capped response pointers. Every other packed post collapses into a
+**`--brief`** (and the ticket `--agent` default) returns `evidence`, a top-level
+merged `brief`, per-thread `threads[].brief`, and only the decision layer:
+outcome-window posts, decisions, acknowledgements, refinements, open questions,
+and their capped response pointers. Every other packed post collapses into a
 `{ "skip": { "reason": "brief_projection" } }` marker and the envelope is marked
 `projection: "brief"` — shown messages plus skip counts always equal
-`messageCount`.
+`messageCount`. The top-level `brief` merges `decisions[]` and `openQuestions[]`
+across selected threads (strongest first, each entry carries `threadId`);
+per-thread briefs remain for locality. Use `--full-posts` when the decision
+layer is not enough and you need the dense transcript.
 
 **`--timeline`** adds a top-level `timeline[]` merging every selected thread into
 one chronology (`at` / `conversation` / `threadId` / `author` / `postId` /
@@ -45,7 +54,8 @@ one chronology (`at` / `conversation` / `threadId` / `author` / `postId` /
 `{ skip }` gap entries) and drops per-thread `posts[]`, so each message travels
 exactly once. Ranked thread order routinely presents a rollout note after the
 report that it broke, and the merged view is the only place that sequence is
-readable. `--timeline --brief` merges the decision layer only.
+readable. `--timeline --brief` merges the decision layer only; ticket
+`--agent --timeline` gets the same brief+timeline pairing by default.
 
 ## Threads
 
@@ -95,8 +105,14 @@ Default `--agent` attaches a lean per-thread `brief` and omits the full advisory
 include both (capped packed-post entities plus candidate spans, `roleHints`, and
 the outcome window); `brief` may still appear alongside.
 
-`brief` contains `purposeHints`, `decisionPostIds`, inlined `decisions[]`,
-inlined `openQuestions[]`, and an optional mechanical `outcomeWindow`.
+Under `--brief` or the ticket `--agent` brief default (`projection: "brief"`),
+the envelope also carries a top-level `brief` with merged `decisions[]` and
+`openQuestions[]` across threads — strongest first, each entry annotated with
+`threadId`. Per-thread `threads[].brief` is unchanged.
+
+`threads[].brief` contains `purposeHints`, `decisionPostIds`, inlined
+`decisions[]`, inlined `openQuestions[]`, and an optional mechanical
+`outcomeWindow`.
 
 ### `purposeHints`
 
@@ -111,7 +127,7 @@ Each entry carries `id` / `author` / `at` / `text`, an optional `ackPostId`
 plus its inlined verbatim `acknowledgement`, optional `refinements[]` (later
 posts that narrow the decision's scope), and a `kind`. A question containing a
 scope word is not itself a refinement; only a non-interrogative follow-up is
-attached.
+attached. Top-level merged entries also carry `threadId`.
 
 | `kind` | Meaning |
 | --- | --- |
@@ -146,15 +162,19 @@ decision is never repeated as an open question.
 `unanswered` only when a complete packed thread ends on the question, and
 `unknown` otherwise. `answered` is reserved for future evidence stronger than
 mere chronology. `possibly_answered` is deliberately not a conclusion: read the
-cited `responsePostIds`. Likewise, `repliesAfter: 0` alone is not proof that the
-question is still open.
+cited `responsePostIds`, which also carry capped `responseExcerpts[]`
+(`id` / `author` / `at` / `text`) drawn from already-packed response posts so a
+reader need not resolve ids against the timeline. Likewise, `repliesAfter: 0`
+alone is not proof that the question is still open. Top-level merged entries
+also carry `threadId`.
 
 ### Text budgets
 
 Decision-layer texts (`decisions[].text`, their `refinements[].text`, and
 `openQuestions[].text`) are budgeted far more generously than pointer excerpts,
 because they are read *instead of* the post. When the packet still had to cut
-one it sets `textTruncated: true` on that entry.
+one it sets `textTruncated: true` on that entry. `responseExcerpts[].text` stays
+pointer-sized.
 
 Treat a trailing `…` alone as nothing — authors type it too — and read the cited
 post before relying on a truncated decision's conditions.
@@ -167,6 +187,20 @@ Tail-anchored. When the window after the last subject-ticket mention exceeds its
 cap, the emitted `postIds` are its final posts and `precedingInWindow` counts the
 eligible posts ahead of that slice — those posts remain in the packet, so it is
 not an omission count.
+
+### `researchSummary`
+
+Optional top-level roll-up on `context` / `thread` agent packets:
+`primaryThreadId` (best orientation thread: strongest decision-bearing thread
+when any exist, otherwise highest ticket signal / non-noise purpose — not
+blindly `role: "primary"` on a noise or thin automation stub),
+`decisionThreadIds` (threads that contribute brief decisions, strongest-first),
+`decisionsByKind` (zeros omitted), `unresolvedOpenQuestions` (packet-local
+resolutions other than `possibly_answered` / `answered`),
+`blockedOrUnresolvedPermalinks` (caller inputs with status `not_allowed` /
+`unresolved` / `invalid`), and `recommendedNext` (action names from
+`evidence.next` steps with `priority: "recommended"`). Counts and ids only — never
+LLM prose.
 
 ## Attachments
 
@@ -213,11 +247,13 @@ an explicit download for an image-capable reader.
 A data file (`csv` / `tsv` / `xlsx` / `xls` / `ods` / `json` / `ndjson` / `log` /
 `sql` / `txt`) attached to a post the brief flagged — a decision, one of its
 refinements, or an open question — gets its own step with `reason:
-"data_file_on_decision_post"` and `impact: "may_verify_quantitative_claim"`. Such
-a post has text, so the media-only rule never covered it, yet the file is where a
-quantitative claim («вот дубли») can actually be checked. The recommended argv
-includes `--inspect` only for bounded textual formats. XLS/XLSX/ODS are
-downloaded but remain `not_interpreted`; a spreadsheet parser is still required.
+"data_file_on_decision_post"`. Such a post has text, so the media-only rule never
+covered it, yet the file is where a quantitative claim («вот дубли») lives.
+Bounded textual formats use `impact: "may_verify_quantitative_claim"`;
+workbooks (`xlsx` / `xls` / `ods`) use `impact: "cannot_verify_quantities"`
+because mm never parses workbook bytes. The recommended argv still includes
+`--inspect` so the packet can report `not_interpreted`; a spreadsheet parser is
+still required for quantities.
 
 It is `recommended` on its own and `optional` behind a media-only step, which is
 the more urgent of the two because that post is unreadable without its file. The
@@ -234,9 +270,11 @@ range under the character budget. Mattermost's thread endpoint still supplies
 the thread to the local read-only hydration layer; the bound applies to emitted
 model context, not server transfer or the ignored local index. Its top-level
 `retrieval` reports requested
-and returned posts; `evidence.scope: "gap_recovery"` means
+and returned posts; `evidence.scope: "gap_recovery"` and `gapRecovery` appear
+**only** on `thread --window-only --agent` (the gap-window response), where
 `gapRecovery.requestedRangeComplete`, not general answerability, decides whether
-the requested delta succeeded. A delta that exceeds the character budget emits
+the requested delta succeeded. A context packet never carries `gapRecovery`. A
+delta that exceeds the character budget emits
 `noActionAvailable` and asks the caller to choose a narrower window; it never
 escalates itself to `thread_full`. At most one hydration step is `recommended`;
 further truncated threads appear as
@@ -255,12 +293,20 @@ Do not invent optional `sync` / `inspect_dropped` follow-ups when absent.
   projection deliberately omits display names.
 - `relatedTickets` — optional one-hop pointers, never hydrated;
   `alreadyInPacket: true` when the source thread is already in the packet.
+  When no Mattermost thread resolves: `trackerUrl` if a known tracker/Jira
+  host link co-occurred beside the key, otherwise `unresolvableTracker: true`
+  (Mattermost `url` is never overloaded with a tracker link; Kibana and other
+  non-tracker hosts never become `trackerUrl`).
 - `resolved` — for a post-id or permalink subject, `context` / `thread` add
   `postId` / `from` / `threadId` / `inPacket` and mark the requested message with
   `anchor: true`, so a returned `threadId` that differs from the requested id is
   legible rather than looking like a substitution.
 - `presentation: "announce"` — secondary threads may set this (typically
   `multi_ticket_root`) for assignment or bulletin noise, not the decision body.
+- `historicalNeighbor: true` / `relatedTicketKey` — under ticket brief packing,
+  secondaries dominated by another tracker key (or otherwise lacking subject
+  focus) are packed lean and labeled so agents do not treat a related war room
+  as this-ticket depth.
 - `surroundRelevance` — optional on DM `surround`, `low` | `possible`. Treat
   `low` as skippable unless needed. `possible` means relevance could not be ruled
   out, including when the thread root is a bare link with no vocabulary to

@@ -10,9 +10,11 @@ export {
 	type EngineeringEntityKind,
 	extractEngineeringEntities,
 	extractTicketKeys,
+	isTrackerIssueHost,
 	MULTI_TICKET_BULLETIN_MIN_KEYS,
 	PERMALINK_PATH_PATTERN,
 	TICKET_PATTERN,
+	textForTicketKeyExtraction,
 } from "./extract.ts";
 export {
 	reciprocalRankFusionScore,

@@ -12,13 +12,16 @@ const URL_PATTERN = /https?:\/\/[^\s<>()]+/giu;
 
 const DROPPED_CANDIDATES_LIMIT = 5;
 
-/** Prefer substantive / deeper threads over thin announce stubs. */
+/** Prefer focused this-ticket threads over long related-mention neighborhoods. */
 export function pickPrimaryThreadIndex(
 	threads: readonly {
 		reasons: readonly string[];
 		totalPosts: number;
 		omittedPosts: number;
 		ticketDensity?: number;
+		rootAnchoredFocused?: boolean;
+		exclusiveSubjectKey?: boolean;
+		otherTicketDominated?: boolean;
 	}[],
 ): number {
 	if (threads.length <= 1) return 0;
@@ -31,11 +34,17 @@ export function pickPrimaryThreadIndex(
 		const substantive = thread.reasons.includes("substantive_thread_depth")
 			? 20
 			: 0;
+		const focused =
+			(thread.rootAnchoredFocused ? 50 : 0) +
+			(thread.exclusiveSubjectKey ? 40 : 0) +
+			(thread.otherTicketDominated ? -80 : 0) +
+			Math.round((thread.ticketDensity ?? 0) * 10);
 		const score =
 			(thin ? -100 : 0) +
+			focused +
 			substantive +
-			thread.totalPosts +
-			Math.round((thread.ticketDensity ?? 0) * 5) -
+			// Cap raw length so a long related-key thread cannot beat focus.
+			Math.min(thread.totalPosts, 12) -
 			thread.omittedPosts * 0.01;
 		if (score > bestScore) {
 			bestScore = score;
@@ -207,6 +216,20 @@ export function countSubjectMatchedBudgetDrops(input: {
 		}
 	}
 	return count;
+}
+
+/**
+ * Budget drop that still named the subject (same reason set as
+ * {@link countSubjectMatchedBudgetDrops}). Used when the verdict already says
+ * other threads may have been missed but no thin/ticket `inspect_dropped` fired.
+ */
+export function isSubjectMatchedBudgetDrop(
+	candidate: Pick<DroppedCandidate, "dropReason" | "reasons">,
+): boolean {
+	return (
+		candidate.dropReason === "budget" &&
+		candidate.reasons.some((reason) => SUBJECT_EVIDENCE_REASONS.has(reason))
+	);
 }
 
 /** Thin or ticket-related drops worth an `inspect_dropped` next action. */

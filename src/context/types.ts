@@ -57,7 +57,7 @@ export interface ContextInput extends SearchFilterInput {
 	includeAutomation?: boolean;
 	/** Use the short evidence-card packing budget. */
 	short?: boolean;
-	/** Lean navigate projection (default packing budget). */
+	/** Lean navigate projection; packing reserves a fair per-thread budget share. */
 	navigate?: boolean;
 	/** Decision-only projection: evidence, brief, and the outcome window. */
 	brief?: boolean;
@@ -154,6 +154,15 @@ export interface ContextThread extends PackedThread {
 	ticketDensity?: number;
 	nearestTicketDistance?: number | null;
 	rootAnchoredFocused?: boolean;
+	exclusiveSubjectKey?: boolean;
+	otherTicketDominated?: boolean;
+	/**
+	 * Secondary (or any) thread that is a related/historical neighbor rather than
+	 * focused on the subject ticket. Brief packing shrinks these harder.
+	 */
+	historicalNeighbor?: true;
+	/** Dominant non-subject tracker key when {@link historicalNeighbor} is set. */
+	relatedTicketKey?: string;
 	segments?: TicketSegment[];
 }
 
@@ -213,7 +222,14 @@ export interface RelatedTicketPointer {
 	key: string;
 	mentions: number;
 	threadId?: string;
+	/** Mattermost permalink when a related thread resolved. */
 	url?: string;
+	/**
+	 * Tracker/Jira issue URL co-occurring beside the key in mention text on a
+	 * known tracker host. Never overloads Mattermost {@link url}; never set from
+	 * Kibana or other non-tracker hosts.
+	 */
+	trackerUrl?: string;
 	conversation?: string;
 	latestAt?: number;
 	excerpt?: string;
@@ -226,6 +242,11 @@ export interface RelatedTicketPointer {
 	 * Omit when the pointer resolves to an out-of-packet related thread.
 	 */
 	alreadyInPacket?: boolean;
+	/**
+	 * True when no Mattermost thread resolved and no tracker URL co-occurred
+	 * beside the key — the pointer is a bare mention, not a hop target.
+	 */
+	unresolvableTracker?: boolean;
 }
 
 /**
@@ -282,6 +303,11 @@ export interface ProbeCoverage {
 	missingTerms?: string[];
 	/** Packed selected posts supporting matchedTerms; bounded pointers only. */
 	partialEvidencePostIds?: string[];
+	/**
+	 * Informational recovery hint when a probe looked truncated (e.g. a Russian
+	 * stem form) and missed. Never enables Russian prefix search.
+	 */
+	hint?: string;
 }
 
 /**
@@ -300,6 +326,13 @@ export interface BackgroundThread {
 	/** Probe values that matched, so the pointer is attributable. */
 	matchedProbes: string[];
 	excerpts: string[];
+	/**
+	 * True when the pointer is weak (short / stop-ish probes). Agents should
+	 * not hydrate these without an independent reason; `--agent` omits them.
+	 */
+	noise?: true;
+	/** Short reason this pointer exists — reinforce hydrate discipline. */
+	whyBackground: string;
 }
 
 /**

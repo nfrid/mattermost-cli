@@ -15,12 +15,14 @@ import {
 	type ThreadCandidate,
 } from "../search/index.ts";
 import { matchesQueryExpansion } from "../search/query-expansion.ts";
+import { analyzeSearchToken } from "../search/search-token-normalization.ts";
 import {
 	containsNormalizedExactText,
 	containsNormalizedText,
 	normalizeSearchText,
 	STOP_WORDS,
 } from "../search/text.ts";
+import { stemRussianSnowball } from "../search/vendor/snowball/russian.ts";
 import type { Warning } from "../shared/command-result.ts";
 import { AppError, MattermostDataError } from "../shared/errors.ts";
 import type {
@@ -466,18 +468,28 @@ export function consolidateLocalFallbackWarnings(
 export function buildProbeCoverage(
 	probes: readonly RetrievalProbe[],
 	matchedValues: ReadonlySet<string>,
-	background: readonly { matchedProbes: readonly string[] }[] = [],
+	background: readonly {
+		matchedProbes: readonly string[];
+		noise?: true;
+	}[] = [],
 	partial: ReadonlyMap<
 		string,
 		{ matchedTerms: string[]; missingTerms: string[]; postIds: string[] }
 	> = new Map(),
 ): ProbeCoverage[] {
 	return probes.map((probe) => {
-		const backgroundThreads = background.filter((thread) =>
-			thread.matchedProbes.includes(probe.value),
+		const backgroundThreads = background.filter(
+			(thread) => !thread.noise && thread.matchedProbes.includes(probe.value),
 		).length;
 		const selected = matchedValues.has(probe.value);
 		const partialEvidence = partial.get(probe.value);
+		const status = selected
+			? ("matched_selected" as const)
+			: backgroundThreads > 0
+				? ("background_only" as const)
+				: ("no_match" as const);
+		const hint =
+			status === "no_match" ? truncatedRussianStemHint(probe) : undefined;
 		return {
 			probe: probe.value,
 			...(probe.kind ? { kind: probe.kind } : {}),
@@ -496,13 +508,59 @@ export function buildProbeCoverage(
 						partialEvidencePostIds: partialEvidence.postIds,
 					}
 				: {}),
-			status: selected
-				? "matched_selected"
-				: backgroundThreads > 0
-					? "background_only"
-					: "no_match",
+			status,
+			...(hint ? { hint } : {}),
 		};
 	});
+}
+
+/**
+ * Common Russian inflectional endings used only to detect productive stems.
+ * Appending one and re-stemming must not enable prefix search.
+ */
+const RUSSIAN_STEM_PROBE_ENDINGS = [
+	"а",
+	"я",
+	"и",
+	"ы",
+	"у",
+	"е",
+	"ой",
+	"ия",
+	"ии",
+	"ий",
+	"ам",
+	"ах",
+	"ов",
+] as const;
+
+/**
+ * When a Russian probe term is already in snowball-stem form (e.g. «транзакц»
+ * for «транзакция»), surface matching and disabled RU prefix search produce
+ * `no_match` even when morph retrieval would have seen the family. Hint only —
+ * do not turn Russian prefix search on.
+ */
+export function truncatedRussianStemHint(
+	probe: RetrievalProbe,
+): string | undefined {
+	const terms = probe.terms.length
+		? probe.terms
+		: [normalizeSearchText(probe.value)].filter(Boolean);
+	const truncated = terms.filter(isTruncatedRussianStemTerm);
+	if (!truncated.length) return undefined;
+	const labeled = truncated.map((term) => `«${term}»`).join(", ");
+	return `Russian probe term ${labeled} looks like a truncated stem; try a full word form (Russian prefix search is off).`;
+}
+
+export function isTruncatedRussianStemTerm(term: string): boolean {
+	const analysis = analyzeSearchToken(term);
+	if (analysis.language !== "russian") return false;
+	if (!analysis.stem || analysis.stem !== analysis.normalized) return false;
+	// Confirm the token is a productive stem of longer surface forms.
+	return RUSSIAN_STEM_PROBE_ENDINGS.some(
+		(ending) =>
+			stemRussianSnowball(analysis.normalized + ending) === analysis.stem,
+	);
 }
 
 /**

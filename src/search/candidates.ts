@@ -20,6 +20,7 @@ export function scoreVector(rank: Partial<CandidateRank>): ScoreVector {
 		rank.explicitTicketRelationship ?? 0,
 		rank.ticketInRoot ?? 0,
 		rank.ticketInReply ?? 0,
+		rank.ticketFocus ?? 0,
 		rank.subjectInRoot ?? 0,
 		rank.exactPhraseInRoot ?? 0,
 		rank.fullProbeCoverage ?? 0,

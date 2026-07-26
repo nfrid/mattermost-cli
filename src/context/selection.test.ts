@@ -5,7 +5,9 @@ import {
 	buildDroppedCandidates,
 	countSubjectMatchedBudgetDrops,
 	isActionableDroppedCandidate,
+	isSubjectMatchedBudgetDrop,
 	orderCandidatesForThinReserve,
+	pickPrimaryThreadIndex,
 	shouldRecommendInspectDropped,
 } from "./selection.ts";
 
@@ -31,11 +33,35 @@ function candidate(
 		reasons,
 		latestActivityAt: 1,
 		priority: 0,
-		scoreVector: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+		scoreVector: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 	};
 }
 
 describe("selection helpers", () => {
+	test("pickPrimaryThreadIndex prefers focused subject over long related neighborhood", () => {
+		const primary = pickPrimaryThreadIndex([
+			{
+				reasons: ["ticket_in_reply", "substantive_thread_depth"],
+				totalPosts: 30,
+				omittedPosts: 0,
+				ticketDensity: 0.5,
+				exclusiveSubjectKey: false,
+				otherTicketDominated: true,
+				rootAnchoredFocused: false,
+			},
+			{
+				reasons: ["ticket_in_root", "substantive_thread_depth"],
+				totalPosts: 4,
+				omittedPosts: 0,
+				ticketDensity: 1,
+				exclusiveSubjectKey: true,
+				otherTicketDominated: false,
+				rootAnchoredFocused: false,
+			},
+		]);
+		expect(primary).toBe(1);
+	});
+
 	test("reserves the last slot for the best thin ticket candidate", () => {
 		const ordered = orderCandidatesForThinReserve(
 			[
@@ -278,5 +304,28 @@ describe("countSubjectMatchedBudgetDrops", () => {
 				budgetDroppedIds: new Set(["weak", "routed", "typo"]),
 			}),
 		).toBe(0);
+	});
+});
+
+describe("isSubjectMatchedBudgetDrop", () => {
+	test("requires budget dropReason plus a subject-evidence reason", () => {
+		expect(
+			isSubjectMatchedBudgetDrop({
+				dropReason: "budget",
+				reasons: ["exact_phrase"],
+			}),
+		).toBe(true);
+		expect(
+			isSubjectMatchedBudgetDrop({
+				dropReason: "thin",
+				reasons: ["ticket_in_root"],
+			}),
+		).toBe(false);
+		expect(
+			isSubjectMatchedBudgetDrop({
+				dropReason: "budget",
+				reasons: ["morphology_match"],
+			}),
+		).toBe(false);
 	});
 });

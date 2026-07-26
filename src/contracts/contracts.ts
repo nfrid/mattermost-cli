@@ -324,6 +324,8 @@ const candidateSchema = z.object({
 				.nullable()
 				.optional(),
 			rootAnchoredFocused: z.boolean().optional(),
+			exclusiveSubjectKey: z.boolean().optional(),
+			otherTicketDominated: z.boolean().optional(),
 			latestRelevantMatchAt: z.number().int().nonnegative().nullable(),
 		})
 		.optional(),
@@ -498,6 +500,7 @@ const probeCoverageSchema = z.object({
 	matchedTerms: z.array(z.string()).optional(),
 	missingTerms: z.array(z.string()).optional(),
 	partialEvidencePostIds: z.array(z.string()).max(8).optional(),
+	hint: z.string().optional(),
 });
 const backgroundThreadSchema = z.object({
 	threadId: z.string(),
@@ -509,6 +512,8 @@ const backgroundThreadSchema = z.object({
 	reasons: z.array(rankingReasonSchema),
 	matchedProbes: z.array(z.string()),
 	excerpts: z.array(z.string()),
+	noise: z.literal(true).optional(),
+	whyBackground: z.string(),
 });
 const contextThreadSchema = packedThreadSchema.extend({
 	conversationId: z.string(),
@@ -521,6 +526,10 @@ const contextThreadSchema = packedThreadSchema.extend({
 	ticketDensity: z.number().nonnegative().optional(),
 	nearestTicketDistance: z.number().int().nonnegative().nullable().optional(),
 	rootAnchoredFocused: z.boolean().optional(),
+	exclusiveSubjectKey: z.boolean().optional(),
+	otherTicketDominated: z.boolean().optional(),
+	historicalNeighbor: z.literal(true).optional(),
+	relatedTicketKey: z.string().optional(),
 	segments: z
 		.array(
 			z.object({
@@ -597,11 +606,13 @@ const relatedTicketPointerSchema = z.object({
 	mentions: z.number().int().positive(),
 	threadId: z.string().optional(),
 	url: z.string().optional(),
+	trackerUrl: z.string().optional(),
 	conversation: z.string().optional(),
 	latestAt: z.number().int().nonnegative().optional(),
 	excerpt: z.string().optional(),
 	sourceThreadId: z.string().optional(),
 	alreadyInPacket: z.literal(true).optional(),
+	unresolvableTracker: z.literal(true).optional(),
 });
 const evidenceStatusSchema = z.object({
 	adequacy: z.enum(["usable", "thin", "insufficient"]),
@@ -641,6 +652,7 @@ const evidenceStatusSchema = z.object({
 				"may_refresh_selected_or_discovery",
 				"may_contradict_visible_text",
 				"may_verify_quantitative_claim",
+				"cannot_verify_quantities",
 			]),
 			/** Argv segments only — never a joined shell string. */
 			command: z.array(z.string()).optional(),

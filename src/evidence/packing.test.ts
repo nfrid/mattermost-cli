@@ -610,6 +610,40 @@ describe("thread packing", () => {
 		expect(packed.selectionStrategy).not.toContain("full_thread");
 	});
 
+	test("historicalNeighborBrief keeps subject mentions without radius fill", () => {
+		const posts = [
+			evidence("p0", 0, "BTB-701 historical war room"),
+			...Array.from({ length: 20 }, (_, index) =>
+				evidence(
+					`d${index}`,
+					index + 1,
+					`BTB-701 detail ${index} ${"x".repeat(40)}`,
+				),
+			),
+			evidence("hit", 21, "also mentions BTB-1281 once"),
+			evidence("tail", 22, "wrap up"),
+		];
+		const dense = packThread("p0", posts, {
+			matchingPostIds: ["hit"],
+			subjectTicketKey: "BTB-1281",
+			ticketNeighborhoodRadius: 8,
+			neighborhoodRadius: 2,
+			limit: 8_000,
+		});
+		const lean = packThread("p0", posts, {
+			matchingPostIds: ["hit"],
+			subjectTicketKey: "BTB-1281",
+			historicalNeighborBrief: true,
+			limit: 1_200,
+		});
+		expect(lean.returnedPosts).toBeLessThan(dense.returnedPosts);
+		expect(lean.posts.some(({ id }) => id === "hit")).toBe(true);
+		expect(lean.posts.some(({ id }) => id === "p0")).toBe(true);
+		expect(lean.selectionStrategy).toContain("ticket_mentions");
+		expect(lean.selectionStrategy).not.toContain("ticket_neighborhoods");
+		expect(lean.selectionStrategy).not.toContain("gap_fill");
+	});
+
 	test("treats only text-free posts with a live file as media-only", () => {
 		const file = {
 			id: "file-1",

@@ -13,6 +13,7 @@ export function projectRelatedTickets(
 		mentions: pointer.mentions,
 		...(pointer.threadId ? { threadId: pointer.threadId } : {}),
 		...(pointer.url ? { url: pointer.url } : {}),
+		...(pointer.trackerUrl ? { trackerUrl: pointer.trackerUrl } : {}),
 		...(pointer.conversation ? { conversation: pointer.conversation } : {}),
 		...(pointer.latestAt !== undefined
 			? { latestAt: isoTimestamp(pointer.latestAt) }
@@ -22,6 +23,9 @@ export function projectRelatedTickets(
 			? { sourceThreadId: pointer.sourceThreadId }
 			: {}),
 		...(pointer.alreadyInPacket ? { alreadyInPacket: true as const } : {}),
+		...(pointer.unresolvableTracker
+			? { unresolvableTracker: true as const }
+			: {}),
 	}));
 }
 

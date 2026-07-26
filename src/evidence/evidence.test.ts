@@ -1784,6 +1784,75 @@ describe("evidence verdict", () => {
 		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(true);
 	});
 
+	test("subject-matched budget drop emits optional inspect_dropped without forcing recommended", () => {
+		const evidence = buildEvidence({
+			...baseInput(),
+			selection: {
+				...emptySelection(),
+				candidateThreads: 4,
+				returnedThreads: 1,
+				droppedByBudget: 2,
+				droppedByBudgetSubjectMatched: 1,
+				droppedCandidates: [
+					{
+						threadId: "t-budget",
+						url: "https://example.test/t-budget",
+						conversationId: "channel-2",
+						conversationAlias: "ops",
+						conversationKind: "channel",
+						dropReason: "budget",
+						reasons: ["exact_phrase", "exact_phrase_in_root"],
+						excerpt:
+							"checkout past-month fails after deploy; rollback discussed",
+					},
+				],
+			},
+		});
+		const inspect = evidence.next.find(
+			(step) => step.action === "inspect_dropped",
+		);
+
+		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(true);
+		expect(inspect).toMatchObject({
+			priority: "optional",
+			impact: "may_add_dropped_pointer",
+			command: ["mm", "thread", "t-budget", "--agent"],
+			threadId: "t-budget",
+		});
+		expect(evidence.verdict.recommendedActionRequired).toBe(false);
+	});
+
+	test("subject-matched budget drop still skips thin bulletin excerpts", () => {
+		const evidence = buildEvidence({
+			...baseInput(),
+			selection: {
+				...emptySelection(),
+				candidateThreads: 4,
+				returnedThreads: 1,
+				droppedByBudget: 2,
+				droppedByBudgetSubjectMatched: 1,
+				droppedCandidates: [
+					{
+						threadId: "t-bulletin",
+						url: "https://example.test/t-bulletin",
+						conversationId: "channel-2",
+						conversationAlias: "bulletin",
+						conversationKind: "channel",
+						dropReason: "budget",
+						reasons: ["exact_phrase"],
+						excerpt: "BTB-1 https://tracker.example/BTB-1",
+					},
+				],
+			},
+		});
+
+		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(true);
+		expect(evidence.next.map(({ action }) => action)).not.toContain(
+			"inspect_dropped",
+		);
+		expect(evidence.verdict.recommendedActionRequired).toBe(false);
+	});
+
 	test("never contradicts the axes it is derived from", () => {
 		const evidence = buildEvidence({
 			...baseInput(),
@@ -1959,7 +2028,8 @@ describe("data-file attachments on decision-layer posts", () => {
 
 	test("recommends a spreadsheet attached to an open question", () => {
 		// BTB-2080: the post had text, so the media-only rule never fired, yet the
-		// XLSX was the only place the duplicate count could be checked.
+		// XLSX was the only place the duplicate count could be checked — and mm
+		// still cannot verify quantities from unparsed workbook bytes.
 		const evidence = build([
 			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
 			dataPost("p2", "вот дубли, что с ними делать?", 20, "duplicates.xlsx"),
@@ -1971,7 +2041,7 @@ describe("data-file attachments on decision-layer posts", () => {
 		expect(step).toMatchObject({
 			reason: "data_file_on_decision_post",
 			priority: "recommended",
-			impact: "may_verify_quantitative_claim",
+			impact: "cannot_verify_quantities",
 			postId: "p2",
 		});
 		expect(step?.command).toEqual([
@@ -1981,6 +2051,23 @@ describe("data-file attachments on decision-layer posts", () => {
 			"--inspect",
 			"--agent",
 		]);
+	});
+
+	test("CSV on a decision post stays quantitatively verifiable via inspect", () => {
+		const evidence = build([
+			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
+			dataPost("p2", "вот дубли, что с ними делать?", 20, "duplicates.csv"),
+		]);
+		const step = evidence.next.find(
+			({ action }) => action === "read_attachments",
+		);
+
+		expect(step).toMatchObject({
+			reason: "data_file_on_decision_post",
+			priority: "recommended",
+			impact: "may_verify_quantitative_claim",
+			postId: "p2",
+		});
 	});
 
 	test("stays quiet for a data file outside the decision layer", () => {

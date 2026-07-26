@@ -310,16 +310,20 @@ function formatContext(data: ContextResult): string {
 			? [
 					`\n${styles.label("Background (outside ticket routing, not hydrated):")}`,
 					...data.background.map((pointer) =>
-						joinParts([
-							formatConversation(
-								pointer.conversationKind,
-								pointer.conversationAlias,
-							),
-							styles.link(pointer.url),
-							styles.timestamp(isoTimestamp(pointer.latestActivityAt)),
-							styles.hint(`probes: ${pointer.matchedProbes.join(", ")}`),
-							pointer.excerpts.join(" | "),
-						]),
+						joinParts(
+							[
+								formatConversation(
+									pointer.conversationKind,
+									pointer.conversationAlias,
+								),
+								styles.link(pointer.url),
+								styles.timestamp(isoTimestamp(pointer.latestActivityAt)),
+								styles.hint(`probes: ${pointer.matchedProbes.join(", ")}`),
+								pointer.noise ? styles.warning("noise") : undefined,
+								styles.hint(pointer.whyBackground),
+								pointer.excerpts.join(" | "),
+							].filter((part): part is string => Boolean(part)),
+						),
 					),
 				]
 			: []),
@@ -343,6 +347,7 @@ function formatContext(data: ContextResult): string {
 										),
 									]
 								: []),
+							...(coverage.hint ? [styles.hint(coverage.hint)] : []),
 						]),
 					),
 				]

@@ -75,7 +75,7 @@ export function inspectDownloadedFile(input: {
 			interpreted: false,
 			reason: "external_image_reader_required",
 			recommendedAction:
-				"open the downloaded path with an image-capable reader; mm does not generate OCR or captions",
+				"the local path is readable by an image-capable agent or tool; mm does not perform OCR or generate captions",
 		};
 	}
 	if (SPREADSHEET_EXTENSIONS.has(extension)) {

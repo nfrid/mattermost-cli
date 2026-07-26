@@ -53,6 +53,11 @@ export interface CommandOptions {
 	navigate?: boolean;
 	/** Decision-only `--agent` projection. */
 	brief?: boolean;
+	/**
+	 * Opt out of the ticket `--agent` brief default and keep dense posts.
+	 * Mutually exclusive with `--brief` / `--navigate` / `--short`.
+	 */
+	fullPosts?: boolean;
 	/** Merge selected threads into one cross-thread chronology. */
 	timeline?: boolean;
 	/** Opt-in agent emission of advisory `signals` and `technicalEntities`. */

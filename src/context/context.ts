@@ -287,10 +287,10 @@ export async function getMattermostContext(
 			permalinkCandidates.map(({ threadId }) => threadId),
 		);
 
-		// `--navigate` changes only the projection: packing stays on the default
-		// budget so a lean packet does not immediately demand `thread --full`,
-		// which costs more than the navigation view saves. `--short` remains the
-		// small-budget card mode.
+		// `--navigate` changes only the projection shape, but packing must still
+		// reserve a fair per-thread share of the default budget so one fat
+		// candidate cannot silently drop the rest of selection. `--short` remains
+		// the small-budget card mode.
 		const packer = new ThreadPacker({
 			config,
 			store,
@@ -302,6 +302,8 @@ export async function getMattermostContext(
 			initiallyFreshIds,
 			fresh: Boolean(input.fresh),
 			short: Boolean(input.short),
+			navigate: Boolean(input.navigate),
+			brief: Boolean(input.brief),
 			observedAt,
 			deadlineAt,
 			warnings: freshenWarnings,
@@ -372,7 +374,6 @@ export async function getMattermostContext(
 				await packer.pack(searcher.search(widened));
 			}
 		}
-		packer.finalizeBudget();
 
 		const searchedConversations = [...searched.values()];
 		const localFreshness = inspectFreshness(
@@ -422,6 +423,9 @@ export async function getMattermostContext(
 				),
 			);
 		}
+		// Reclaim / brief-secondary shrink after every packing pass so leftover
+		// budget is not spent before remote candidates get a chance to pack.
+		packer.finalizeBudget();
 
 		const selectedIds = new Set(threads.map(({ threadId }) => threadId));
 		const hasExplicitProbes = Boolean(
@@ -484,6 +488,16 @@ export async function getMattermostContext(
 				kind: "hydration_budget",
 				message:
 					"The per-request thread hydration budget was spent; later candidates used locally indexed evidence only.",
+			});
+		}
+		if (
+			input.navigate &&
+			packer.budgetDroppedIds.size > 0 &&
+			threads.length < packer.budgets.maxThreads
+		) {
+			warnings.push({
+				kind: "navigate_truncated_threads",
+				message: `Navigate packing kept ${threads.length} of up to ${packer.budgets.maxThreads} thread slots; ${packer.budgetDroppedIds.size} candidate(s) were dropped by budget. Re-run without --navigate, or with fewer fat neighbors, to see the omitted threads.`,
 			});
 		}
 		if (input.local && freshness.some(({ stale }) => stale)) {

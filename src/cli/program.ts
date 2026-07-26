@@ -137,19 +137,25 @@ export function createProgram(
 			new Option(
 				"--short",
 				"pack evidence cards with ticket windows, anchors, and a short timeline (legacy card+timeline)",
-			).conflicts(["navigate", "brief"]),
+			).conflicts(["navigate", "brief", "fullPosts"]),
 		)
 		.addOption(
 			new Option(
 				"--navigate",
 				"lean agent navigation (anchors/clusters/skips; omit dense posts and messages)",
-			).conflicts(["short", "brief"]),
+			).conflicts(["short", "brief", "fullPosts"]),
 		)
 		.addOption(
 			new Option(
 				"--brief",
-				"decision-only projection: evidence, per-thread brief, and outcome-window posts",
-			).conflicts(["short", "navigate"]),
+				"decision-only projection: evidence, per-thread brief, and outcome-window posts (default for ticket subjects under --agent)",
+			).conflicts(["short", "navigate", "fullPosts"]),
+		)
+		.addOption(
+			new Option(
+				"--full-posts",
+				"keep dense posts under --agent for ticket subjects (opt out of the ticket brief default)",
+			).conflicts(["short", "navigate", "brief"]),
 		)
 		.addOption(
 			new Option(

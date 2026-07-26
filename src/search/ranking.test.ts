@@ -658,4 +658,86 @@ describe("ranking", () => {
 		).not.toContain("multi_ticket_root");
 		store.close();
 	});
+
+	test("BTB-1281-shaped: focused subject thread beats long related-key neighborhood", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const payments = conversationFixture("payments", "channel-payments");
+		const relatedRoot = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const focusedRoot = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
+		const relatedPosts = [
+			postFixture({
+				id: relatedRoot,
+				channel_id: payments.id,
+				message: "BTB-701 historical payment outage war room",
+				create_at: 10,
+			}),
+			...Array.from({ length: 12 }, (_, index) =>
+				postFixture({
+					id: `r${String(index).padStart(25, "0")}`,
+					root_id: relatedRoot,
+					channel_id: payments.id,
+					message:
+						index === 6
+							? "Side note: BTB-1281 might be related later"
+							: `BTB-701 retry path detail ${index} with enough tokens to stay substantive`,
+					create_at: 20 + index,
+				}),
+			),
+		];
+		store.writePage({
+			conversation: payments,
+			posts: [
+				...relatedPosts,
+				postFixture({
+					id: focusedRoot,
+					channel_id: payments.id,
+					message: "BTB-1281 payment timeout in reconcile",
+					create_at: 100,
+				}),
+				postFixture({
+					id: "cccccccccccccccccccccccccc",
+					root_id: focusedRoot,
+					channel_id: payments.id,
+					message:
+						"We reproduced the race in reconcile and will patch the retry path",
+					create_at: 110,
+				}),
+				postFixture({
+					id: "dddddddddddddddddddddddddd",
+					root_id: focusedRoot,
+					channel_id: payments.id,
+					message: "Looks good after the polish pass, shipping next",
+					create_at: 120,
+				}),
+			],
+		});
+		const config = configFixture();
+		const routing = routeConversations(
+			config,
+			store,
+			configuredConversations(config, store),
+			{},
+		);
+		const subject = classifySubject("BTB-1281");
+		const candidates = searchThreads(
+			store,
+			subject,
+			resolveProbes(subject),
+			routing,
+		);
+		expect(candidates[0]?.threadId).toBe(focusedRoot);
+		expect(candidates.map(({ threadId }) => threadId)).toContain(relatedRoot);
+		const focused = candidates.find(({ threadId }) => threadId === focusedRoot);
+		const related = candidates.find(({ threadId }) => threadId === relatedRoot);
+		expect(focused?.rankingEvidence?.exclusiveSubjectKey).toBe(true);
+		expect(focused?.rankingEvidence?.otherTicketDominated).toBe(false);
+		expect(related?.rankingEvidence?.otherTicketDominated).toBe(true);
+		expect(related?.rankingEvidence?.exclusiveSubjectKey).toBe(false);
+		const focusIndex = 4; // after direct, explicit, ticketInRoot, ticketInReply
+		expect(
+			(focused?.scoreVector[focusIndex] ?? 0) >
+				(related?.scoreVector[focusIndex] ?? 0),
+		).toBe(true);
+		store.close();
+	});
 });

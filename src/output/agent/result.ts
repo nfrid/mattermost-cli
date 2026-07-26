@@ -1,3 +1,4 @@
+import { AGENT_BACKGROUND_NON_NOISE_LIMIT } from "../../context/background.ts";
 import type {
 	ContextResult,
 	ContextThread,
@@ -8,8 +9,14 @@ import type {
 } from "../../context/index.ts";
 import type { PersonRef } from "../../context/people.ts";
 import { pickPrimaryThreadIndex } from "../../context/selection.ts";
+import type { PermalinkResolution } from "../../context/types.ts";
+import type { EvidenceStatus } from "../../evidence/evidence.ts";
 import { buildEvidence } from "../../evidence/evidence.ts";
 import type { PackedThread } from "../../evidence/packing.ts";
+import {
+	MAX_DECISION_POST_IDS,
+	MAX_OPEN_QUESTIONS,
+} from "../../evidence/signals.ts";
 import type { CommandResult, Warning } from "../../shared/command-result.ts";
 import type { FileBatchDownloadResult } from "../../sync/file-batch-download.ts";
 import type { FileDownloadResult } from "../../sync/file-download.ts";
@@ -23,12 +30,51 @@ import {
 import { projectContextThread, projectPackedThread } from "./thread.ts";
 import type {
 	AgentBackgroundThread,
+	AgentBriefDecision,
+	AgentBriefOpenQuestion,
 	AgentCandidate,
 	AgentCommandResult,
 	AgentEnvelope,
+	AgentMergedBrief,
+	AgentMergedBriefDecision,
+	AgentMergedBriefOpenQuestion,
+	AgentResearchSummary,
 	AgentResolvedSubject,
 	AgentStatus,
+	AgentThread,
+	PurposeHintLabel,
 } from "./types.ts";
+
+/** Strongest first — mirrors domain `DECISION_KIND_PRIORITY` for merged briefs. */
+const DECISION_KIND_RANK: Readonly<Record<AgentBriefDecision["kind"], number>> =
+	{
+		approved_decision: 0,
+		discussion_outcome: 1,
+		implementation_intent: 2,
+		proposal: 3,
+	};
+
+/**
+ * Best purpose first — mirrors domain `PURPOSE_HINT_PRIORITY` for orientation
+ * when no decision-bearing thread exists.
+ */
+const PURPOSE_HINT_RANK: Readonly<Record<PurposeHintLabel, number>> = {
+	decision: 0,
+	open_question: 1,
+	debugging: 2,
+	announce: 3,
+	status: 4,
+	noise: 5,
+};
+
+/** Matches domain `NOISE_MAX_POSTS` — thin automation / ticket-ping stubs. */
+const THIN_ORIENTATION_MAX_POSTS = 3;
+
+const BLOCKED_PERMALINK_STATUSES = new Set<PermalinkResolution["status"]>([
+	"not_allowed",
+	"unresolved",
+	"invalid",
+]);
 
 const SHORT_MESSAGE_LIMIT = 8;
 const SEARCH_CONTRIBUTING_PROBES_LIMIT = 12;
@@ -143,6 +189,33 @@ function projectContext(
 					SHORT_MESSAGE_LIMIT,
 				)
 			: undefined;
+	const evidence =
+		data.evidence ??
+		buildEvidence({
+			searchCoverageComplete: data.searchCoverageComplete,
+			selectedThreadsComplete: data.selectedThreadsComplete,
+			freshnessMode: data.freshnessMode,
+			freshness: data.freshness,
+			searchedConversations: data.searchedConversations,
+			threads: data.threads,
+			remoteSearch: data.remoteSearch,
+			selection: data.selection ?? {
+				...SINGLE_THREAD_SELECTION,
+				candidateThreads: data.threads.length,
+				returnedThreads: data.threads.length,
+			},
+			warnings,
+			subject: subjectValue(data.subject),
+			...(data.subject.kind === "ticket"
+				? { subjectTicket: data.subject.ticketKey }
+				: {}),
+		});
+	const mergedBrief = brief ? mergeThreadBriefs(threads) : undefined;
+	const researchSummary = buildResearchSummary({
+		threads,
+		evidence,
+		permalinks: data.permalinks,
+	});
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
@@ -151,6 +224,8 @@ function projectContext(
 		// The packet says which projection produced it: `brief` withholds packed
 		// posts by request, and a reader must not mistake that for the transcript.
 		...(brief ? { projection: "brief" as const } : {}),
+		...(mergedBrief ? { brief: mergedBrief } : {}),
+		...(researchSummary ? { researchSummary } : {}),
 		...(timeline
 			? {
 					timeline: buildCrossThreadTimeline(data.threads, {
@@ -160,27 +235,7 @@ function projectContext(
 					}),
 				}
 			: {}),
-		evidence:
-			data.evidence ??
-			buildEvidence({
-				searchCoverageComplete: data.searchCoverageComplete,
-				selectedThreadsComplete: data.selectedThreadsComplete,
-				freshnessMode: data.freshnessMode,
-				freshness: data.freshness,
-				searchedConversations: data.searchedConversations,
-				threads: data.threads,
-				remoteSearch: data.remoteSearch,
-				selection: data.selection ?? {
-					...SINGLE_THREAD_SELECTION,
-					candidateThreads: data.threads.length,
-					returnedThreads: data.threads.length,
-				},
-				warnings,
-				subject: subjectValue(data.subject),
-				...(data.subject.kind === "ticket"
-					? { subjectTicket: data.subject.ticketKey }
-					: {}),
-			}),
+		evidence,
 		...(data.remoteSearch.performed || data.remoteSearch.requested
 			? { remoteSearch: data.remoteSearch }
 			: {}),
@@ -188,8 +243,8 @@ function projectContext(
 		...(relatedTickets.length ? { relatedTickets } : {}),
 		...(messages?.length ? { messages } : {}),
 		threads,
-		...(data.background?.length
-			? { background: data.background.map(projectBackgroundThread) }
+		...(projectAgentBackground(data.background).length
+			? { background: projectAgentBackground(data.background) }
 			: {}),
 		...(data.probeCoverage?.length
 			? { probeCoverage: data.probeCoverage }
@@ -218,6 +273,15 @@ function projectPerson(person: PersonRef): {
 	};
 }
 
+function projectAgentBackground(
+	pointers: ContextResult["background"],
+): AgentBackgroundThread[] {
+	return (pointers ?? [])
+		.filter((pointer) => !pointer.noise)
+		.slice(0, AGENT_BACKGROUND_NON_NOISE_LIMIT)
+		.map(projectBackgroundThread);
+}
+
 function projectBackgroundThread(
 	thread: NonNullable<ContextResult["background"]>[number],
 ): AgentBackgroundThread {
@@ -229,6 +293,7 @@ function projectBackgroundThread(
 		latestAt: isoTimestamp(thread.latestActivityAt),
 		matchedProbes: thread.matchedProbes,
 		excerpts: thread.excerpts,
+		whyBackground: thread.whyBackground,
 		command: ["mm", "thread", thread.threadId, "--agent"],
 	};
 }
@@ -387,18 +452,200 @@ function projectThread(
 				},
 			}
 		: evidence;
+	const threads = [projected];
+	const mergedBrief = data.brief ? mergeThreadBriefs(threads) : undefined;
+	const researchSummary = buildResearchSummary({
+		threads,
+		evidence: scopedEvidence,
+	});
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
 		...(resolved ? { resolved } : {}),
 		status: status(data.freshnessMode),
 		...(data.brief ? { projection: "brief" as const } : {}),
+		...(mergedBrief ? { brief: mergedBrief } : {}),
+		...(researchSummary ? { researchSummary } : {}),
 		...(relatedTickets.length ? { relatedTickets } : {}),
 		evidence: scopedEvidence,
 		...(data.retrieval ? { retrieval: data.retrieval } : {}),
-		threads: [projected],
+		threads,
 		warnings,
 	};
+}
+
+/**
+ * Merge per-thread decision layers for `projection: "brief"`. Strongest
+ * decisions and most dangling open questions win the global caps; each entry
+ * keeps `threadId` so locality is recoverable without scanning `threads[]`.
+ */
+function mergeThreadBriefs(
+	threads: readonly AgentThread[],
+): AgentMergedBrief | undefined {
+	const decisions: AgentMergedBriefDecision[] = [];
+	const openQuestions: AgentMergedBriefOpenQuestion[] = [];
+	for (const thread of threads) {
+		for (const decision of thread.brief?.decisions ?? []) {
+			decisions.push({ ...decision, threadId: thread.threadId });
+		}
+		for (const question of thread.brief?.openQuestions ?? []) {
+			openQuestions.push({ ...question, threadId: thread.threadId });
+		}
+	}
+	decisions.sort(compareMergedDecisions);
+	openQuestions.sort(compareMergedOpenQuestions);
+	const cappedDecisions = decisions.slice(0, MAX_DECISION_POST_IDS);
+	const cappedQuestions = openQuestions.slice(0, MAX_OPEN_QUESTIONS);
+	if (!cappedDecisions.length && !cappedQuestions.length) return undefined;
+	return {
+		...(cappedDecisions.length ? { decisions: cappedDecisions } : {}),
+		...(cappedQuestions.length ? { openQuestions: cappedQuestions } : {}),
+	};
+}
+
+function compareMergedDecisions(
+	left: AgentMergedBriefDecision,
+	right: AgentMergedBriefDecision,
+): number {
+	return (
+		DECISION_KIND_RANK[left.kind] - DECISION_KIND_RANK[right.kind] ||
+		right.at.localeCompare(left.at) ||
+		left.id.localeCompare(right.id)
+	);
+}
+
+function compareMergedOpenQuestions(
+	left: AgentMergedBriefOpenQuestion,
+	right: AgentMergedBriefOpenQuestion,
+): number {
+	return (
+		Number(right.isThreadTail ?? false) - Number(left.isThreadTail ?? false) ||
+		Number(left.kind === "follow_up") - Number(right.kind === "follow_up") ||
+		left.repliesAfter - right.repliesAfter ||
+		right.at.localeCompare(left.at) ||
+		left.id.localeCompare(right.id)
+	);
+}
+
+/**
+ * Thin deterministic roll-up. Emitted when at least one field carries signal;
+ * never invents prose about what the research "found".
+ */
+function buildResearchSummary(input: {
+	threads: readonly AgentThread[];
+	evidence: EvidenceStatus;
+	permalinks?: readonly PermalinkResolution[];
+}): AgentResearchSummary | undefined {
+	const decisionThreadIds = collectDecisionThreadIds(input.threads);
+	const primaryThreadId = pickOrientationPrimaryThreadId(
+		input.threads,
+		decisionThreadIds,
+	);
+	const decisionsByKind: NonNullable<AgentResearchSummary["decisionsByKind"]> =
+		{};
+	let unresolvedOpenQuestions = 0;
+	for (const thread of input.threads) {
+		for (const decision of thread.brief?.decisions ?? []) {
+			decisionsByKind[decision.kind] =
+				(decisionsByKind[decision.kind] ?? 0) + 1;
+		}
+		for (const question of thread.brief?.openQuestions ?? []) {
+			if (isUnresolvedOpenQuestion(question)) unresolvedOpenQuestions += 1;
+		}
+	}
+	const blockedOrUnresolvedPermalinks = (input.permalinks ?? [])
+		.filter((entry) => BLOCKED_PERMALINK_STATUSES.has(entry.status))
+		.map((entry) => entry.input);
+	const recommendedNext = input.evidence.next
+		.filter((step) => step.priority === "recommended")
+		.map((step) => step.action);
+	const hasDecisions = Object.keys(decisionsByKind).length > 0;
+	if (
+		!primaryThreadId &&
+		!decisionThreadIds.length &&
+		!hasDecisions &&
+		unresolvedOpenQuestions === 0 &&
+		!blockedOrUnresolvedPermalinks.length &&
+		!recommendedNext.length
+	) {
+		return undefined;
+	}
+	return {
+		...(primaryThreadId ? { primaryThreadId } : {}),
+		decisionThreadIds,
+		...(hasDecisions ? { decisionsByKind } : {}),
+		unresolvedOpenQuestions,
+		...(blockedOrUnresolvedPermalinks.length
+			? { blockedOrUnresolvedPermalinks }
+			: {}),
+		recommendedNext,
+	};
+}
+
+/**
+ * Threads that contribute brief decisions, ordered by each thread's strongest
+ * decision (kind priority, then recency / id).
+ */
+function collectDecisionThreadIds(threads: readonly AgentThread[]): string[] {
+	const strongestByThread: AgentMergedBriefDecision[] = [];
+	for (const thread of threads) {
+		// Per-thread `brief.decisions` is already strongest-first.
+		const strongest = thread.brief?.decisions?.[0];
+		if (!strongest) continue;
+		strongestByThread.push({ ...strongest, threadId: thread.threadId });
+	}
+	strongestByThread.sort(compareMergedDecisions);
+	return strongestByThread.map((entry) => entry.threadId);
+}
+
+/**
+ * Orientation target for `researchSummary.primaryThreadId`. Prefer the
+ * strongest decision-bearing thread; otherwise score ticket signal and
+ * non-noise purpose, and do not trust `role: "primary"` on noise / thin stubs.
+ */
+function pickOrientationPrimaryThreadId(
+	threads: readonly AgentThread[],
+	decisionThreadIds: readonly string[],
+): string | undefined {
+	if (decisionThreadIds[0]) return decisionThreadIds[0];
+	if (!threads.length) return undefined;
+	let bestIndex = 0;
+	let bestScore = Number.NEGATIVE_INFINITY;
+	for (const [index, thread] of threads.entries()) {
+		const score = orientationThreadScore(thread);
+		if (score > bestScore) {
+			bestScore = score;
+			bestIndex = index;
+		}
+	}
+	return threads[bestIndex]?.threadId;
+}
+
+function orientationThreadScore(thread: AgentThread): number {
+	const topPurpose = thread.brief?.purposeHints?.[0]?.label;
+	const isNoisePurpose = topPurpose === "noise";
+	const thinAutomation = thread.totalPosts <= THIN_ORIENTATION_MAX_POSTS;
+	const purposeBoost =
+		topPurpose && !isNoisePurpose
+			? (PURPOSE_HINT_RANK.noise - PURPOSE_HINT_RANK[topPurpose]) * 20
+			: 0;
+	return (
+		(isNoisePurpose ? -1000 : 0) +
+		(thinAutomation ? -50 : 0) +
+		purposeBoost +
+		Math.round((thread.ticketDensity ?? 0) * 100) +
+		(thread.nearestTicketDistance === 0 ? 15 : 0) +
+		// Role is only a weak tie-breaker once noise / thin stubs are penalized.
+		(thread.role === "primary" && !isNoisePurpose && !thinAutomation ? 5 : 0) +
+		Math.min(thread.totalPosts, 24)
+	);
+}
+
+function isUnresolvedOpenQuestion(question: AgentBriefOpenQuestion): boolean {
+	return (
+		question.resolution !== "possibly_answered" &&
+		question.resolution !== "answered"
+	);
 }
 
 /**

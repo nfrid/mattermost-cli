@@ -10,6 +10,8 @@ mm context 'incident' --channel engineering --fresh
 mm context 'incident' --local --no-widen
 mm context PROJ-123 --include-automation
 mm context PROJ-123 --timeline
+mm context PROJ-123 --agent
+mm context PROJ-123 --agent --full-posts
 mm context PROJ-123 --brief
 mm people --channel engineering
 mm thread <post-id-or-permalink>
@@ -61,9 +63,12 @@ A ticket subject routes only to conversations already linked to that ticket, so
 `--query` probes can reorder that set but never reach beyond it. When a ticket
 subject is combined with explicit `--query` probes, `context` therefore also
 returns `background[]`: up to five pointers (`threadId`, conversation,
-`permalink`, `latestActivityAt`, matched probes, excerpts, and an `mm thread`
-argv in `--agent`) found by those probes in the remaining configured
-conversations.
+`permalink`, `latestActivityAt`, matched probes, excerpts, `whyBackground`,
+and an `mm thread` argv in `--agent`) found by those probes in the remaining
+configured conversations. Short or stop-ish single-term probes are marked
+`noise: true` (still present in `--json` / human output); `--agent` keeps at
+most two non-noise pointers and omits noise so the list does not invite hydrate
+storms.
 
 Background pointers are never hydrated, never packed, and never part of thread
 selection — the packet is identical with or without them — so they answer "why
@@ -162,11 +167,15 @@ A refused conversation fails with `conversation_not_allowed` carrying
 
 ## Command behavior
 
-- `--brief` (on `context` / `thread`) returns the decision layer only.
-  `--navigate` returns lean navigation on the default packing budget.
-  `--short` remains the legacy small-budget card mode. `--timeline` (on
-  `context`) merges the selected threads into one chronology instead of
-  repeating them per thread, and combines with `--brief`.
+- `--brief` (on `context` / `thread`) returns the decision layer only. For
+  ticket subjects, `context … --agent` applies that brief projection by
+  default; `--full-posts` restores dense posts. `--navigate` returns lean
+  navigation stubs on the default total budget with a fair per-thread share so
+  secondaries are not silently dropped (`navigate_truncated_threads` warns if
+  they still are). `--short` remains the legacy small-budget card mode.
+  `--timeline` (on `context`) merges the selected threads into one chronology
+  instead of repeating them per thread, and combines with `--brief` / the
+  ticket `--agent` brief default.
 - `search` is always local discovery (it accepts `--local` for symmetry),
   includes a permalink per candidate, defaults to the top 10 ranked candidates
   (`--limit <n>` overrides), and reports search coverage; use `context` before

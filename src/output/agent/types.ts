@@ -155,7 +155,20 @@ export interface AgentBriefOpenQuestion {
 	resolution?: "answered" | "possibly_answered" | "unanswered" | "unknown";
 	/** Later different-author posts to inspect before declaring it answered. */
 	responsePostIds?: string[];
+	/**
+	 * Verbatim excerpts for `possibly_answered` response posts already in the
+	 * packed thread — so a reader does not have to resolve ids against `posts[]`.
+	 */
+	responseExcerpts?: AgentResponseExcerpt[];
 	isThreadTail?: true;
+}
+
+/** Packed response post cited by a `possibly_answered` open question. */
+export interface AgentResponseExcerpt {
+	id: string;
+	author: string;
+	at: string;
+	text: string;
 }
 
 /** Lean brief with agent-facing timestamps and inlined decision text. */
@@ -163,6 +176,50 @@ export interface AgentThreadBrief
 	extends Omit<ThreadBrief, "decisions" | "openQuestions"> {
 	decisions?: AgentBriefDecision[];
 	openQuestions?: AgentBriefOpenQuestion[];
+}
+
+/**
+ * Cross-thread decision layer under `projection: "brief"`. Each entry keeps
+ * its originating `threadId`; per-thread `threads[].brief` stays for locality.
+ */
+export interface AgentMergedBrief {
+	decisions?: AgentMergedBriefDecision[];
+	openQuestions?: AgentMergedBriefOpenQuestion[];
+}
+
+export interface AgentMergedBriefDecision extends AgentBriefDecision {
+	threadId: string;
+}
+
+export interface AgentMergedBriefOpenQuestion extends AgentBriefOpenQuestion {
+	threadId: string;
+}
+
+/**
+ * Deterministic roll-up of fields already in the packet. Counts and ids only —
+ * never LLM prose or a claimed research narrative.
+ */
+export interface AgentResearchSummary {
+	/**
+	 * Best orientation thread: strongest decision-bearing thread when any
+	 * exist, otherwise the highest ticket-signal / non-noise purpose thread —
+	 * not blindly `role === "primary"` when that thread is purpose `noise` or
+	 * thin automation.
+	 */
+	primaryThreadId?: string;
+	/**
+	 * Thread ids that contribute at least one brief decision, ordered by each
+	 * thread's strongest decision (kind priority, then recency).
+	 */
+	decisionThreadIds: string[];
+	/** Decision counts by `kind` across selected threads (zeros omitted). */
+	decisionsByKind?: Partial<Record<AgentBriefDecision["kind"], number>>;
+	/** Open questions whose packet-local resolution is still unresolved-looking. */
+	unresolvedOpenQuestions: number;
+	/** Caller-supplied permalink inputs that did not resolve into readable evidence. */
+	blockedOrUnresolvedPermalinks?: string[];
+	/** `evidence.next` action names with `priority: "recommended"`. */
+	recommendedNext: string[];
 }
 
 export interface AgentTechnicalEntity {
@@ -236,13 +293,24 @@ export interface AgentRelatedTicket {
 	key: string;
 	mentions: number;
 	threadId?: string;
+	/** Mattermost permalink when a related thread resolved. */
 	url?: string;
+	/**
+	 * Tracker issue URL co-occurring beside the key in mention text.
+	 * Never overloads Mattermost {@link url}.
+	 */
+	trackerUrl?: string;
 	conversation?: string;
 	latestAt?: string;
 	excerpt?: string;
 	sourceThreadId?: string;
 	/** True when the related target is already visible in the selected packet. */
 	alreadyInPacket?: true;
+	/**
+	 * True when no Mattermost thread resolved and no tracker URL co-occurred
+	 * beside the key — bare mention only, not a hop target.
+	 */
+	unresolvableTracker?: true;
 }
 
 export type AgentAnchorKind =
@@ -311,6 +379,13 @@ export interface AgentThread {
 	 * roots (`multi_ticket_root`); never replaces `role`.
 	 */
 	presentation?: "announce";
+	/**
+	 * True when this thread is a related/historical neighbor of the subject
+	 * ticket rather than focused discussion of it.
+	 */
+	historicalNeighbor?: true;
+	/** Dominant non-subject tracker key when {@link historicalNeighbor} is set. */
+	relatedTicketKey?: string;
 	span?: { firstAt: string; lastAt: string; totalPosts: number };
 	anchors?: AgentAnchor[];
 	clusters?: AgentCluster[];
@@ -372,6 +447,8 @@ export interface AgentBackgroundThread {
 	/** Probe values that matched, so the pointer is attributable. */
 	matchedProbes: string[];
 	excerpts: string[];
+	/** Short reason this pointer exists — hydrate only if the excerpt earns it. */
+	whyBackground: string;
 	/** Argv segments only — copy; never auto-exec or join into a shell string. */
 	command: string[];
 }

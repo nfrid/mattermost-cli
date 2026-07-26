@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	isHistoricalNeighborThread,
 	segmentThreadByTicketProximity,
 	ticketWindowPostIds,
 } from "./ticket-segments.ts";
@@ -141,6 +142,8 @@ describe("ticket proximity segmentation", () => {
 			matchRadius: 1,
 		});
 		expect(metrics.rootAnchoredFocused).toBe(true);
+		expect(metrics.exclusiveSubjectKey).toBe(true);
+		expect(metrics.otherTicketDominated).toBe(false);
 		expect(metrics.ticketDensity).toBe(1);
 		expect(metrics.segments).toEqual([
 			expect.objectContaining({
@@ -151,5 +154,38 @@ describe("ticket proximity segmentation", () => {
 		expect(
 			metrics.segments.some((segment) => segment.reason === "off_topic_gap"),
 		).toBe(false);
+	});
+
+	test("marks exclusive subject keys and other-ticket-dominated neighborhoods", () => {
+		const exclusive = segmentThreadByTicketProximity(
+			[
+				{ id: "e0", message: "BTB-1281 payment timeout" },
+				{ id: "e1", message: "reproduced in reconcile worker" },
+				{ id: "e2", message: "shipping the retry patch" },
+			],
+			{ subjectTicket: "BTB-1281" },
+		);
+		expect(exclusive.exclusiveSubjectKey).toBe(true);
+		expect(exclusive.otherTicketDominated).toBe(false);
+
+		const related = segmentThreadByTicketProximity(
+			[
+				{ id: "h0", message: "BTB-701 historical war room" },
+				...Array.from({ length: 10 }, (_, index) => ({
+					id: `h${index + 1}`,
+					message: `BTB-701 detail ${index}`,
+				})),
+				{ id: "h11", message: "also mentions BTB-1281 once" },
+			],
+			{ subjectTicket: "BTB-1281" },
+		);
+		expect(related.exclusiveSubjectKey).toBe(false);
+		expect(related.otherTicketDominated).toBe(true);
+		expect(related.dominantOtherTicketKey).toBe("BTB-701");
+		expect(related.otherTicketMentions).toBeGreaterThan(
+			related.subjectTicketMentions,
+		);
+		expect(isHistoricalNeighborThread(related)).toBe(true);
+		expect(isHistoricalNeighborThread(exclusive)).toBe(false);
 	});
 });

@@ -26,6 +26,7 @@ import {
 	validateChannelsCommand,
 	whoamiCommand,
 } from "./commands.ts";
+import { resolveContextAgentBrief } from "./context-projection.ts";
 import type {
 	CliContext,
 	CommandOptions,
@@ -67,7 +68,16 @@ export async function executeCommand(
 				return await validateChannelsCommand(config, dependencies);
 			case "doctor":
 				return await doctorCommand(config, dependencies);
-			case "context":
+			case "context": {
+				const brief = resolveContextAgentBrief({
+					agent: Boolean(options.agent),
+					subject: commandOptions.subject,
+					ticket: commandOptions.ticket,
+					brief: commandOptions.brief,
+					navigate: commandOptions.navigate,
+					short: commandOptions.short,
+					fullPosts: commandOptions.fullPosts,
+				});
 				return await contextCommand(
 					config,
 					{
@@ -76,13 +86,14 @@ export async function executeCommand(
 						remoteSearch: commandOptions.remoteSearch,
 						short: commandOptions.short,
 						navigate: commandOptions.navigate,
-						brief: commandOptions.brief,
+						...(brief ? { brief: true } : {}),
 						timeline: commandOptions.timeline,
 						signals: commandOptions.signals,
 						permalinks: commandOptions.permalink,
 					},
 					dependencies,
 				);
+			}
 			case "people":
 				return await peopleCommand(config, {
 					channels: commandOptions.channel,
@@ -121,6 +132,7 @@ export async function executeCommand(
 						fileId: commandOptions.fileId,
 						out: commandOptions.out,
 						outDir: commandOptions.outDir,
+						agent: options.agent,
 						inspect: commandOptions.inspect,
 						previewLines: commandOptions.previewLines,
 					},

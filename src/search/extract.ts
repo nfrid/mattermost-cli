@@ -41,11 +41,44 @@ const USERNAME_PATTERN = /(?:^|\s)@([A-Za-z0-9._-]{2,64})\b/g;
 const NAMED_RELATION_PATTERN =
 	/(?:^|[\s(])(repo(?:sitory)?|репозитор(?:ий|ия)|service|сервис)\s*[:=]?\s*([A-Za-z0-9][A-Za-z0-9_./-]{1,100})/giu;
 
+/**
+ * Hosts that may carry issue keys in the path (Yandex Tracker, Jira, etc.).
+ * Kibana / Elastic / generic app hosts are excluded so `.ds-prod-api-2026…`
+ * does not become ticket `API-2026` with a fake trackerUrl.
+ */
+export function isTrackerIssueHost(hostname: string): boolean {
+	const host = hostname.trim().toLowerCase();
+	if (!host) return false;
+	if (host.startsWith("tracker.") || host.includes(".tracker.")) return true;
+	if (host.startsWith("jira.") || host.includes(".jira.")) return true;
+	if (host === "atlassian.net" || host.endsWith(".atlassian.net")) return true;
+	if (host.includes("youtrack")) return true;
+	return false;
+}
+
+/**
+ * Drop non-tracker URLs before ticket-key matching so path segments like
+ * `.ds-prod-api-2026.24` are not treated as issue keys. Tracker/Jira URLs are
+ * kept so bare `https://tracker…/BTB-200` still counts as a mention.
+ */
+export function textForTicketKeyExtraction(text: string): string {
+	return text.replace(URL_PATTERN, (raw) => {
+		const value = trimTrailingPunctuation(raw);
+		try {
+			if (isTrackerIssueHost(new URL(value).hostname)) return raw;
+		} catch {
+			// Unparseable URLs are treated as non-tracker and masked.
+		}
+		return " ";
+	});
+}
+
 /** Unique tracker keys like `BTB-2080` / `TECHSUPP-109` (uppercase, sorted). */
 export function extractTicketKeys(text: string): string[] {
+	const searchable = textForTicketKeyExtraction(text);
 	return [
 		...new Set(
-			(text.match(TICKET_PATTERN) ?? []).map((key) => key.toUpperCase()),
+			(searchable.match(TICKET_PATTERN) ?? []).map((key) => key.toUpperCase()),
 		),
 	].sort((left, right) => left.localeCompare(right));
 }

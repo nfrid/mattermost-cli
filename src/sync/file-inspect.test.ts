@@ -139,6 +139,8 @@ describe("bounded attachment inspection", () => {
 			format: "image",
 			interpreted: false,
 			reason: "external_image_reader_required",
+			recommendedAction:
+				"the local path is readable by an image-capable agent or tool; mm does not perform OCR or generate captions",
 		});
 		expect(
 			inspectDownloadedFile({

@@ -76,6 +76,134 @@ describe("background threads", () => {
 		expect(pointer?.conversationAlias).toBe("platform");
 		expect(pointer?.matchedProbes).toEqual(["idempotency keys"]);
 		expect(pointer?.excerpts.length).toBeGreaterThan(0);
+		expect(pointer?.noise).toBeUndefined();
+		expect(pointer?.whyBackground).toContain("idempotency keys");
+		expect(pointer?.whyBackground).toContain(
+			"hydrate only if the excerpt earns it",
+		);
+		store.close();
+	});
+
+	test("marks short stop-ish probes as noise and omits them from agent projection", async () => {
+		const store = await seededStore();
+		store.writePage({
+			conversation: conversationFixture("platform", "channel-platform"),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: "eeeeeeeeeeeeeeeeeeeeeeeeee",
+					channel_id: "channel-platform",
+					message: "какая роль у сервиса в платежах",
+					create_at: 30,
+				}),
+			],
+		});
+		const context = await getMattermostContext(
+			{ subject: "BTB-1", queries: ["роль"], local: true },
+			{ config: configFixture(), store, now: () => 2_000 },
+		);
+		const noisy = context.background?.filter(({ noise }) => noise);
+		expect(noisy?.length).toBeGreaterThan(0);
+		expect(
+			noisy?.every(({ whyBackground }) => whyBackground.includes("noise")),
+		).toBe(true);
+		expect(
+			context.probeCoverage?.find(({ probe }) => probe === "роль")
+				?.backgroundThreads,
+		).toBe(0);
+		const agent = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		) as unknown as { background?: unknown[] };
+		expect(agent.background).toBeUndefined();
+		store.close();
+	});
+
+	test("agent projection keeps at most two non-noise background pointers", async () => {
+		const store = await MattermostStore.open(":memory:");
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: TICKET_ROOT,
+					channel_id: "channel-payments",
+					message: "BTB-1 duplicate charge on retry",
+					create_at: 1_000,
+				}),
+			],
+		});
+		const designThreads = [
+			{
+				id: "cccccccccccccccccccccccccc",
+				message: "designing idempotency keys for retries",
+			},
+			{
+				id: "dddddddddddddddddddddddddd",
+				message: "idempotency keys must survive a retry storm",
+			},
+			{
+				id: "eeeeeeeeeeeeeeeeeeeeeeeeee",
+				message: "we chose idempotency keys over unique constraints",
+			},
+		] as const;
+		for (const [index, thread] of designThreads.entries()) {
+			store.writePage({
+				conversation: conversationFixture("platform", "channel-platform"),
+				users: [userFixture()],
+				posts: [
+					postFixture({
+						id: thread.id,
+						channel_id: "channel-platform",
+						message: thread.message,
+						create_at: 10 + index,
+					}),
+				],
+			});
+		}
+		const context = await getMattermostContext(
+			{ subject: "BTB-1", queries: ["idempotency keys"], local: true },
+			{ config: configFixture(), store, now: () => 2_000 },
+		);
+		const nonNoise = (context.background ?? []).filter(({ noise }) => !noise);
+		expect(nonNoise.length).toBeGreaterThan(2);
+		const agent = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		) as unknown as {
+			background?: Array<{ whyBackground?: string; noise?: true }>;
+		};
+		expect(agent.background?.length).toBeLessThanOrEqual(2);
+		expect(agent.background?.every((pointer) => pointer.whyBackground)).toBe(
+			true,
+		);
+		expect(agent.background?.some((pointer) => pointer.noise)).toBeFalsy();
+		store.close();
+	});
+
+	test("hints when a truncated Russian stem probe morph-misses on surface match", async () => {
+		const store = await seededStore();
+		store.writePage({
+			conversation: conversationFixture("platform", "channel-platform"),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: "eeeeeeeeeeeeeeeeeeeeeeeeee",
+					channel_id: "channel-platform",
+					message: "обсуждаем транзакции и ретраи платежей",
+					create_at: 30,
+				}),
+			],
+		});
+		const context = await getMattermostContext(
+			{ subject: "BTB-1", queries: ["транзакц"], local: true },
+			{ config: configFixture(), store, now: () => 2_000 },
+		);
+		const coverage = context.probeCoverage?.find(
+			({ probe }) => probe === "транзакц",
+		);
+		expect(coverage?.status).toBe("no_match");
+		expect(coverage?.hint).toContain("truncated stem");
+		expect(coverage?.hint).toContain("full word form");
+		expect(coverage?.hint).toContain("prefix search is off");
 		store.close();
 	});
 

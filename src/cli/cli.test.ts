@@ -418,6 +418,111 @@ describe("CLI output", () => {
 		});
 	});
 
+	test("ticket --agent defaults to brief; --full-posts restores dense posts", async () => {
+		const projectRoot = await projectWithConfig();
+		const store = await MattermostStore.open(
+			join(projectRoot, ".mattermost/mattermost.sqlite3"),
+		);
+		const rootId = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const fillerId = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
+		const decisionId = "cccccccccccccccccccccccccc";
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: rootId,
+					channel_id: "channel-payments",
+					message: "BTB-1 обсуждаем ограничения ролей",
+					create_at: 10,
+					update_at: 10,
+				}),
+				postFixture({
+					id: fillerId,
+					channel_id: "channel-payments",
+					root_id: rootId,
+					message: "промежуточное сообщение про интеграцию",
+					create_at: 15,
+					update_at: 15,
+				}),
+				postFixture({
+					id: decisionId,
+					channel_id: "channel-payments",
+					root_id: rootId,
+					message:
+						"по BTB-1 решили: будем не запрещать роли, а разрешать остальным",
+					create_at: 20,
+					update_at: 20,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: decisionId,
+				newestPostAt: 20,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1,
+				coverageComplete: true,
+			},
+		});
+		store.close();
+
+		const briefDefault = capture();
+		expect(
+			await runCli(["context", "BTB-1", "--local", "--agent"], {
+				projectRoot,
+				env: {},
+				stdout: briefDefault,
+				stderr: capture(),
+			}),
+		).toBe(0);
+		const briefDoc = JSON.parse(briefDefault.text);
+		expect(briefDoc).toMatchObject({
+			command: "context",
+			success: true,
+			projection: "brief",
+		});
+		expect(briefDoc.brief?.decisions?.length).toBeGreaterThan(0);
+		expect(JSON.stringify(briefDoc)).not.toContain(
+			"промежуточное сообщение про интеграцию",
+		);
+
+		const fullPosts = capture();
+		expect(
+			await runCli(["context", "BTB-1", "--local", "--agent", "--full-posts"], {
+				projectRoot,
+				env: {},
+				stdout: fullPosts,
+				stderr: capture(),
+			}),
+		).toBe(0);
+		const denseDoc = JSON.parse(fullPosts.text);
+		expect(denseDoc.projection).toBeUndefined();
+		expect(JSON.stringify(denseDoc)).toContain(
+			"промежуточное сообщение про интеграцию",
+		);
+
+		const textSubject = capture();
+		expect(
+			await runCli(
+				[
+					"context",
+					"payment timeout",
+					"--channel",
+					"payments",
+					"--local",
+					"--agent",
+				],
+				{
+					projectRoot,
+					env: {},
+					stdout: textSubject,
+					stderr: capture(),
+				},
+			),
+		).toBe(0);
+		expect(JSON.parse(textSubject.text).projection).toBeUndefined();
+	});
+
 	test("formats the same whoami result for human output", async () => {
 		const projectRoot = await projectWithConfig();
 		const stdout = capture();

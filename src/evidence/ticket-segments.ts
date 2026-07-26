@@ -17,6 +17,11 @@ export interface TicketSegment {
 	recommendHydrate?: boolean;
 }
 
+/** Min posts before a thread can count as other-ticket-dominated. */
+export const OTHER_TICKET_DOMINATED_MIN_POSTS = 8;
+/** Other-key mentions must be at least this multiple of subject mentions. */
+export const OTHER_TICKET_DOMINATED_RATIO = 2;
+
 export interface TicketProximityMetrics {
 	ticketDensity: number;
 	nearestTicketDistance: number | null;
@@ -26,6 +31,20 @@ export interface TicketProximityMetrics {
 	 * reply chain as on-topic (duty/support threads), not as off-topic gaps.
 	 */
 	rootAnchoredFocused: boolean;
+	/** Subject is the only tracker key mentioned anywhere in the thread. */
+	exclusiveSubjectKey: boolean;
+	/**
+	 * Long thread where other ticket keys outnumber the subject — typical
+	 * related-historical neighborhood rather than this-ticket discussion.
+	 */
+	otherTicketDominated: boolean;
+	/**
+	 * Most frequent non-subject tracker key when the thread mentions others.
+	 * Used to label historical neighbors (`relatedTicketKey`).
+	 */
+	dominantOtherTicketKey: string | null;
+	subjectTicketMentions: number;
+	otherTicketMentions: number;
 	ticketWindowPostCount: number;
 	threadPostCount: number;
 	ticketHitPostIds: string[];
@@ -71,6 +90,11 @@ export function segmentThreadByTicketProximity(
 			nearestTicketDistance: null,
 			ticketInRoot: false,
 			rootAnchoredFocused: false,
+			exclusiveSubjectKey: false,
+			otherTicketDominated: false,
+			dominantOtherTicketKey: null,
+			subjectTicketMentions: 0,
+			otherTicketMentions: 0,
 			ticketWindowPostCount: 0,
 			threadPostCount: 0,
 			ticketHitPostIds: [],
@@ -96,6 +120,9 @@ export function segmentThreadByTicketProximity(
 
 	const ticketHitIndexes: number[] = [];
 	const matchHitIndexes: number[] = [];
+	let subjectTicketMentions = 0;
+	let otherTicketMentions = 0;
+	const otherKeyCounts = new Map<string, number>();
 	for (let index = 0; index < chronological.length; index += 1) {
 		const post = chronological[index];
 		if (!post) continue;
@@ -103,6 +130,27 @@ export function segmentThreadByTicketProximity(
 		const hasSubject = Boolean(subject && keys.includes(subject));
 		if (hasSubject) ticketHitIndexes.push(index);
 		else if (matchIds.has(post.id)) matchHitIndexes.push(index);
+		if (!subject) continue;
+		for (const key of keys) {
+			if (key === subject) subjectTicketMentions += 1;
+			else {
+				otherTicketMentions += 1;
+				otherKeyCounts.set(key, (otherKeyCounts.get(key) ?? 0) + 1);
+			}
+		}
+	}
+	let dominantOtherTicketKey: string | null = null;
+	let dominantOtherCount = 0;
+	for (const [key, count] of otherKeyCounts) {
+		if (
+			count > dominantOtherCount ||
+			(count === dominantOtherCount &&
+				(dominantOtherTicketKey === null ||
+					key.localeCompare(dominantOtherTicketKey) < 0))
+		) {
+			dominantOtherTicketKey = key;
+			dominantOtherCount = count;
+		}
 	}
 
 	const root = chronological[0];
@@ -112,6 +160,14 @@ export function segmentThreadByTicketProximity(
 	// Support/duty pattern: key only in the announce root, then a long reply chain.
 	const rootAnchoredFocused =
 		ticketInRoot && ticketHitIndexes.every((index) => index === 0);
+	const exclusiveSubjectKey =
+		subjectTicketMentions > 0 && otherTicketMentions === 0;
+	const otherTicketDominated =
+		subjectTicketMentions > 0 &&
+		!rootAnchoredFocused &&
+		!exclusiveSubjectKey &&
+		threadPostCount >= OTHER_TICKET_DOMINATED_MIN_POSTS &&
+		otherTicketMentions >= subjectTicketMentions * OTHER_TICKET_DOMINATED_RATIO;
 
 	const coverage = new Array<"ticket" | "match" | undefined>(
 		threadPostCount,
@@ -168,6 +224,11 @@ export function segmentThreadByTicketProximity(
 		nearestTicketDistance,
 		ticketInRoot,
 		rootAnchoredFocused,
+		exclusiveSubjectKey,
+		otherTicketDominated,
+		dominantOtherTicketKey,
+		subjectTicketMentions,
+		otherTicketMentions,
 		ticketWindowPostCount,
 		threadPostCount,
 		ticketHitPostIds: ticketHitIndexes
@@ -175,6 +236,27 @@ export function segmentThreadByTicketProximity(
 			.filter((id): id is string => Boolean(id)),
 		segments,
 	};
+}
+
+/**
+ * Secondary thread that is not focused on the subject ticket — a related or
+ * historical neighbor. Brief packing should shrink these harder than focused
+ * same-ticket secondaries.
+ */
+export function isHistoricalNeighborThread(
+	metrics: Pick<
+		TicketProximityMetrics,
+		| "exclusiveSubjectKey"
+		| "otherTicketDominated"
+		| "rootAnchoredFocused"
+		| "ticketDensity"
+		| "subjectTicketMentions"
+	>,
+): boolean {
+	if (metrics.exclusiveSubjectKey || metrics.rootAnchoredFocused) return false;
+	if (metrics.otherTicketDominated) return true;
+	if (metrics.subjectTicketMentions === 0) return true;
+	return metrics.ticketDensity < 0.5;
 }
 
 /** Post ids that fall inside any ticket or match window. */

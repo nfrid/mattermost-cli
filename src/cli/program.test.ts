@@ -31,6 +31,48 @@ describe("context --navigate", () => {
 	});
 });
 
+describe("context ticket --agent brief default flags", () => {
+	test("accepts --full-posts and rejects it with exclusive projections", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		const program = createProgram(async (command, _global, commandOptions) => {
+			seen.push({ command, ...(commandOptions ?? {}) });
+			return {
+				command,
+				schemaVersion: SCHEMA_VERSION,
+				success: true,
+				data: {},
+				warnings: [],
+			};
+		});
+
+		await program.parseAsync(["context", "BTB-1", "--full-posts", "--agent"], {
+			from: "user",
+		});
+		expect(seen.at(-1)).toMatchObject({
+			command: "context",
+			subject: "BTB-1",
+			fullPosts: true,
+		});
+		expect(seen.at(-1)?.brief).toBeUndefined();
+
+		await program.parseAsync(["context", "BTB-1", "--brief", "--agent"], {
+			from: "user",
+		});
+		expect(seen.at(-1)).toMatchObject({ brief: true });
+
+		for (const conflicting of ["--brief", "--navigate", "--short"] as const) {
+			await expect(
+				program.parseAsync(
+					["context", "BTB-1", "--full-posts", conflicting, "--agent"],
+					{ from: "user" },
+				),
+			).rejects.toThrow(
+				/cannot be used|conflict|full-posts|brief|navigat|short/i,
+			);
+		}
+	});
+});
+
 describe("context/thread --signals", () => {
 	test("accepts --signals on context and thread", async () => {
 		const seen: Array<Record<string, unknown>> = [];
