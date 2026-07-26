@@ -1,3 +1,4 @@
+import type { ImageTextExtractor } from "./image-text.ts";
 import { shouldUseMacosVisionOcr } from "./macos-ocr.ts";
 import { previewXlsxWorkbook } from "./xlsx-preview.ts";
 
@@ -86,17 +87,7 @@ const IMAGE_EXTENSIONS = new Set([
  * {@link loadConfiguredOcrExtractor} loads `MATTERMOST_OCR_MODULE` or the
  * built-in macOS Vision backend. Returned text is always tagged `trust: "low"`.
  */
-export type ImageTextExtractor = (input: {
-	name: string;
-	mimeType: string;
-	bytes: Uint8Array;
-}) =>
-	| { text: string; engine?: string; truncated?: true }
-	| null
-	| undefined
-	| Promise<
-			{ text: string; engine?: string; truncated?: true } | null | undefined
-	  >;
+export type { ImageTextExtractor } from "./image-text.ts";
 
 /**
  * Inspect only bounded, directly decodable text (and bounded XLSX sheet

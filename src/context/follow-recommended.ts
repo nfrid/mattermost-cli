@@ -15,6 +15,7 @@ import type {
 	ContextDependencies,
 	ContextResult,
 	ContextThread,
+	FollowLogEntry,
 } from "./types.ts";
 
 /** Client capable of both thread hydrate and file download for follow-ups. */
@@ -31,23 +32,7 @@ type FollowClient = ContextClient & {
 	}>;
 };
 
-export type FollowLogStatus =
-	| "ok"
-	| "error"
-	| "skipped_external_reader"
-	| "skipped_disallowed"
-	| "skipped_no_command";
-
-export interface FollowLogEntry {
-	/** Argv segments copied from `evidence.next` (never a shell string). */
-	command: string[];
-	action: EvidenceNextStep["action"];
-	status: FollowLogStatus;
-	/** Present when status is `error`. */
-	error?: string;
-	/** File inspect summary when a read_attachments step ran. */
-	inspectionStatus?: string;
-}
+export type { FollowLogEntry, FollowLogStatus } from "./types.ts";
 
 export interface FollowRecommendedResult {
 	context: ContextResult;

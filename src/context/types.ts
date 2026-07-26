@@ -1,7 +1,13 @@
 import type { MattermostConfig } from "../config/config.ts";
-import type { EvidenceStatus } from "../evidence/evidence.ts";
-import type { EvidencePost, PackedThread } from "../evidence/packing.ts";
-import type { TicketSegment } from "../evidence/ticket-segments.ts";
+import type { PackedThread } from "../evidence/packing.ts";
+import type {
+	ContextThread,
+	EvidenceNextStep,
+	EvidenceStatus,
+	FreshnessEvidence,
+	RemoteSearchEvidence,
+	SelectionEvidence,
+} from "../evidence/types.ts";
 import type { MattermostClient } from "../mattermost/client.ts";
 import type {
 	AgentProbeInput,
@@ -16,8 +22,22 @@ import type {
 } from "../search/index.ts";
 import type { Warning } from "../shared/command-result.ts";
 import type { ConversationRecord, MattermostStore } from "../store/index.ts";
+import type { FileDownloadResult } from "../sync/file-download.ts";
 import type { SyncClient } from "../sync/sync.ts";
-import type { PersonRef } from "./people.ts";
+
+/**
+ * The evidence-shaped packet fields live in `evidence/types.ts` so that
+ * `buildEvidence` can read them without importing orchestration. Re-exported
+ * here because this module is the packet's documented home.
+ */
+export type {
+	ContextThread,
+	DroppedCandidate,
+	DroppedCandidateReason,
+	FreshnessEvidence,
+	RemoteSearchEvidence,
+	SelectionEvidence,
+} from "../evidence/types.ts";
 
 export const DEFAULT_SEARCH_LIMIT = 10;
 /**
@@ -117,6 +137,45 @@ export interface ThreadInput {
 	signals?: boolean;
 }
 
+/**
+ * Who a username is. Weighing a chat statement depends on who made it — a
+ * product manager's "можно делать" and a backend engineer's are different
+ * claims — and nothing else in the packet carries that.
+ */
+export interface PersonRef {
+	username: string;
+	displayName?: string;
+	/** Profile title or configured override; absent when neither is set. */
+	role?: string;
+	/** Where `role` came from, so a stale config override is attributable. */
+	roleSource?: "profile" | "config";
+	isBot?: true;
+}
+
+export interface PersonActivity extends PersonRef {
+	messages: number;
+	latestAt: number;
+}
+
+/** Status of one executed `--follow-recommended` step. */
+export type FollowLogStatus =
+	| "ok"
+	| "error"
+	| "skipped_external_reader"
+	| "skipped_disallowed"
+	| "skipped_no_command";
+
+export interface FollowLogEntry {
+	/** Argv segments copied from `evidence.next` (never a shell string). */
+	command: string[];
+	action: EvidenceNextStep["action"];
+	status: FollowLogStatus;
+	/** Present when status is `error`. */
+	error?: string;
+	/** File inspect summary when a read_attachments step ran. */
+	inspectionStatus?: string;
+}
+
 export interface ContextClient extends SyncClient {
 	getPost(postId: string): ReturnType<MattermostClient["getPost"]>;
 	getThread(postId: string): ReturnType<MattermostClient["getThread"]>;
@@ -128,95 +187,6 @@ export interface ContextDependencies {
 	store?: MattermostStore;
 	client?: ContextClient;
 	now?: () => number;
-}
-
-export interface FreshnessEvidence {
-	alias: string;
-	conversationId: string;
-	kind: ConversationRecord["kind"];
-	observedAt: number;
-	lastSuccessAt: number | null;
-	ageSeconds: number | null;
-	stale: boolean;
-	coverageComplete: boolean;
-	/** Oldest indexed post; the cutoff bound when coverage is incomplete. */
-	oldestCoveredAt: number | null;
-}
-
-export interface ContextThread extends PackedThread {
-	conversationId: string;
-	conversationAlias: string;
-	conversationKind: ConversationRecord["kind"];
-	reasons: ThreadCandidate["reasons"];
-	matchingPostIds: string[];
-	latestActivityAt: number;
-	link: string;
-	/** Prior root posts from the same DM conversation for short threads. */
-	surround?: EvidencePost[];
-	ticketDensity?: number;
-	nearestTicketDistance?: number | null;
-	rootAnchoredFocused?: boolean;
-	exclusiveSubjectKey?: boolean;
-	otherTicketDominated?: boolean;
-	/**
-	 * Secondary (or any) thread that is a related/historical neighbor rather than
-	 * focused on the subject ticket. Brief packing shrinks these harder.
-	 */
-	historicalNeighbor?: true;
-	/** Dominant non-subject tracker key when {@link historicalNeighbor} is set. */
-	relatedTicketKey?: string;
-	segments?: TicketSegment[];
-}
-
-export interface RemoteSearchEvidence {
-	requested: boolean;
-	performed: boolean;
-	reason: "explicit" | "incomplete_local_coverage" | "stale_local_index" | null;
-	queries: Array<{
-		probe: string;
-		probeKind?: AgentProbeInput["kind"];
-		returnedPosts: number;
-		acceptedPosts: number;
-	}>;
-	candidateThreads: number;
-	failures: number;
-}
-
-export interface SelectionEvidence {
-	candidateThreads: number;
-	returnedThreads: number;
-	droppedThin: number;
-	droppedByBudget: number;
-	/**
-	 * The subset of {@link droppedByBudget} that named the subject ticket or
-	 * matched it as a phrase / structured entity. Zero means the unexamined
-	 * candidates were the weak lexical tail, so `budget_bounded` is bookkeeping
-	 * rather than a visible gap.
-	 */
-	droppedByBudgetSubjectMatched: number;
-	droppedNoMatch: number;
-	droppedCandidates: DroppedCandidate[];
-}
-
-/** `unavailable`: retrieval failed for that thread, so it was never judged. */
-export type DroppedCandidateReason =
-	| "budget"
-	| "no_match"
-	| "thin"
-	| "unavailable";
-
-/** Ranked candidate omitted from the context packet (no extra hydrate). */
-export interface DroppedCandidate {
-	threadId: string;
-	url: string;
-	conversationId: string;
-	conversationAlias: string;
-	conversationKind: ConversationRecord["kind"];
-	dropReason: DroppedCandidateReason;
-	reasons: RankingReason[];
-	excerpt?: string;
-	/** Up to two distinct match excerpts (first also mirrored in {@link excerpt}). */
-	excerpts?: string[];
 }
 
 /** One-hop related ticket pointer (not a full nested context). */
@@ -402,7 +372,7 @@ export interface ContextResult {
 	 * Present when `context … --follow-recommended` ran recommended next steps.
 	 * One entry per attempted step (executed, skipped, or failed).
 	 */
-	followLog?: import("./follow-recommended.ts").FollowLogEntry[];
+	followLog?: FollowLogEntry[];
 	/**
 	 * True when `--follow-recommended` finished and either found nothing
 	 * recommended to run, or the merged packet has no further recommended next.
@@ -412,7 +382,7 @@ export interface ContextResult {
 	 * File inspect/download artifacts produced during `--follow-recommended`.
 	 * Not a substitute for reading `followLog[]`.
 	 */
-	followedAttachments?: import("../sync/file-download.ts").FileDownloadResult[];
+	followedAttachments?: FileDownloadResult[];
 }
 
 export interface SearchContextResult extends Omit<SearchResult, "candidates"> {

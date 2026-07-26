@@ -1,17 +1,3 @@
-import {
-	isActionableDroppedCandidate,
-	isSubjectMatchedBudgetDrop,
-	pickPrimaryThreadIndex,
-	shouldRecommendInspectDropped,
-} from "../context/selection.ts";
-import type {
-	ContextResult,
-	ContextThread,
-	DroppedCandidate,
-	FreshnessEvidence,
-	RemoteSearchEvidence,
-	SelectionEvidence,
-} from "../context/types.ts";
 import { extractTicketKeys } from "../text/index.ts";
 import {
 	budgetAwareAroundSidePosts,
@@ -20,187 +6,38 @@ import {
 	largestTimelineSkip,
 	MAX_AROUND_SIDE_POSTS,
 } from "./packing.ts";
+import {
+	isActionableDroppedCandidate,
+	isSubjectMatchedBudgetDrop,
+	pickPrimaryThreadIndex,
+	shouldRecommendInspectDropped,
+} from "./selection-policy.ts";
 import { buildThreadBrief } from "./signals.ts";
-
-export type EvidenceAdequacy = "usable" | "thin" | "insufficient";
-export type EvidenceCurrency = "current" | "possibly_stale" | "local_only";
-/**
- * Posts inside the selected threads. `not_applicable` when nothing was
- * selected: with no thread there is no transcript to be complete *or*
- * truncated, and reporting truncation reads as withheld evidence.
- */
-export type EvidenceThreadCompleteness =
-	| "complete"
-	| "truncated"
-	| "not_applicable";
-/**
- * Whether every ranked candidate was actually judged. `budget_bounded` means
- * candidates were left unexamined because thread or character room ran out, or
- * because the per-request hydration ceiling was reached — independent of
- * `selectedThreads`, which only describes posts inside the selected threads.
- */
-export type EvidenceSelectionCompleteness = "complete" | "budget_bounded";
-export type EvidenceIndexHistory = "full" | "cutoff_bounded";
-export type EvidenceDiscoveryCurrency =
-	| "current"
-	| "possibly_stale"
-	| "local_only";
-
-export type EvidenceNextAction =
-	| "thread_full"
-	| "thread_around"
-	| "sync"
-	| "inspect_dropped"
-	| "review_candidates"
-	| "fresh_or_remote"
-	| "read_attachments";
-
-export type EvidenceNextPriority = "recommended" | "optional";
-
-export type EvidenceNextImpact =
-	| "may_recover_omitted_core"
-	| "older_discovery_only"
-	| "may_add_dropped_pointer"
-	| "may_refresh_selected_or_discovery"
-	| "may_contradict_visible_text"
-	| "may_verify_quantitative_claim"
-	/** Spreadsheet bytes on a decision post; mm cannot verify quantities. */
-	| "cannot_verify_quantities"
-	/**
-	 * Image/workbook bytes: `file --inspect` downloads them but cannot interpret
-	 * contents; an external reader is required.
-	 */
-	| "requires_external_reader";
+import type {
+	ContextThread,
+	DroppedCandidate,
+	EvidenceAdequacy,
+	EvidenceCurrency,
+	EvidenceDiscoveryCurrency,
+	EvidenceHistory,
+	EvidenceIndexHistory,
+	EvidenceMayHaveMissedReason,
+	EvidenceNextImpact,
+	EvidenceNextPriority,
+	EvidenceNextStep,
+	EvidenceSelectionCompleteness,
+	EvidenceStatus,
+	EvidenceThreadCompleteness,
+	FreshnessEvidence,
+	RemoteSearchEvidence,
+	SelectionEvidence,
+} from "./types.ts";
 
 /**
- * Why {@link EvidenceVerdict.mayHaveMissedOtherThreads} is true. Absent when
- * the flag is false. Prefer the most actionable cause when several apply.
+ * The types this module produces live in `./types.ts` (see the note there).
+ * Re-exported so `evidence/evidence.ts` stays the documented import site.
  */
-export type EvidenceMayHaveMissedReason =
-	| "index_cutoff"
-	| "stale_discovery"
-	| "subject_matched_budget_drops"
-	| "local_discovery";
-
-export interface EvidenceNextStep {
-	action: EvidenceNextAction;
-	reason: string;
-	priority: EvidenceNextPriority;
-	impact: EvidenceNextImpact;
-	/** Argv only — never a shell string. Omitted when no safe follow-up exists. */
-	command?: string[];
-	threadId?: string;
-	conversationId?: string;
-	/** Post carrying the evidence, for `read_attachments`. */
-	postId?: string;
-}
-
-/**
- * Machine-readable roll-up of the detailed axes below it.
- *
- * The axes are all independently true and all worth auditing, but reading five
- * of them correctly on every packet — `selectedThreads: complete` alongside
- * `selection: budget_bounded`, `currency: current` alongside a stale discovery —
- * is a standing invitation to draw the wrong conclusion. This says the four
- * things a reader actually decides on. Every field is derived from the axes and
- * adds no new knowledge — with one deliberate softening, documented on
- * {@link EvidenceVerdict.mayHaveMissedOtherThreads}.
- */
-export interface EvidenceVerdict {
-	/**
-	 * The returned threads are usable and nothing was cut inside them. It does
-	 * not promise the answer is *in* them: a `recommended` `read_attachments`
-	 * step can still point at a file that contradicts the visible text.
-	 */
-	canAnswerFromSelectedEvidence: boolean;
-	/**
-	 * Discovery could not see everything: search reach was stale, or candidates
-	 * carrying subject-level evidence went unexamined. A merely budget-bounded
-	 * weak tail does **not** set this — that was the point of splitting
-	 * `droppedByBudgetSubjectMatched` out.
-	 *
-	 * The one place this is softer than the axes: cutoff-bounded history sets it
-	 * only on a packet that is not otherwise trusted. Nearly every conversation
-	 * is bounded by `historyDays`, so counting it unconditionally would pin the
-	 * flag to `true` forever. `completeness.indexHistory` and
-	 * {@link EvidenceHistory} always report the bound in full.
-	 */
-	mayHaveMissedOtherThreads: boolean;
-	/**
-	 * Additive cause for {@link mayHaveMissedOtherThreads}. Absent when the flag
-	 * is false.
-	 */
-	mayHaveMissedReason?: EvidenceMayHaveMissedReason;
-	/** The returned threads themselves may be behind the server. */
-	selectedEvidenceMayBeStale: boolean;
-	/** At least one `next` step is `recommended`. */
-	recommendedActionRequired: boolean;
-	/**
-	 * A true verdict flag has no safe follow-up in `next[]`. Agents must not
-	 * invent one; the reason explains the bound.
-	 */
-	noActionAvailable?: true;
-	noActionReason?: string;
-}
-
-export interface EvidenceStatus {
-	adequacy: EvidenceAdequacy;
-	currency: EvidenceCurrency;
-	/** Roll-up of the axes below; always consistent with them. */
-	verdict: EvidenceVerdict;
-	completeness: {
-		selectedThreads: EvidenceThreadCompleteness;
-		/** Additive since schema version 3; absent in older packets. */
-		selection?: EvidenceSelectionCompleteness;
-		indexHistory: EvidenceIndexHistory;
-		/** Additive since schema version 2; absent in older packets. */
-		discovery?: EvidenceDiscoveryCurrency;
-	};
-	next: EvidenceNextStep[];
-	selection: {
-		candidateThreads: number;
-		returnedThreads: number;
-		droppedThin: number;
-		droppedByBudget: number;
-		/** Unexamined candidates that still carried subject-level evidence. */
-		droppedByBudgetSubjectMatched: number;
-		/**
-		 * Candidates that survived ranking but carried no current content match
-		 * once hydrated. A non-zero count with an empty `droppedCandidates` means
-		 * the drops were ranking noise, not withheld evidence.
-		 */
-		droppedNoMatch: number;
-		droppedCandidates: DroppedCandidate[];
-	};
-	packing: {
-		omittedPosts: number;
-		largestSkip: number;
-		/** Threads for which a bounded or full hydration step is available. */
-		recommendedHydrationThreadIds?: string[];
-		/** Legacy alias retained for V1 compatibility. */
-		recommendFullThreadIds: string[];
-	};
-	/** Present only when some searched conversation has cutoff-bounded history. */
-	history?: EvidenceHistory;
-}
-
-/**
- * Which conversations are cutoff-bounded and how far back they reach, so the
- * `incomplete_history` warning can be judged instead of guessed. Compare
- * `oldestIndexedAt` with the thread's `latestAt`, and weigh
- * `inSelectedThreads` — a bounded channel nobody selected rarely matters.
- */
-export interface EvidenceHistory {
-	cutoffBounded: Array<{
-		alias: string;
-		conversationId: string;
-		/** ISO timestamp of the oldest indexed post; absent when never synced. */
-		oldestIndexedAt?: string;
-		inSelectedThreads: boolean;
-	}>;
-	/** Cutoff-bounded conversations beyond the reported cap. */
-	additional?: number;
-}
+export type * from "./types.ts";
 
 /** Below this, unexamined candidates are ranking tail, not a visible gap. */
 const SELECTION_REVIEW_MIN_DROPPED_BY_BUDGET = 3;
@@ -213,7 +50,7 @@ export function buildEvidence(input: {
 	selectedThreadsComplete: boolean;
 	/** Selection stopped before judging every candidate (room or hydration). */
 	selectionBudgetBounded?: boolean;
-	freshnessMode: ContextResult["freshnessMode"];
+	freshnessMode: "local" | "network" | "forced";
 	freshness: readonly FreshnessEvidence[];
 	searchedConversations: readonly { id: string }[];
 	threads: readonly ContextThread[];

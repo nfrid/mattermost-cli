@@ -9,7 +9,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ImageTextExtractor } from "./file-inspect.ts";
+import type { ImageTextExtractor } from "./image-text.ts";
 
 const MAX_OCR_BYTES = 12 * 1024 * 1024;
 const OCR_TIMEOUT_MS = 20_000;

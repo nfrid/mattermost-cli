@@ -2,27 +2,14 @@ import type { MattermostConfig } from "../config/config.ts";
 import type { MattermostStore } from "../store/index.ts";
 import { resolveContextConversations } from "./freshen.ts";
 import { withResources } from "./resources.ts";
-import type { ContextDependencies, ContextThread } from "./types.ts";
+import type {
+	ContextDependencies,
+	ContextThread,
+	PersonActivity,
+	PersonRef,
+} from "./types.ts";
 
-/**
- * Who a username is. Weighing a chat statement depends on who made it — a
- * product manager's "можно делать" and a backend engineer's are different
- * claims — and nothing else in the packet carries that.
- */
-export interface PersonRef {
-	username: string;
-	displayName?: string;
-	/** Profile title or configured override; absent when neither is set. */
-	role?: string;
-	/** Where `role` came from, so a stale config override is attributable. */
-	roleSource?: "profile" | "config";
-	isBot?: true;
-}
-
-export interface PersonActivity extends PersonRef {
-	messages: number;
-	latestAt: number;
-}
+export type { PersonActivity, PersonRef } from "./types.ts";
 
 /** Roster for the authors of the packed posts, in first-appearance order. */
 export function peopleInThreads(
