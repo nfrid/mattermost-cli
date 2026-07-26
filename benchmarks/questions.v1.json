@@ -83,6 +83,21 @@
 			"expectPurposeHint": false
 		},
 		{
+			"id": "chatter-url-query-string-with-subject",
+			"note": "The `?` lives only in a dashboard link, and the post names the subject ticket. Naming the ticket must not promote a link dump into a question.",
+			"subjectTicket": "BTB-1500",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "BTB-1500 графики тут https://kibana.internal/app/discover#/?_g=(filters:!())"
+				},
+				{ "id": "p2", "author": "bob", "message": "посмотрю" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
 			"id": "chatter-confirmation-emoji",
 			"note": "Short confirmation question with an emoticon; answered.",
 			"posts": [

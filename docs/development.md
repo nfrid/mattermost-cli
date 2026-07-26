@@ -65,6 +65,29 @@ still be covering phrasing this corpus happens not to contain, and removing or
 reweighting anything still needs a before/after `bun run benchmark` — see the
 signal-calibration note in the [ideas backlog](ideas.md).
 
+## Open-question corpus
+
+`bun run cues` says which cue decided an outcome; this says whether the outcome
+was right.
+
+```bash
+bun run questions              # labelled cases, precision/recall/F1
+bun run questions --json       # machine-readable report
+```
+
+`benchmarks/questions.v1.json` holds small labelled threads with the post ids
+that should appear in `brief.openQuestions[]` and whether an `open_question`
+purpose hint is expected. Text is synthetic — the retrieval benchmark's rule
+that no real message content enters the repository applies here too — but the
+shapes mirror what a real index contains, dominated by ordinary conversational
+questions carrying nothing but a bare `?`.
+
+Two caveats. The labels are editorial judgements about what an agent should be
+told is unresolved, not harvested ground truth, so read a score as a comparison
+between two versions of the code rather than an absolute. And a corpus written
+alongside a gate will flatter that gate: confirm any change against the live
+index too.
+
 ## Archived and future experiments
 
 - [Rejected local reranker](../experiments/reranker.md)

@@ -2178,7 +2178,12 @@ describe("data-file attachments on decision-layer posts", () => {
 		// a careful read — so impact stays cannot_verify_quantities.
 		const evidence = build([
 			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
-			dataPost("p2", "вот дубли, что с ними делать?", 20, "duplicates.xlsx"),
+			dataPost(
+				"p2",
+				"вот дубли по BTB-2080, что с ними делать?",
+				20,
+				"duplicates.xlsx",
+			),
 		]);
 		const step = evidence.next.find(
 			({ action }) => action === "read_attachments",
@@ -2202,7 +2207,12 @@ describe("data-file attachments on decision-layer posts", () => {
 	test("CSV on a decision post stays quantitatively verifiable via inspect", () => {
 		const evidence = build([
 			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
-			dataPost("p2", "вот дубли, что с ними делать?", 20, "duplicates.csv"),
+			dataPost(
+				"p2",
+				"вот дубли по BTB-2080, что с ними делать?",
+				20,
+				"duplicates.csv",
+			),
 		]);
 		const step = evidence.next.find(
 			({ action }) => action === "read_attachments",
@@ -2233,7 +2243,7 @@ describe("data-file attachments on decision-layer posts", () => {
 		// media-only owned empty-caption screenshots only.
 		const evidence = build([
 			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
-			dataPost("p2", "вот скрин, что делать?", 20, "screen.png"),
+			dataPost("p2", "вот скрин по BTB-2080, что делать?", 20, "screen.png"),
 		]);
 
 		expect(
@@ -2254,7 +2264,12 @@ describe("data-file attachments on decision-layer posts", () => {
 	test("a media-only outcome post keeps priority over a data file", () => {
 		const evidence = build([
 			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
-			dataPost("p2", "вот дубли, что делать?", 20, "duplicates.csv"),
+			dataPost(
+				"p2",
+				"вот дубли по BTB-2080, что делать?",
+				20,
+				"duplicates.csv",
+			),
 			evidencePost({ id: "p3", createAt: 30, message: "", files: ["shot"] }),
 		]);
 		const steps = evidence.next.filter(

@@ -918,6 +918,9 @@ export function buildThreadBrief(
 			// A truncated packet has no standing to say which post the thread ended
 			// on — the same rule the `tail` field follows.
 			packingComplete: (options.omittedPosts ?? 0) === 0,
+			...(options.subjectTicket
+				? { subjectTicket: options.subjectTicket }
+				: {}),
 		},
 	);
 
@@ -1003,6 +1006,45 @@ function chronologicalPosts(
  * transcript. `repliesAfter` and `isThreadTail` stay mechanical: they describe
  * position, never whether anyone actually answered.
  */
+/**
+ * A span whose only evidence is the bare `?`. Measured over a real index, this
+ * is 94% of `open_question_candidate` spans and 95% of inlined questions: the
+ * cue is precise at detecting *a question* and carries almost no information
+ * about whether that question is *open*. «заведёшь баг?» and «получилось
+ * черкануть ?» score exactly like a live architectural fork.
+ */
+function isBareQuestionMark(span: CandidateSpan): boolean {
+	return span.cues.length === 1 && span.cues[0] === "?";
+}
+
+/**
+ * Whether a question candidate may be reported as an open question rather than
+ * merely offered as an advisory span.
+ *
+ * The bare `?` corroborates; it does not decide. It qualifies only when the
+ * post also names the subject ticket, which is the one mechanical signal that
+ * the question is about the thing the caller asked about. Every other cue in
+ * `OPEN_QUESTION_CUES` states unresolvedness in words and qualifies on its own.
+ *
+ * `signals.candidateSpans` is deliberately unaffected — that layer is documented
+ * as advisory candidates, and an agent that asks for it should still see every
+ * question mark. This narrows the lean `brief`, which is what agents act on.
+ */
+function qualifiesAsOpenQuestion(
+	span: CandidateSpan,
+	post: EvidencePost | undefined,
+	subjectTicket: string | undefined,
+): boolean {
+	if (!isBareQuestionMark(span)) return true;
+	if (!post) return false;
+	// A `?` inside a Kibana or Grafana query string is not a question at all.
+	// `classifyQuestion` already discounts it for `kind`, but the span still
+	// scored, so a link-dump naming the ticket was inlined as a follow-up.
+	if (!hasInterrogativeSentence(post.message)) return false;
+	if (!subjectTicket) return false;
+	return extractTicketKeys(post.message).includes(subjectTicket.toUpperCase());
+}
+
 function buildOpenQuestions(
 	chronological: readonly EvidencePost[],
 	spans: readonly CandidateSpan[],
@@ -1010,6 +1052,7 @@ function buildOpenQuestions(
 		excludePostIds: ReadonlySet<string>;
 		packingComplete: boolean;
 		briefExcerptLimit: number;
+		subjectTicket?: string;
 	},
 ): BriefOpenQuestion[] {
 	const byId = new Map(chronological.map((post) => [post.id, post]));
@@ -1028,6 +1071,7 @@ function buildOpenQuestions(
 		if (seen.has(span.postId)) continue;
 		const post = byId.get(span.postId);
 		if (!post) continue;
+		if (!qualifiesAsOpenQuestion(span, post, options.subjectTicket)) continue;
 		seen.add(span.postId);
 		const index = live.findIndex((candidate) => candidate.id === post.id);
 		const responses =
@@ -1404,8 +1448,20 @@ function collectPurposeHints(
 
 	// Questions are their own purpose: folding them into `debugging` labeled every
 	// thread containing a `?` as debugging.
+	//
+	// Only qualifying spans count. Three posts containing a question mark is
+	// near-certain in any thread of nine or more, so counting bare `?` toward
+	// OPEN_QUESTION_MIN_POSTS gave 77% of such threads an `open_question` purpose
+	// — a label that fires on almost everything cannot order anything.
+	const byPostId = new Map(chronological.map((post) => [post.id, post]));
 	const questionSpans = signals.candidateSpans.filter(
-		(span) => span.kind === "open_question_candidate",
+		(span) =>
+			span.kind === "open_question_candidate" &&
+			qualifiesAsOpenQuestion(
+				span,
+				byPostId.get(span.postId),
+				options.subjectTicket,
+			),
 	);
 	const questionPostIds = [
 		...new Set(questionSpans.map((span) => span.postId)),

@@ -203,6 +203,18 @@ optional `isThreadTail`, a conservative packet-local `resolution`, and capped
 A `?` inside a URL does not make a follow-up into a question. A post inlined as a
 decision is never repeated as an open question.
 
+**A bare question mark corroborates; it does not qualify on its own.** A post
+whose only evidence is `?` is inlined here — and counts toward the
+`open_question` purpose hint — only when the `?` terminates a sentence of prose
+*and* the post names the subject ticket. Every other cue states unresolvedness
+in words and qualifies by itself. Measured over a real index, `?` alone was the
+sole evidence for 95% of inlined questions and 98% of those marked `unanswered`,
+which made the field fire on 77% of threads of nine or more posts; a label that
+common cannot order anything. The advisory `signals.candidateSpans` are
+deliberately unchanged and still carry every question mark, so `--signals`
+callers lose nothing. See `bun run questions` for the labelled cases this
+behaviour is measured against.
+
 `resolution` is `possibly_answered` when another author replied later,
 `unanswered` only when a complete packed thread ends on the question, and
 `unknown` otherwise. `answered` is reserved for future evidence stronger than

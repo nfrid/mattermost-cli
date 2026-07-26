@@ -469,7 +469,9 @@ describe("buildThreadBrief", () => {
 		const posts = [
 			post("d1", `BTB-2080 решили так: ${long}`, 10),
 			post("r1", `уточню: только про импорт ${long}`, 20, { author: "bob" }),
-			post("q1", `а что делать со старыми? ${long}`, 30, { author: "carol" }),
+			post("q1", `а что делать со старыми по BTB-2080? ${long}`, 30, {
+				author: "carol",
+			}),
 		];
 		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-2080" });
 		const decision = brief.decisions?.[0];
@@ -487,7 +489,9 @@ describe("buildThreadBrief", () => {
 		const posts = [
 			post("d1", "BTB-2080 решили выпилить", 10),
 			post("r1", `уточню: только про импорт ${medium}`, 20, { author: "bob" }),
-			post("q1", `а что со старыми? ${medium}`, 30, { author: "carol" }),
+			post("q1", `а что со старыми по BTB-2080? ${medium}`, 30, {
+				author: "carol",
+			}),
 		];
 		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-2080" });
 
@@ -903,7 +907,12 @@ describe("buildThreadBrief", () => {
 		).toEqual(["dbg1", "dbg2"]);
 	});
 
-	test("a bare ? alone does not raise open_question", () => {
+	test("a bare ? never raises open_question, however many times it fires", () => {
+		// Repetition used to substitute for evidence: three posts carrying a bare
+		// `?` crossed OPEN_QUESTION_MIN_POSTS. Measured against a real index that
+		// gate fired on 77% of threads of nine or more posts, because three posts
+		// containing a question mark is near-certain at that length — so it labeled
+		// chatter and design forks identically. Volume is not corroboration.
 		const quiet = [
 			post("bq1", "TICKET-5 кто-нибудь смотрел это ?", 10),
 			post("bq2", "я гляну вечером", 20),
@@ -916,7 +925,6 @@ describe("buildThreadBrief", () => {
 			"debugging",
 		);
 
-		// Three distinct posts carrying bare questions do cross the bar.
 		const recurring = [
 			...quiet,
 			post("bq3", "а по срокам что ?", 30),
@@ -925,9 +933,54 @@ describe("buildThreadBrief", () => {
 		const recurringBrief = buildThreadBrief(recurring, {
 			subjectTicket: "TICKET-5",
 		});
-		expect(recurringBrief.purposeHints.map((hint) => hint.label)).toContain(
+		expect(recurringBrief.purposeHints.map((hint) => hint.label)).not.toContain(
 			"open_question",
 		);
+		// `bq1` names TICKET-5 and so stays inlined; the two bare questions that
+		// name nothing no longer add themselves to it. The subject mention is a
+		// weak rescue and does admit ticket-naming chatter — but it is the only
+		// mechanical evidence available that a question is about the subject.
+		expect(recurringBrief.openQuestions?.map(({ postId }) => postId)).toEqual([
+			"bq1",
+		]);
+	});
+
+	test("a bare ? qualifies when the post names the subject ticket", () => {
+		// The one mechanical signal that a bare question is about the thing the
+		// caller asked about. `bq1` above names TICKET-5 only in a neighbouring
+		// post; here the question itself does.
+		const posts = [
+			post("sq1", "TICKET-5 стартуем", 10),
+			post("sq2", "по TICKET-5 кто принимает решение по схеме ?", 20, {
+				author: "bob",
+			}),
+		];
+		const brief = buildThreadBrief(posts, { subjectTicket: "TICKET-5" });
+
+		expect(brief.purposeHints.map((hint) => hint.label)).toContain(
+			"open_question",
+		);
+		expect(brief.openQuestions?.map(({ postId }) => postId)).toEqual(["sq2"]);
+	});
+
+	test("advisory candidate spans still carry every bare ?", () => {
+		// The brief narrows; `signals.candidateSpans` is documented as advisory
+		// candidates, so an agent asking for it must still see the question mark
+		// the brief declined to promote.
+		const posts = [
+			post("as1", "TICKET-9 стартуем", 10),
+			post("as2", "получилось черкануть ?", 20, { author: "bob" }),
+		];
+		const signals = buildThreadSignals(posts, { subjectTicket: "TICKET-9" });
+		const questions = signals.candidateSpans.filter(
+			(span) => span.kind === "open_question_candidate",
+		);
+
+		expect(questions.map(({ postId }) => postId)).toContain("as2");
+		expect(
+			buildThreadBrief(posts, { subjectTicket: "TICKET-9" }).openQuestions ??
+				[],
+		).toEqual([]);
 	});
 
 	test("hint evidence is capped at the chronologically last ids", () => {
@@ -1026,7 +1079,7 @@ describe("buildThreadBrief", () => {
 
 	test("caps response pointers without undercounting later replies", () => {
 		const posts = [
-			post("q", "что делаем с ограничением?", 10),
+			post("q", "не решили, что делаем с ограничением", 10),
 			...Array.from({ length: 5 }, (_, index) =>
 				post(`a${index}`, `ответ ${index}`, 20 + index, { author: "bob" }),
 			),
@@ -1041,7 +1094,9 @@ describe("buildThreadBrief", () => {
 	test("reports open_question when the thread stops on a question", () => {
 		const posts = [
 			post("t1", "BTB-2 смотрим отчёт", 10),
-			post("t2", "а по координаторам что делаем?", 20, { author: "bob" }),
+			post("t2", "а по координаторам в BTB-2 что делаем?", 20, {
+				author: "bob",
+			}),
 		];
 		const brief = buildThreadBrief(posts, { subjectTicket: "BTB-2" });
 
@@ -1102,7 +1157,7 @@ describe("buildThreadBrief", () => {
 	test("does not claim a thread tail when packing omitted posts", () => {
 		const posts = [
 			post("o1", "BTB-5 контекст", 10),
-			post("o2", "а что с координаторами?", 20, { author: "bob" }),
+			post("o2", "а что с координаторами по BTB-5?", 20, { author: "bob" }),
 		];
 		const complete = buildThreadBrief(posts, { subjectTicket: "BTB-5" });
 		const truncated = buildThreadBrief(posts, {

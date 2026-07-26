@@ -1169,7 +1169,7 @@ describe("agent projection", () => {
 				postFixture({
 					id: REPLY,
 					root_id: ROOT,
-					message: "а по координаторам что делаем?",
+					message: "а по координаторам в BTB-2 что делаем?",
 					create_at: 20,
 				}),
 			],
