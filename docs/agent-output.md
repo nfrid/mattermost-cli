@@ -12,15 +12,16 @@ Agents should parse `--agent` JSON rather than treating it as prose.
 
 ## Projections
 
-`--brief`, `--navigate`, `--short`, and `--full-posts` are mutually exclusive
-except that ticket `--agent --navigate` still keeps the top-level brief /
-`researchSummary` (lean posts + decision layer). Explicit `--brief --navigate`
-is also allowed.
+`--navigate`, `--short`, and `--full-posts` remain exclusive with each other;
+`--brief` combines with `--full-posts` (decision layer + dense posts). Ticket
+`--agent --navigate` still keeps the top-level brief / `researchSummary` (lean
+posts + decision layer). Explicit `--brief --navigate` is also allowed.
 
 | Projection | Contents |
 | --- | --- |
-| default (non-ticket, or `--full-posts`) | dense `posts` and `messages`, per-thread `brief`, `evidence` |
-| ticket `--agent` default / `--brief` | decision layer only |
+| default (non-ticket) | dense `posts` and `messages`, per-thread `brief`, `evidence` |
+| ticket `--agent` default / `--brief` | decision layer only (`projection: "brief"`) |
+| ticket `--agent --full-posts` | dense posts **and** top-level merged `brief` / `researchSummary` (no `projection: "brief"`) |
 | `--navigate` | lean navigation: `anchors` / `clusters` / `skips` / packing hints; ticket `--agent` still emits top-level `brief` |
 | `--timeline` | one merged chronology instead of per-thread `posts[]` |
 | `--short` | legacy card + timeline projection |
@@ -28,9 +29,12 @@ is also allowed.
 
 For a **ticket** subject, `context … --agent` applies the brief projection
 automatically (`projection: "brief"` on the envelope). Pass `--full-posts` to
-restore dense posts, or `--navigate` / `--short` for those modes. Free-text and
-post subjects keep the dense default unless `--brief` is explicit. Start ticket
-research with `context KEY --agent`.
+keep dense posts **while still emitting** top-level `brief`, or `--navigate` /
+`--short` for those modes. Free-text and post subjects keep the dense default
+unless `--brief` is explicit. Start ticket research with `context KEY --agent`.
+
+When brief filtering or packing omits chronology, `timelineComplete: false`
+marks that the visible timeline is incomplete.
 
 **`--navigate`** gives `anchors` / `clusters` / `skips` and packing hints with no
 dense `posts` and no top-level `messages`. Ticket `--agent --navigate` still
@@ -49,23 +53,26 @@ need OCR). Broad `sync` is skipped. Steps that still need an external reader
 after inspect are logged as `skipped_external_reader` and the chain
 **continues** with remaining recommended steps. Results merge into the same
 context packet with `followLog[]` (always present when the flag ran — empty when
-there was nothing to do) and optional `followedAttachments[]`. There is no
-persistent session store.
+there was nothing to do), optional `followExhausted: true` when no further
+recommended next remains, and optional `followedAttachments[]` (inspect/OCR text
+is merged onto matching `threads[].attachments[].inspection` when present).
+There is no persistent session store.
 
 Context agent packets also emit `hints.readOrder` — a stable list of fields to
-read first. Orient on `researchSummary.primaryThreadId`, not `threads[].role`
-(role is retrieval bookkeeping and can disagree with the decision thread).
+read first. Orient on `researchSummary.primaryThreadId`; agent `threads[].role`
+is aligned to that id (retrieval rank stays in `rank`).
 
 **`--brief`** (and the ticket `--agent` default) returns `evidence`, a top-level
 merged `brief`, per-thread `threads[].brief`, and only the decision layer:
 outcome-window posts, decisions, acknowledgements, refinements, open questions,
-and their capped response pointers. Every other packed post collapses into a
-`{ "skip": { "reason": "brief_projection" } }` marker and the envelope is marked
-`projection: "brief"` — shown messages plus skip counts always equal
-`messageCount`. The top-level `brief` merges `decisions[]` and `openQuestions[]`
-across selected threads (strongest first, each entry carries `threadId`);
-per-thread briefs remain for locality. Use `--full-posts` when the decision
-layer is not enough and you need the dense transcript.
+file-bearing posts, and their capped response pointers. Every other packed post
+collapses into a `{ "skip": { "reason": "brief_projection" } }` marker and the
+envelope is marked `projection: "brief"` — shown messages plus skip counts always
+equal `messageCount`. The top-level `brief` merges `decisions[]` and
+`openQuestions[]` across selected threads (unresolved open questions are never
+dropped from the merge; answered ones fill remaining slots); each entry carries
+`threadId`. Per-thread briefs remain for locality. Use `--full-posts` when you
+need the dense transcript **together with** the decision brief.
 
 **`--timeline`** adds a top-level `timeline[]` merging every selected thread into
 one chronology (`at` / `conversation` / `threadId` / `author` / `postId` /
@@ -227,11 +234,12 @@ not an omission count.
 
 Optional top-level roll-up on `context` / `thread` agent packets:
 `primaryThreadId` (best orientation thread: strongest decision-bearing thread
-when any exist, otherwise highest ticket signal / non-noise purpose — not
-blindly `role: "primary"` on a noise or thin automation stub),
+when any exist, otherwise highest ticket signal / non-noise purpose — agent
+`threads[].role` is aligned to this id),
 `decisionThreadIds` (threads that contribute brief decisions, strongest-first),
 `decisionsByKind` (zeros omitted), `unresolvedOpenQuestions` (packet-local
-resolutions other than `possibly_answered` / `answered`),
+resolutions other than `possibly_answered` / `answered`; matches the unresolved
+entries kept in top-level `brief.openQuestions[]`),
 `blockedOrUnresolvedPermalinks` (caller inputs with status `not_allowed` /
 `unresolved` / `invalid`), and `recommendedNext` (action names from
 `evidence.next` steps with `priority: "recommended"`). Counts and ids only — never
@@ -241,9 +249,11 @@ LLM prose.
 
 Threads may set `filesPresent: true` when any packed post has attachments, and
 carry a flat `attachments[]` index (`id` / `name` / `postId` / `inPacket` /
-`mediaOnly?` / `downloadCommand` / `inspectCommand`) covering both returned
-posts and posts hidden
-inside skip spans, so downloading is an informed decision.
+`mediaOnly?` / `downloadCommand` / `inspectCommand` / optional `inspection`)
+covering both returned posts and posts hidden inside skip spans, so downloading
+is an informed decision. After `--follow-recommended` succeeds at OCR/preview,
+`inspection` carries low-trust `preview` / `text_extracted` text on both
+`followedAttachments[]` and the matching thread attachment entry.
 `attachmentsTruncated: true` marks a capped index, and
 `omitted.unreportedAttachments` counts omitted attachments whose metadata did not
 fit the reporting budget.
@@ -251,7 +261,8 @@ fit the reporting budget.
 Message-level `files[]` carry `id` / `name` (plus `mimeType` / `size` when known)
 with separate copy-ready commands: `downloadCommand` only downloads, while
 `inspectCommand` includes `--inspect` and is the command to use when the
-attachment itself is evidence.
+attachment itself is evidence. Nested `messages[]` also carry `author` (same
+username as the parent group) so a flat map cannot invent `@None`.
 
 A post whose text is empty while carrying a live attachment is marked
 `mediaOnly: true` on both the message and its attachment entry.

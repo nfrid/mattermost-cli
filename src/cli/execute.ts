@@ -105,6 +105,7 @@ export async function executeCommand(
 						short: commandOptions.short,
 						navigate: commandOptions.navigate,
 						...(brief ? { brief: true } : {}),
+						...(commandOptions.fullPosts ? { fullPosts: true } : {}),
 						timeline: commandOptions.timeline,
 						signals: commandOptions.signals,
 						permalinks: commandOptions.permalink,

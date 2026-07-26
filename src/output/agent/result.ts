@@ -24,6 +24,7 @@ import {
 import type { CommandResult, Warning } from "../../shared/command-result.ts";
 import type { FileBatchDownloadResult } from "../../sync/file-batch-download.ts";
 import type { FileDownloadResult } from "../../sync/file-download.ts";
+import type { FileInspection } from "../../sync/file-inspect.ts";
 import { isoTimestamp, subjectValue } from "../shared.ts";
 import { buildCrossThreadTimeline } from "../timeline.ts";
 import { shortMessagesFromThreads } from "./messages.ts";
@@ -39,6 +40,7 @@ import type {
 	AgentCandidate,
 	AgentCommandResult,
 	AgentEnvelope,
+	AgentFollowedAttachment,
 	AgentLateAcknowledgement,
 	AgentMergedBrief,
 	AgentMergedBriefDecision,
@@ -47,6 +49,7 @@ import type {
 	AgentResolvedSubject,
 	AgentStatus,
 	AgentThread,
+	AgentThreadAttachment,
 	PurposeHintLabel,
 } from "./types.ts";
 
@@ -165,17 +168,20 @@ function projectContext(
 	const navigate = Boolean(data.navigate);
 	const short = Boolean(data.short);
 	const brief = Boolean(data.brief);
+	const fullPosts = Boolean(data.fullPosts);
+	/** Withhold packed posts into brief_projection skips only in lean brief mode. */
+	const withholdForBrief = brief && !fullPosts;
 	const timeline = Boolean(data.timeline);
 	const subjectTicket =
 		data.subject.kind === "ticket" ? data.subject.ticketKey : undefined;
 	const includeSignals = Boolean(data.signals);
 	const primaryIndex = pickPrimaryThreadIndex(data.threads);
 	const resolved = resolvedSubject(data.subject, data.threads);
-	const threads = data.threads.map((thread, index) =>
+	const projected = data.threads.map((thread, index) =>
 		projectContextThread(thread, {
 			short,
 			navigate,
-			brief,
+			brief: withholdForBrief,
 			// The merged chronology already carries every packed message; repeating
 			// them per thread would double the packet for no added evidence.
 			omitPosts: timeline,
@@ -215,12 +221,47 @@ function projectContext(
 				? { subjectTicket: data.subject.ticketKey }
 				: {}),
 		});
+	const researchSummarySeed = buildResearchSummary({
+		threads: projected,
+		evidence,
+		permalinks: data.permalinks,
+	});
+	// Align `role` with orientation: agents were reading noise stubs marked
+	// primary while `researchSummary.primaryThreadId` pointed at the decision.
+	const orientationId = researchSummarySeed?.primaryThreadId;
+	const threads = orientationId
+		? projected.map((thread, index) => {
+				const role = (
+					thread.threadId === orientationId ? "primary" : "secondary"
+				) as "primary" | "secondary";
+				const reasons = data.threads[index]?.reasons ?? [];
+				const presentation =
+					role === "secondary" && reasons.includes("multi_ticket_root")
+						? ("announce" as const)
+						: undefined;
+				const { presentation: _dropped, ...rest } = thread;
+				return {
+					...rest,
+					role,
+					...(presentation ? { presentation } : {}),
+				};
+			})
+		: projected;
 	const mergedBrief = brief ? mergeThreadBriefs(threads) : undefined;
 	const researchSummary = buildResearchSummary({
 		threads,
 		evidence,
 		permalinks: data.permalinks,
 	});
+	const inspectionByFileId = inspectionByFollowedFile(data.followedAttachments);
+	const threadsWithInspection = mergeAttachmentInspections(
+		threads,
+		inspectionByFileId,
+	);
+	const timelineComplete = packetTimelineComplete(
+		threadsWithInspection,
+		withholdForBrief,
+	);
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
@@ -233,15 +274,15 @@ function projectContext(
 				timeline,
 			}),
 		},
-		// The packet says which projection produced it: `brief` withholds packed
-		// posts by request, and a reader must not mistake that for the transcript.
-		...(brief ? { projection: "brief" as const } : {}),
+		// Lean brief withholds posts; full-posts keeps dense transcript + brief.
+		...(withholdForBrief ? { projection: "brief" as const } : {}),
 		...(mergedBrief ? { brief: mergedBrief } : {}),
 		...(researchSummary ? { researchSummary } : {}),
+		...(timeline || withholdForBrief || fullPosts ? { timelineComplete } : {}),
 		...(timeline
 			? {
 					timeline: buildCrossThreadTimeline(data.threads, {
-						brief,
+						brief: withholdForBrief,
 						...(subjectTicket ? { subjectTicket } : {}),
 						...(resolved ? { anchorPostId: resolved.postId } : {}),
 					}),
@@ -254,18 +295,18 @@ function projectContext(
 		...(data.people?.length ? { people: data.people.map(projectPerson) } : {}),
 		...(relatedTickets.length ? { relatedTickets } : {}),
 		...(messages?.length ? { messages } : {}),
-		threads,
-		...(data.followLog ? { followLog: data.followLog } : {}),
+		threads: threadsWithInspection,
+		...(data.followLog
+			? {
+					followLog: data.followLog,
+					...(data.followExhausted ? { followExhausted: true as const } : {}),
+				}
+			: {}),
 		...(data.followedAttachments?.length
 			? {
-					followedAttachments: data.followedAttachments.map((file) => ({
-						id: file.id,
-						name: file.name,
-						path: file.path,
-						...(file.inspection
-							? { inspectionStatus: file.inspection.status }
-							: {}),
-					})),
+					followedAttachments: data.followedAttachments.map((file) =>
+						projectFollowedAttachment(file),
+					),
 				}
 			: {}),
 		...(projectAgentBackground(data.background).length
@@ -610,7 +651,15 @@ function mergeThreadBriefs(
 	decisions.sort(compareMergedDecisions);
 	openQuestions.sort(compareMergedOpenQuestions);
 	const cappedDecisions = decisions.slice(0, MAX_DECISION_POST_IDS);
-	const cappedQuestions = openQuestions.slice(0, MAX_OPEN_QUESTIONS);
+	// Prefer every unresolved question in the merge so the list length matches
+	// `researchSummary.unresolvedOpenQuestions`; answered ones fill remaining
+	// slots up to the usual cap.
+	const unresolved = openQuestions.filter(isUnresolvedOpenQuestion);
+	const answered = openQuestions.filter(
+		(question) => !isUnresolvedOpenQuestion(question),
+	);
+	const answeredSlots = Math.max(0, MAX_OPEN_QUESTIONS - unresolved.length);
+	const cappedQuestions = [...unresolved, ...answered.slice(0, answeredSlots)];
 	if (
 		!cappedDecisions.length &&
 		!cappedQuestions.length &&
@@ -641,6 +690,8 @@ function compareMergedOpenQuestions(
 	right: AgentMergedBriefOpenQuestion,
 ): number {
 	return (
+		Number(isUnresolvedOpenQuestion(right)) -
+			Number(isUnresolvedOpenQuestion(left)) ||
 		Number(right.isThreadTail ?? false) - Number(left.isThreadTail ?? false) ||
 		Number(left.kind === "follow_up") - Number(right.kind === "follow_up") ||
 		left.repliesAfter - right.repliesAfter ||
@@ -855,6 +906,105 @@ function status(freshnessMode: "local" | "network" | "forced"): AgentStatus {
 	return {
 		freshness: freshnessMode === "local" ? "local" : "network",
 	};
+}
+
+function inspectionByFollowedFile(
+	files: ContextResult["followedAttachments"],
+): Map<string, FileInspection> {
+	const map = new Map<string, FileInspection>();
+	for (const file of files ?? []) {
+		if (file.inspection) map.set(file.id, file.inspection);
+	}
+	return map;
+}
+
+function mergeAttachmentInspections(
+	threads: readonly AgentThread[],
+	inspections: ReadonlyMap<string, FileInspection>,
+): AgentThread[] {
+	if (!inspections.size) return [...threads];
+	return threads.map((thread) => {
+		if (!thread.attachments?.length) return thread;
+		return {
+			...thread,
+			attachments: thread.attachments.map((attachment) => {
+				const inspection = inspections.get(attachment.id);
+				if (!inspection) return attachment;
+				return {
+					...attachment,
+					inspection: projectAttachmentInspection(inspection),
+				};
+			}),
+		};
+	});
+}
+
+function projectFollowedAttachment(
+	file: FileDownloadResult,
+): AgentFollowedAttachment {
+	return {
+		id: file.id,
+		name: file.name,
+		path: file.path,
+		postId: file.postId,
+		...(file.inspection
+			? {
+					inspectionStatus: file.inspection.status,
+					inspection: projectAttachmentInspection(file.inspection),
+				}
+			: {}),
+	};
+}
+
+function projectAttachmentInspection(
+	inspection: FileInspection,
+): NonNullable<AgentThreadAttachment["inspection"]> {
+	if (inspection.status === "preview") {
+		return {
+			status: "preview",
+			format: inspection.format,
+			preview: inspection.preview,
+			...(inspection.truncated ? { truncated: true as const } : {}),
+			trust: "low",
+		};
+	}
+	if (inspection.status === "text_extracted") {
+		return {
+			status: "text_extracted",
+			format: "image",
+			text: inspection.text,
+			trust: "low",
+			...(inspection.engine ? { engine: inspection.engine } : {}),
+			...(inspection.truncated ? { truncated: true as const } : {}),
+		};
+	}
+	return {
+		status: "not_interpreted",
+		format: inspection.format,
+		reason: inspection.reason,
+		recommendedAction: inspection.recommendedAction,
+	};
+}
+
+/**
+ * False when packing omitted posts or brief projection collapsed chronology
+ * into `brief_projection` skips — agents should not treat the visible timeline
+ * as complete.
+ */
+function packetTimelineComplete(
+	threads: readonly AgentThread[],
+	withholdForBrief: boolean,
+): boolean {
+	for (const thread of threads) {
+		if (thread.omitted.posts > 0) return false;
+		if (!withholdForBrief) continue;
+		for (const item of thread.posts ?? []) {
+			if ("skip" in item && item.skip.reason === "brief_projection") {
+				return false;
+			}
+		}
+	}
+	return true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

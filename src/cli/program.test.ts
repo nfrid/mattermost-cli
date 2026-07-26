@@ -60,15 +60,20 @@ describe("context ticket --agent brief default flags", () => {
 		});
 		expect(seen.at(-1)).toMatchObject({ brief: true });
 
-		for (const conflicting of ["--brief", "--navigate", "--short"] as const) {
+		// Dense posts + decision brief is an intentional combination.
+		await program.parseAsync(
+			["context", "BTB-1", "--full-posts", "--brief", "--agent"],
+			{ from: "user" },
+		);
+		expect(seen.at(-1)).toMatchObject({ fullPosts: true, brief: true });
+
+		for (const conflicting of ["--navigate", "--short"] as const) {
 			await expect(
 				program.parseAsync(
 					["context", "BTB-1", "--full-posts", conflicting, "--agent"],
 					{ from: "user" },
 				),
-			).rejects.toThrow(
-				/cannot be used|conflict|full-posts|brief|navigat|short/i,
-			);
+			).rejects.toThrow(/cannot be used|conflict|full-posts|navigat|short/i);
 		}
 	});
 });

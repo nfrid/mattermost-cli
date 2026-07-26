@@ -61,6 +61,8 @@ export interface ContextInput extends SearchFilterInput {
 	navigate?: boolean;
 	/** Decision-only projection: evidence, brief, and the outcome window. */
 	brief?: boolean;
+	/** Dense posts under `--agent` while still emitting the ticket decision brief. */
+	fullPosts?: boolean;
 	/** Merge the selected threads into one cross-thread chronology. */
 	timeline?: boolean;
 	/** Opt-in advisory `signals` / `technicalEntities` in `--agent` output. */
@@ -385,6 +387,11 @@ export interface ContextResult {
 	navigate?: boolean;
 	/** True when context used the decision-only brief projection. */
 	brief?: boolean;
+	/**
+	 * Dense packed posts under `--agent` while still emitting top-level brief
+	 * for ticket subjects. Distinct from omitting `brief` entirely.
+	 */
+	fullPosts?: boolean;
 	/** True when the selected threads were merged into one chronology. */
 	timeline?: boolean;
 	/** Authors of the packed posts with their role, when one is known. */
@@ -396,6 +403,11 @@ export interface ContextResult {
 	 * One entry per attempted step (executed, skipped, or failed).
 	 */
 	followLog?: import("./follow-recommended.ts").FollowLogEntry[];
+	/**
+	 * True when `--follow-recommended` finished and either found nothing
+	 * recommended to run, or the merged packet has no further recommended next.
+	 */
+	followExhausted?: true;
 	/**
 	 * File inspect/download artifacts produced during `--follow-recommended`.
 	 * Not a substitute for reading `followLog[]`.

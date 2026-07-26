@@ -1902,6 +1902,7 @@ describe("evidence verdict", () => {
 	test("subject-matched budget drop emits recommended inspect_dropped", () => {
 		const evidence = buildEvidence({
 			...baseInput(),
+			subject: "BTB-1",
 			selection: {
 				...emptySelection(),
 				candidateThreads: 4,
@@ -1934,10 +1935,21 @@ describe("evidence verdict", () => {
 		expect(inspect).toMatchObject({
 			priority: "recommended",
 			impact: "may_add_dropped_pointer",
+			reason: "subject_matched_budget_drops",
 			command: ["mm", "thread", "t-budget", "--agent"],
 			threadId: "t-budget",
 		});
 		expect(evidence.verdict.recommendedActionRequired).toBe(true);
+		expect(
+			evidence.next.find(
+				(step) =>
+					step.action === "review_candidates" &&
+					step.reason === "subject_matched_budget_drops",
+			),
+		).toMatchObject({
+			priority: "recommended",
+			command: ["mm", "context", "BTB-1", "--max-threads", "5", "--agent"],
+		});
 	});
 
 	test("subject-matched budget drop still skips thin bulletin excerpts", () => {
@@ -2206,7 +2218,9 @@ describe("data-file attachments on decision-layer posts", () => {
 		).toBe(false);
 	});
 
-	test("stays quiet for a screenshot, which the media-only rule owns", () => {
+	test("recommends a captioned screenshot on a decision-layer post", () => {
+		// Decision-adjacent images used to be skipped whenever the post had text;
+		// media-only owned empty-caption screenshots only.
 		const evidence = build([
 			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
 			dataPost("p2", "вот скрин, что делать?", 20, "screen.png"),
@@ -2217,6 +2231,14 @@ describe("data-file attachments on decision-layer posts", () => {
 				({ reason }) => reason === "data_file_on_decision_post",
 			),
 		).toBe(false);
+		expect(
+			evidence.next.find(({ reason }) => reason === "image_on_decision_post"),
+		).toMatchObject({
+			priority: "recommended",
+			impact: "requires_external_reader",
+			postId: "p2",
+			command: ["mm", "file", "screen.png", "--inspect", "--agent"],
+		});
 	});
 
 	test("a media-only outcome post keeps priority over a data file", () => {

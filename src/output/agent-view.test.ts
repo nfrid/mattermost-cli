@@ -1280,8 +1280,8 @@ describe("agent projection", () => {
 			store.close();
 			throw new Error("Expected both noise and decision threads.");
 		}
-		// Force the TECHSUPP-109 shape: thin noise stub keeps role=primary while
-		// the decision lives on a secondary substantive thread.
+		// Force the TECHSUPP-109 shape: thin noise stub would win substance
+		// primary, but agent role must follow researchSummary.primaryThreadId.
 		context.threads = [
 			{
 				...noise,
@@ -1324,11 +1324,11 @@ describe("agent projection", () => {
 		const decisionProjected = result.threads.find(
 			(thread) => thread.threadId === decisionRoot,
 		);
-		expect(noiseProjected?.role).toBe("primary");
-		expect(decisionProjected?.role).toBe("secondary");
 		expect(decisionProjected?.brief?.decisions?.length).toBeGreaterThan(0);
 		expect(result.researchSummary?.decisionThreadIds).toEqual([decisionRoot]);
 		expect(result.researchSummary?.primaryThreadId).toBe(decisionRoot);
+		expect(decisionProjected?.role).toBe("primary");
+		expect(noiseProjected?.role).toBe("secondary");
 		expect(result.researchSummary?.decisionsByKind).toBeDefined();
 		store.close();
 	});
@@ -1980,6 +1980,9 @@ describe("agent projection", () => {
 			{
 				...primary,
 				reasons: ["ticket_in_root", "substantive_thread_depth"],
+				// Keep above the thin-orientation threshold so role alignment
+				// cannot promote the bulletin stub to primaryThreadId.
+				totalPosts: 20,
 			},
 			{
 				...structuredClone(primary),
@@ -2002,9 +2005,10 @@ describe("agent projection", () => {
 		).threads;
 		expect(threads).toHaveLength(2);
 		const primaryThread = threads.find((thread) => thread.role === "primary");
-		const secondary = threads.find((thread) => thread.role === "secondary");
+		const bulletin = threads.find((thread) => thread.threadId === bulletinId);
+		expect(primaryThread?.threadId).not.toBe(bulletinId);
 		expect(primaryThread?.presentation).toBeUndefined();
-		expect(secondary).toMatchObject({
+		expect(bulletin).toMatchObject({
 			threadId: bulletinId,
 			role: "secondary",
 			presentation: "announce",

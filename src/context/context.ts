@@ -652,13 +652,16 @@ export async function getMattermostContext(
 			budget: {
 				measurement: "unicode_code_points_in_rendered_post",
 				limit: packer.budgets.maxCharacters,
-				used: packer.budgets.maxCharacters - packer.remaining,
+				// Clamp: floating reclaim / permalink reserve can leave
+				// `remaining > maxCharacters` briefly; Zod rejects negatives.
+				used: Math.max(0, packer.budgets.maxCharacters - packer.remaining),
 				maxThreads: packer.budgets.maxThreads,
 			},
 			warnings,
 			...(input.short ? { short: true } : {}),
 			...(input.navigate ? { navigate: true } : {}),
 			...(input.brief ? { brief: true } : {}),
+			...(input.fullPosts ? { fullPosts: true } : {}),
 			...(input.timeline ? { timeline: true } : {}),
 			...(people.length ? { people } : {}),
 			...(input.signals ? { signals: true } : {}),

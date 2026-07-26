@@ -233,6 +233,25 @@ export function isSubjectMatchedBudgetDrop(
 	);
 }
 
+/**
+ * Candidates whose selection must survive `--query` probe re-evaluation: they
+ * already carry subject-level ticket evidence or were caller-pinned via
+ * permalink. Free-text subjects stay unpinned so stale hydrates that no longer
+ * match the query can still drop as no_match.
+ */
+export function isProbePinnedCandidate(
+	reasons: readonly RankingReason[],
+	subjectKind: MattermostSubject["kind"],
+): boolean {
+	if (reasons.includes("direct_post")) return true;
+	if (subjectKind !== "ticket") return false;
+	return reasons.some(
+		(reason) =>
+			reason === "explicit_ticket_relationship" ||
+			SUBJECT_EVIDENCE_REASONS.has(reason),
+	);
+}
+
 /** Thin or ticket-related drops worth an `inspect_dropped` next action. */
 export function isActionableDroppedCandidate(
 	candidate: Pick<DroppedCandidate, "dropReason" | "reasons">,

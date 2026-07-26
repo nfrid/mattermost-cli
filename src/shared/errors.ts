@@ -91,6 +91,10 @@ export function conversationNotAllowedDetails(input: {
 	conversationId?: string;
 	/** Safe only for an already-configured conversation. */
 	conversationAlias?: string;
+	/** Display name when the conversation is already configured. */
+	conversationName?: string;
+	/** Channel vs DM when the conversation is already configured. */
+	conversationKind?: "channel" | "direct_message";
 	/** The only current narrow-request source; explicit for agent consumers. */
 	restrictionSource?: "cli";
 	/** Aliases the caller restricted to, when that is what excluded it. */
@@ -104,6 +108,12 @@ export function conversationNotAllowedDetails(input: {
 			: {}),
 		...(input.conversationAlias && input.reason === "channel_restriction"
 			? { conversationAlias: input.conversationAlias }
+			: {}),
+		...(input.conversationName && input.reason === "channel_restriction"
+			? { conversationName: input.conversationName }
+			: {}),
+		...(input.conversationKind && input.reason === "channel_restriction"
+			? { conversationKind: input.conversationKind }
 			: {}),
 		...(input.restrictionSource && input.reason === "channel_restriction"
 			? { restrictionSource: input.restrictionSource }

@@ -31,7 +31,7 @@ import {
 	resolveConversationSurround,
 } from "./helpers.ts";
 import { hydrateThread } from "./hydrate.ts";
-import { pickPrimaryThreadIndex } from "./selection.ts";
+import { isProbePinnedCandidate, pickPrimaryThreadIndex } from "./selection.ts";
 import type {
 	ContextClient,
 	ContextThread,
@@ -289,11 +289,12 @@ export class ThreadPacker {
 			candidate.structuredMatches,
 		);
 		const isPermalink = candidate.reasons.includes("direct_post");
-		// `--permalink` / direct_post anchors are caller-chosen evidence. Probe
-		// re-evaluation only keeps posts that mention the subject ticket, which
-		// drops the linked post when that thread never names the ticket — and
-		// packing then collapses to the root under ticket-window preference.
-		const currentMatchingPostIds = isPermalink
+		const isPinned = isProbePinnedCandidate(candidate.reasons, subject.kind);
+		// `--permalink` / ticket subject-matched anchors are caller-chosen or
+		// ticket evidence. Probe re-evaluation only keeps posts that mention the
+		// subject ticket / probe terms, which can demote a subject-matched thread
+		// when `--query` terms miss — and packing then drops it as no_match.
+		const currentMatchingPostIds = isPinned
 			? [
 					...new Set([
 						...liveMatchingPostIds,
@@ -311,8 +312,7 @@ export class ThreadPacker {
 		if (
 			subject.kind !== "post" &&
 			!currentMatchingPostIds.length &&
-			!candidate.reasons.includes("explicit_ticket_relationship") &&
-			!isPermalink
+			!isPinned
 		) {
 			this.dropAsNoMatch(candidate.threadId);
 			return;

@@ -320,12 +320,19 @@ export function buildEvidence(input: {
 		unreadOutcomeAttachment?.postId,
 		resolvedAttachmentIds,
 	);
+	const decisionImageAttachment = findDecisionImageAttachment(
+		input.threads,
+		input.subjectTicket,
+		unreadOutcomeAttachment?.postId ?? decisionDataAttachment?.postId,
+		resolvedAttachmentIds,
+	);
 	// A media-only outcome (or external-reader decision attachment) still pending
 	// means the packet's text may omit the root cause — do not claim answerable.
 	const pendingMaterialAttachment = Boolean(
 		unreadOutcomeAttachment ||
 			(decisionDataAttachment &&
-				requiresExternalReader(decisionDataAttachment.fileName)),
+				requiresExternalReader(decisionDataAttachment.fileName)) ||
+			decisionImageAttachment,
 	);
 	const canAnswerFromSelectedEvidence =
 		adequacy === "usable" &&
@@ -365,6 +372,7 @@ export function buildEvidence(input: {
 		subject: input.subject,
 		unreadOutcomeAttachment,
 		decisionDataAttachment,
+		decisionImageAttachment,
 	});
 	const selectedEvidenceMayBeStale = currency !== "current";
 	const recommendedActionRequired = next.some(
@@ -377,6 +385,11 @@ export function buildEvidence(input: {
 		canAnswerFromSelectedEvidence,
 		next,
 	});
+	// `noActionAvailable` means an uncovered verdict axis has no safe follow-up.
+	// When recommended next already exists, suppress the flag so agents are not
+	// told both "you must act" and "no action available".
+	const safeNoAction =
+		verdictNoAction && !recommendedActionRequired ? verdictNoAction : undefined;
 
 	return {
 		adequacy,
@@ -387,7 +400,7 @@ export function buildEvidence(input: {
 			...(mayHaveMissedReason ? { mayHaveMissedReason } : {}),
 			selectedEvidenceMayBeStale,
 			recommendedActionRequired,
-			...verdictNoAction,
+			...safeNoAction,
 		},
 		completeness: {
 			selectedThreads,
@@ -700,18 +713,62 @@ function findDecisionDataAttachment(
 	return found;
 }
 
-function isDataFileName(name: string): boolean {
-	const extension = name.split(".").pop()?.toLowerCase();
-	return Boolean(extension && DATA_FILE_EXTENSIONS.has(extension));
-}
-
-function isSpreadsheetDataFileName(name: string): boolean {
-	const extension = name.split(".").pop()?.toLowerCase();
-	return Boolean(
-		extension &&
-			(extension === "xlsx" ||
-				UNPREVIEWABLE_SPREADSHEET_EXTENSIONS.has(extension)),
-	);
+/**
+ * An image on a decision-layer post that still has caption text (so the
+ * media-only rule never fired). Screenshots next to option lists / bug reports
+ * are frequently the actual evidence; recommend bounded OCR/inspect.
+ */
+function findDecisionImageAttachment(
+	threads: readonly ContextThread[],
+	subjectTicket: string | undefined,
+	excludePostId: string | undefined,
+	resolvedFileIds: ReadonlySet<string> = new Set(),
+): UnreadOutcomeAttachment | undefined {
+	let best: (UnreadOutcomeAttachment & { createAt: number }) | undefined;
+	for (const thread of threads) {
+		const brief = buildThreadBrief(thread.posts, {
+			...(subjectTicket ? { subjectTicket } : {}),
+			omittedPosts: thread.omittedPosts,
+		});
+		const decisionLayer = new Set<string>([
+			...brief.decisionPostIds,
+			...(brief.decisions ?? []).flatMap((decision) => [
+				decision.postId,
+				...(decision.refinements ?? []).map(({ postId }) => postId),
+			]),
+			...(brief.openQuestions ?? []).map(({ postId }) => postId),
+		]);
+		for (const post of thread.posts) {
+			if (post.id === excludePostId) continue;
+			if (!decisionLayer.has(post.id)) continue;
+			// Media-only posts are already covered by findUnreadOutcomeAttachment.
+			if (!post.message.trim()) continue;
+			const live = post.attachments.filter(
+				({ deleteAt, name, id }) =>
+					!deleteAt && isImageFileName(name) && !resolvedFileIds.has(id),
+			);
+			const first = live[0];
+			if (!first) continue;
+			const candidate = {
+				threadId: thread.threadId,
+				postId: post.id,
+				fileId: first.id,
+				fileName: first.name,
+				files: live.length,
+				createAt: post.createAt,
+			};
+			if (
+				!best ||
+				candidate.createAt > best.createAt ||
+				(candidate.createAt === best.createAt && candidate.postId < best.postId)
+			) {
+				best = candidate;
+			}
+		}
+	}
+	if (!best) return undefined;
+	const { createAt: _createAt, ...found } = best;
+	return found;
 }
 
 const IMAGE_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -723,6 +780,25 @@ const IMAGE_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
 	"bmp",
 	"svg",
 ]);
+
+function isDataFileName(name: string): boolean {
+	const extension = name.split(".").pop()?.toLowerCase();
+	return Boolean(extension && DATA_FILE_EXTENSIONS.has(extension));
+}
+
+function isImageFileName(name: string): boolean {
+	const extension = name.split(".").pop()?.toLowerCase();
+	return Boolean(extension && IMAGE_FILE_EXTENSIONS.has(extension));
+}
+
+function isSpreadsheetDataFileName(name: string): boolean {
+	const extension = name.split(".").pop()?.toLowerCase();
+	return Boolean(
+		extension &&
+			(extension === "xlsx" ||
+				UNPREVIEWABLE_SPREADSHEET_EXTENSIONS.has(extension)),
+	);
+}
 
 /** Formats `file --inspect` downloads but cannot interpret as primary evidence. */
 function requiresExternalReader(fileName: string): boolean {
@@ -964,6 +1040,7 @@ function collectNextActions(input: {
 	subject?: string;
 	unreadOutcomeAttachment?: UnreadOutcomeAttachment;
 	decisionDataAttachment?: UnreadOutcomeAttachment;
+	decisionImageAttachment?: UnreadOutcomeAttachment;
 }): EvidenceNextStep[] {
 	const next: EvidenceNextStep[] = [];
 	const attachment = input.unreadOutcomeAttachment;
@@ -991,6 +1068,18 @@ function collectNextActions(input: {
 				interpretableImpact: isSpreadsheetDataFileName(dataFile.fileName)
 					? "cannot_verify_quantities"
 					: "may_verify_quantitative_claim",
+			}),
+		);
+	}
+	const decisionImage = input.decisionImageAttachment;
+	if (decisionImage) {
+		next.push(
+			attachmentNextStep(decisionImage, {
+				reason: "image_on_decision_post",
+				interpretablePriority:
+					attachment || dataFile ? "optional" : "recommended",
+				interpretableImpact: "may_contradict_visible_text",
+				keepRecommendedWhenExternal: true,
 			}),
 		);
 	}
@@ -1043,7 +1132,9 @@ function collectNextActions(input: {
 			!actionableDropped && subjectMatchedBudgetDrop !== undefined;
 		next.push({
 			action: "inspect_dropped",
-			reason: "selection_dropped",
+			reason: subjectMatchedOnly
+				? "subject_matched_budget_drops"
+				: "selection_dropped",
 			priority: subjectMatchedOnly ? "recommended" : "optional",
 			impact: "may_add_dropped_pointer",
 			...(droppedThreadId
@@ -1053,6 +1144,30 @@ function collectNextActions(input: {
 					}
 				: {}),
 		});
+		if (subjectMatchedOnly && input.subject) {
+			const bumpedMaxThreads = Math.min(
+				20,
+				Math.max(
+					5,
+					input.selectionCounts.returnedThreads +
+						input.selectionCounts.droppedByBudgetSubjectMatched,
+				),
+			);
+			next.push({
+				action: "review_candidates",
+				reason: "subject_matched_budget_drops",
+				priority: "recommended",
+				impact: "may_add_dropped_pointer",
+				command: [
+					"mm",
+					"context",
+					input.subject,
+					"--max-threads",
+					String(bumpedMaxThreads),
+					"--agent",
+				],
+			});
+		}
 	}
 	if (
 		input.selectionCompleteness === "budget_bounded" &&

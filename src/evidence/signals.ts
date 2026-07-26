@@ -1162,6 +1162,15 @@ export function briefRetainedPostIds(
 		}
 	}
 	if (anchorPostId) retained.add(anchorPostId);
+	// File-bearing posts are often the only place a screenshot or spreadsheet
+	// is anchored; collapsing them into brief_projection skips hid the evidence
+	// agents needed to decide on inspect.
+	for (const post of posts) {
+		if (post.deleteAt) continue;
+		if (post.attachments.some((attachment) => !attachment.deleteAt)) {
+			retained.add(post.id);
+		}
+	}
 	if (!retained.size) {
 		let latest: EvidencePost | undefined;
 		for (const post of posts) {

@@ -85,6 +85,7 @@ export async function followRecommendedSteps(input: {
 		context = {
 			...context,
 			followLog,
+			followExhausted: true,
 			evidence: rebuildEvidence(context),
 		};
 		return { context, followLog };
@@ -202,10 +203,14 @@ export async function followRecommendedSteps(input: {
 					entry.action === "thread_full" ||
 					entry.action === "inspect_dropped"),
 		);
+		const evidence = rebuildEvidence(context, { networkFollowOk });
 		context = {
 			...context,
-			evidence: rebuildEvidence(context, { networkFollowOk }),
+			evidence,
 			followLog,
+			...(!evidence.next.some(({ priority }) => priority === "recommended")
+				? { followExhausted: true as const }
+				: {}),
 			warnings: [...context.warnings, ...followWarnings(followLog)],
 		};
 		return { context, followLog };

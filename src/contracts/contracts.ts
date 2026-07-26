@@ -486,6 +486,8 @@ const permalinkResolutionSchema = z.object({
 			postId: z.string().optional(),
 			conversationId: z.string().optional(),
 			conversationAlias: z.string().optional(),
+			conversationName: z.string().optional(),
+			conversationKind: conversationKindSchema.optional(),
 			restrictionSource: z.literal("cli").optional(),
 			restrictedTo: z.array(z.string()).optional(),
 			recommendedAction: z.string(),
@@ -742,6 +744,7 @@ const contextDataSchema = z.object({
 	short: z.boolean().optional(),
 	navigate: z.boolean().optional(),
 	brief: z.boolean().optional(),
+	fullPosts: z.boolean().optional(),
 	timeline: z.boolean().optional(),
 	signals: z.boolean().optional(),
 	people: z.array(personRefSchema).optional(),
@@ -770,6 +773,7 @@ const contextDataSchema = z.object({
 			}),
 		)
 		.optional(),
+	followExhausted: z.literal(true).optional(),
 	followedAttachments: z
 		.array(
 			z.object({

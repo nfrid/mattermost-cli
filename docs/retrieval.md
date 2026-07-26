@@ -169,7 +169,8 @@ A refused conversation fails with `conversation_not_allowed` carrying
 
 - `--brief` (on `context` / `thread`) returns the decision layer only. For
   ticket subjects, `context … --agent` applies that brief projection by
-  default; `--full-posts` restores dense posts. `--navigate` returns lean
+  default; `--full-posts` keeps dense posts while still emitting top-level
+  brief for tickets. `--navigate` returns lean
   navigation stubs on the default total budget with a fair per-thread share so
   secondaries are not silently dropped (`navigate_truncated_threads` warns if
   they still are). `--short` remains the legacy small-budget card mode.

@@ -131,6 +131,8 @@ export function groupPosts(
 export function projectMessage(
 	post: {
 		id: string;
+		author?: string;
+		authorUsername?: string;
 		createAt: number;
 		updateAt: number;
 		deleteAt: number;
@@ -140,8 +142,10 @@ export function projectMessage(
 	anchorPostId?: string,
 ): AgentMessage {
 	const files = post.attachments.map((attachment) => projectFile(attachment));
+	const author = post.authorUsername ?? post.author ?? "";
 	return {
 		id: post.id,
+		author,
 		text: post.message,
 		at: isoTimestamp(post.createAt),
 		...(post.updateAt > post.createAt

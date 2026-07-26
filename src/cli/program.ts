@@ -148,14 +148,14 @@ export function createProgram(
 		.addOption(
 			new Option(
 				"--brief",
-				"decision-only projection: evidence, per-thread brief, and outcome-window posts (default for ticket subjects under --agent)",
-			).conflicts(["short", "fullPosts"]),
+				"decision layer: evidence, per-thread brief, and outcome-window posts (default for ticket subjects under --agent; combines with --full-posts)",
+			).conflicts(["short"]),
 		)
 		.addOption(
 			new Option(
 				"--full-posts",
-				"keep dense posts under --agent for ticket subjects (opt out of the ticket brief default)",
-			).conflicts(["short", "navigate", "brief"]),
+				"keep dense posts under --agent for ticket subjects while still emitting top-level brief",
+			).conflicts(["short", "navigate"]),
 		)
 		.addOption(
 			new Option(

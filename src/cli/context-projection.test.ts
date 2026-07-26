@@ -19,9 +19,9 @@ describe("resolveContextAgentBrief", () => {
 				brief: true,
 			},
 			{
-				name: "ticket --agent --full-posts → dense",
+				name: "ticket --agent --full-posts → brief kept with dense posts",
 				input: { agent: true, subject: "BTB-1", fullPosts: true },
-				brief: false,
+				brief: true,
 			},
 			{
 				name: "ticket --agent --brief → brief",

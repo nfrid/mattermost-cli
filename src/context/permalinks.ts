@@ -118,7 +118,11 @@ export async function resolvePermalinkTargets(input: {
 					postId: subject.postId,
 					conversationId: target.conversationId,
 					...(configuredConversation
-						? { conversationAlias: configuredConversation.alias }
+						? {
+								conversationAlias: configuredConversation.alias,
+								conversationName: configuredConversation.name,
+								conversationKind: configuredConversation.kind,
+							}
 						: {}),
 					restrictionSource: "cli",
 					restrictedTo: input.restrictedTo ?? [],

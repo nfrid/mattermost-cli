@@ -38,6 +38,30 @@ export interface AgentFile {
 	inspectCommand: string[];
 }
 
+/** Bounded inspect/OCR result merged into packet attachments after follow. */
+export type AgentAttachmentInspection =
+	| {
+			status: "preview";
+			format: string;
+			preview: string;
+			trust: "low";
+			truncated?: true;
+	  }
+	| {
+			status: "text_extracted";
+			format: "image";
+			text: string;
+			trust: "low";
+			engine?: string;
+			truncated?: true;
+	  }
+	| {
+			status: "not_interpreted";
+			format: string;
+			reason: string;
+			recommendedAction: string;
+	  };
+
 /**
  * One attachment reachable from the thread, including attachments carried by
  * posts inside skip spans (`inPacket: false`) so a decision to download is
@@ -60,6 +84,18 @@ export interface AgentThreadAttachment {
 	downloadCommand: string[];
 	/** Bounded content inspection; use when the attachment itself is evidence. */
 	inspectCommand: string[];
+	/** Present after `--follow-recommended` / inspect merges OCR or preview text. */
+	inspection?: AgentAttachmentInspection;
+}
+
+/** Top-level follow artifact with inspect text agents can read without re-fetch. */
+export interface AgentFollowedAttachment {
+	id: string;
+	name: string;
+	path: string;
+	postId: string;
+	inspectionStatus?: string;
+	inspection?: AgentAttachmentInspection;
 }
 
 /**
@@ -265,6 +301,8 @@ export interface AgentTechnicalEntity {
 
 export interface AgentMessage {
 	id: string;
+	/** Author username — also on the parent group; repeated so nested reads cannot `@None`. */
+	author: string;
 	text: string;
 	at?: string;
 	editedAt?: string;
@@ -407,7 +445,7 @@ export interface AgentThread {
 	totalPosts: number;
 	/**
 	 * 1-based retrieval rank. Threads keep ranking order, so `rank: 1` is not
-	 * necessarily `role: "primary"` — `role` is picked for substance.
+	 * necessarily `role: "primary"` — `role` matches `researchSummary.primaryThreadId`.
 	 */
 	rank?: number;
 	/** True when omit/skip is large enough that `mm thread --full` is warranted. */

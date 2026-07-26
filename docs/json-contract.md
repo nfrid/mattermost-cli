@@ -60,6 +60,9 @@ those for audit. When `mayHaveMissedOtherThreads` is true, additive
 `subject_matched_budget_drops` | `local_discovery`). Every `true` verdict flag
 either has a covering `evidence.next` step or sets `noActionAvailable` with
 `noActionReason` so agents never stall on a lit flag with an empty `next[]`.
+When `recommendedActionRequired` is already true, `noActionAvailable` is
+suppressed so the two flags never contradict; residual uncovered axes stay
+visible via `mayHaveMissedReason` / the other verdict booleans.
 
 `mayHaveMissedOtherThreads` deliberately ignores a merely budget-bounded weak
 tail. It is set by stale or local-only discovery, by bounded history on a packet
@@ -173,18 +176,22 @@ excerpts best-effort redact login/password/token phrases. `--out` receipts add
 `context … --follow-recommended` (requires `--agent`) runs `priority:
 "recommended"` next steps once, merges their evidence into the same packet, and
 always adds `followLog[]` (argv + status; empty when nothing ran) plus optional
-`followedAttachments[]`. External-reader / failed-OCR inspects are skipped and
+`followedAttachments[]` (inspect text also merges onto matching thread
+attachments) and `followExhausted: true` when no further recommended next
+remains. External-reader / failed-OCR inspects are skipped and
 remaining recommended steps continue; never runs broad `sync`. Skip markers
 may additively carry `authors` / `fromAt` / `toAt`. Brief decisions may carry
 `supportingPostIds` / `supportingExcerpt` and soft `offlineOrVoiceApproval`.
 Brief may also carry `lateAcknowledgement` (explicit late-thread ack, not
 adjacency pairing) at top-level `brief` and per-thread. Architectural approach
 cues map to `proposal` only.
-Agent projection may emit `hints.readOrder`. Informational
+Agent projection may emit `hints.readOrder` and `timelineComplete`. Informational
 `probe_reranked_packet` warns when non-ticket `--query` can reshape selection.
-Request-scoped `--max-threads` / `--max-characters` /
+Subject-matched / permalink threads are probe-pinned so `--query` cannot drop
+them as no_match. Request-scoped `--max-threads` / `--max-characters` /
 `--per-thread-characters` override config budgets without changing defaults
-when omitted.
+when omitted. Subject-matched budget drops recommend both `inspect_dropped`
+and a `review_candidates` re-run with a higher `--max-threads`.
 
 ## Schemas and fixtures
 
