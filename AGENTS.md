@@ -22,6 +22,6 @@
 | `src/store/` | SQLite index (schema, reads, writes, FTS) |
 | `src/sync/` | Sync, doctor/setup, file download, allowlist |
 | `src/shared/` | Errors, locks, limits, paths |
-| `src/benchmark/` | Retrieval benchmark tooling |
+| `src/benchmark/` | Retrieval benchmark and cue-calibration tooling |
 
 Public package exports stay narrow in `src/index.ts`; prefer local module imports inside the repo.

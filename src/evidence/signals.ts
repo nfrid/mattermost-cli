@@ -10,6 +10,7 @@ import {
 	containsNormalizedText,
 	normalizeSearchText,
 } from "../search/text.ts";
+import type { CueDescriptor, CueRecorder, CueStage } from "./cue-telemetry.ts";
 import type { EvidencePost } from "./packing.ts";
 
 /** Advisory span kinds — names always contain `candidate` (never facts). */
@@ -284,6 +285,12 @@ export interface BuildThreadSignalsOptions {
 	/** Hard cap on posts listed in an outcome window. */
 	maxOutcomePosts?: number;
 	excerptLimit?: number;
+	/**
+	 * Opt-in per-cue firing recorder for calibration tooling. Absent in every
+	 * production path: signals must not depend on being observed, and telemetry
+	 * must never reach a packet.
+	 */
+	cueTelemetry?: CueRecorder;
 }
 
 export interface BuildThreadBriefOptions extends BuildThreadSignalsOptions {
@@ -679,6 +686,70 @@ const ROLE_HINT_CUES: Readonly<Record<RoleHintLabel, readonly CuePattern[]>> = {
 	],
 };
 
+/**
+ * Every cue table, named. Two uses: attributing a matched pattern to its table
+ * for telemetry (by object identity, so a merged array like
+ * `[...DECISION_CUES, ...TECH_APPROACH_CUES]` still attributes correctly), and
+ * enumerating the full inventory so a cue that never fires is visible as such.
+ *
+ * `instrumented: false` marks a table consulted outside {@link matchCues} —
+ * those rows report zero counts, which means "not measured", not "never fired".
+ */
+const CUE_TABLES: ReadonlyArray<{
+	family: string;
+	patterns: readonly CuePattern[];
+	instrumented: boolean;
+}> = [
+	{ family: "decision", patterns: DECISION_CUES, instrumented: true },
+	{ family: "tech_approach", patterns: TECH_APPROACH_CUES, instrumented: true },
+	{ family: "rejected", patterns: REJECTED_CUES, instrumented: true },
+	{ family: "open_question", patterns: OPEN_QUESTION_CUES, instrumented: true },
+	{
+		family: "scope_refinement",
+		patterns: SCOPE_REFINEMENT_CUES,
+		instrumented: true,
+	},
+	...(Object.keys(ROLE_HINT_CUES) as RoleHintLabel[]).map((label) => ({
+		family: `role:${label}`,
+		patterns: ROLE_HINT_CUES[label],
+		instrumented: true,
+	})),
+	// Consulted through `cueMatches` from `isFullyHedged`, which classifies a
+	// message without a post id to attribute the observation to.
+	{ family: "hedge", patterns: DECISION_HEDGE_CUES, instrumented: false },
+];
+
+const CUE_FAMILY_BY_PATTERN: ReadonlyMap<CuePattern, string> = new Map(
+	CUE_TABLES.flatMap(({ family, patterns }) =>
+		patterns.map((pattern) => [pattern, family] as const),
+	),
+);
+
+/** Every cue table entry, whether or not it has ever fired. */
+export function cueInventory(): CueDescriptor[] {
+	const descriptors = CUE_TABLES.flatMap(({ family, patterns, instrumented }) =>
+		patterns.map((pattern) => ({
+			family,
+			cue: pattern.cue,
+			weight: pattern.weight ?? 0.5,
+			exact: pattern.exact ?? false,
+			...(pattern.commitment ? { commitment: pattern.commitment } : {}),
+			...(pattern.shape ? { shape: pattern.shape } : {}),
+			instrumented,
+		})),
+	);
+	descriptors.push(
+		...DECISION_META_REJECT.map((cue) => ({
+			family: "decision_meta_reject",
+			cue,
+			weight: 0,
+			exact: false,
+			instrumented: false,
+		})),
+	);
+	return descriptors;
+}
+
 const SPAN_KIND_CUES: ReadonlyArray<{
 	kind: CandidateSpanKind;
 	patterns: readonly CuePattern[];
@@ -700,6 +771,22 @@ export function buildThreadSignals(
 	posts: readonly EvidencePost[],
 	options: BuildThreadSignalsOptions = {},
 ): ThreadSignals {
+	return buildSignalsWithPatterns(posts, options).signals;
+}
+
+/**
+ * {@link buildThreadSignals} plus the cue patterns behind each emitted signal,
+ * so `buildThreadBrief` can credit `brief` telemetry against the patterns that
+ * produced a span rather than re-resolving cue strings back to a table. The
+ * maps are populated only when a recorder is present.
+ */
+function buildSignalsWithPatterns(
+	posts: readonly EvidencePost[],
+	options: BuildThreadSignalsOptions = {},
+): {
+	signals: ThreadSignals;
+	spanPatterns?: Map<CandidateSpan, readonly CuePattern[]>;
+} {
 	const chronological = [...posts].sort(
 		(left, right) =>
 			left.createAt - right.createAt || left.id.localeCompare(right.id),
@@ -709,9 +796,19 @@ export function buildThreadSignals(
 	const maxOutcome = options.maxOutcomePosts ?? MAX_OUTCOME_WINDOW_POSTS;
 	const excerptLimit = options.excerptLimit ?? POINTER_EXCERPT_LIMIT;
 
+	const recorder = options.cueTelemetry;
+	const spanPatterns = recorder
+		? new Map<CandidateSpan, readonly CuePattern[]>()
+		: undefined;
+	const hintPatterns = recorder
+		? new Map<RoleHint, Array<{ postId: string; pattern: CuePattern }>>()
+		: undefined;
+
 	const candidateSpans = collectCandidateSpans(chronological, {
 		maxSpans,
 		excerptLimit,
+		...(recorder ? { cueTelemetry: recorder } : {}),
+		...(spanPatterns ? { spanPatterns } : {}),
 	}).filter((span) => includedIds.has(span.postId));
 
 	const outcomeWindow = buildOutcomeWindow(chronological, {
@@ -720,14 +817,39 @@ export function buildThreadSignals(
 		includedIds,
 	});
 
-	const roleHints = collectRoleHints(chronological).filter((hint) =>
-		hint.evidencePostIds.every((id) => includedIds.has(id)),
+	const roleHints = collectRoleHints(chronological, {
+		...(recorder ? { cueTelemetry: recorder } : {}),
+		...(hintPatterns ? { hintPatterns } : {}),
+	}).filter((hint) => hint.evidencePostIds.every((id) => includedIds.has(id)));
+
+	// Credit only what survived the span cap and the role-hint containment filter
+	// above: `survived` must describe the emitted signal, not the matcher.
+	recordSurvivingCues(
+		recorder,
+		"survived",
+		candidateSpans.map((span) => ({
+			postId: span.postId,
+			patterns: spanPatterns?.get(span) ?? [],
+		})),
 	);
+	for (const hint of roleHints) {
+		recordSurvivingCues(
+			recorder,
+			"survived",
+			(hintPatterns?.get(hint) ?? []).map(({ postId, pattern }) => ({
+				postId,
+				patterns: [pattern],
+			})),
+		);
+	}
 
 	return {
-		candidateSpans,
-		...(outcomeWindow ? { outcomeWindow } : {}),
-		roleHints,
+		signals: {
+			candidateSpans,
+			...(outcomeWindow ? { outcomeWindow } : {}),
+			roleHints,
+		},
+		...(spanPatterns ? { spanPatterns } : {}),
 	};
 }
 
@@ -740,10 +862,14 @@ export function buildThreadBrief(
 	posts: readonly EvidencePost[],
 	options: BuildThreadBriefOptions = {},
 ): ThreadBrief {
-	const signals = buildThreadSignals(posts, {
+	const { signals, spanPatterns } = buildSignalsWithPatterns(posts, {
 		...options,
 		maxOutcomePosts: options.maxOutcomePosts ?? MAX_BRIEF_OUTCOME_WINDOW_POSTS,
 	});
+	const recorder = options.cueTelemetry;
+	const briefTelemetry: BriefCueTelemetry | undefined = recorder
+		? { recorder, refinementPatterns: new Map() }
+		: undefined;
 	const maxPurpose = options.maxPurposeHints ?? MAX_PURPOSE_HINTS;
 	const maxDecisions = options.maxDecisionPostIds ?? MAX_DECISION_POST_IDS;
 
@@ -808,9 +934,44 @@ export function buildThreadBrief(
 	const decisions = buildBriefDecisions(
 		chronological,
 		cappedDecisionSpans,
-		collectDecisionBoundaryIds(chronological),
+		collectDecisionBoundaryIds(chronological, recorder),
 		briefExcerptLimit,
+		briefTelemetry,
 	);
+
+	if (recorder) {
+		const spanByPostId = new Map(
+			signals.candidateSpans.map((span) => [
+				`${span.kind} ${span.postId}`,
+				span,
+			]),
+		);
+		const briefSpans = [
+			...decisions.map((decision) => `decision_candidate ${decision.postId}`),
+			...openQuestions.map(
+				(question) => `open_question_candidate ${question.postId}`,
+			),
+		];
+		recordSurvivingCues(
+			recorder,
+			"brief",
+			briefSpans.flatMap((key) => {
+				const span = spanByPostId.get(key);
+				const patterns = span ? spanPatterns?.get(span) : undefined;
+				return patterns ? [{ postId: span?.postId ?? "", patterns }] : [];
+			}),
+		);
+		recordSurvivingCues(
+			recorder,
+			"brief",
+			decisions.flatMap((decision) =>
+				(decision.refinements ?? []).flatMap((refinement) => {
+					const entry = briefTelemetry?.refinementPatterns.get(refinement);
+					return entry ? [entry] : [];
+				}),
+			),
+		);
+	}
 
 	const lateAcknowledgement = findLateThreadAcknowledgement(
 		chronological,
@@ -934,6 +1095,7 @@ function buildOpenQuestions(
  */
 function collectDecisionBoundaryIds(
 	chronological: readonly EvidencePost[],
+	cueTelemetry?: CueRecorder,
 ): Set<string> {
 	const ids = new Set<string>();
 	for (const post of chronological) {
@@ -950,6 +1112,7 @@ function collectDecisionBoundaryIds(
 			{
 				rejectInterrogativeCueSentence: true,
 				rejectNegatedCue: true,
+				telemetry: cueTelemetryContext(cueTelemetry, post.id),
 			},
 		);
 		if (matched.cues.length) ids.add(post.id);
@@ -962,6 +1125,7 @@ function buildBriefDecisions(
 	cappedDecisionSpans: readonly CandidateSpan[],
 	decisionIds: ReadonlySet<string>,
 	excerptLimit: number,
+	telemetry?: BriefCueTelemetry,
 ): BriefDecision[] {
 	const byId = new Map(chronological.map((post) => [post.id, post]));
 	const decisions: BriefDecision[] = [];
@@ -973,6 +1137,7 @@ function buildBriefDecisions(
 			post,
 			decisionIds,
 			excerptLimit,
+			telemetry,
 		);
 		const excerpt = excerptWithTruncation(post.message, excerptLimit);
 		const ack = span.ackPostId ? byId.get(span.ackPostId) : undefined;
@@ -1097,6 +1262,7 @@ function collectScopeRefinements(
 	decision: EvidencePost,
 	decisionIds: ReadonlySet<string>,
 	excerptLimit: number,
+	telemetry?: BriefCueTelemetry,
 ): BriefScopeRefinement[] {
 	const start = chronological.findIndex((post) => post.id === decision.id);
 	if (start < 0) return [];
@@ -1109,16 +1275,22 @@ function collectScopeRefinements(
 		if (decisionIds.has(post.id)) break;
 		const matched = matchCues(post.message, SCOPE_REFINEMENT_CUES, {
 			rejectInterrogativeCueSentence: true,
+			telemetry: cueTelemetryContext(telemetry?.recorder, post.id),
 		});
 		if (!matched.cues.length) continue;
 		const excerpt = excerptWithTruncation(post.message, excerptLimit);
-		refinements.push({
+		const refinement: BriefScopeRefinement = {
 			postId: post.id,
 			author: post.authorUsername,
 			createAt: post.createAt,
 			excerpt: excerpt.text,
 			...(excerpt.truncated ? { excerptTruncated: true as const } : {}),
 			cues: matched.cues,
+		};
+		refinements.push(refinement);
+		telemetry?.refinementPatterns.set(refinement, {
+			postId: post.id,
+			patterns: matched.patterns,
 		});
 		if (refinements.length >= MAX_REFINEMENTS_PER_DECISION) break;
 	}
@@ -1348,7 +1520,13 @@ function isNoiseThread(
 
 function collectCandidateSpans(
 	posts: readonly EvidencePost[],
-	options: { maxSpans: number; excerptLimit: number },
+	options: {
+		maxSpans: number;
+		excerptLimit: number;
+		cueTelemetry?: CueRecorder;
+		/** Populated with the patterns behind each span, for `survived` crediting. */
+		spanPatterns?: Map<CandidateSpan, readonly CuePattern[]>;
+	},
 ): CandidateSpan[] {
 	const spans: CandidateSpan[] = [];
 	for (const [index, post] of posts.entries()) {
@@ -1361,6 +1539,7 @@ function collectCandidateSpans(
 				// question still scores; only the cue's own sentence is checked.
 				rejectInterrogativeCueSentence: isDecision,
 				rejectNegatedCue: isDecision,
+				telemetry: cueTelemetryContext(options.cueTelemetry, post.id),
 			});
 			if (!matched.cues.length) continue;
 			const ack = isDecision ? findAckPostId(posts, index) : undefined;
@@ -1370,7 +1549,7 @@ function collectCandidateSpans(
 						Math.min(0.95, matched.confidence + DECISION_ACK_BONUS),
 					)
 				: matched.confidence;
-			spans.push({
+			const span: CandidateSpan = {
 				kind,
 				postId: post.id,
 				excerpt: truncateExcerpt(post.message, options.excerptLimit),
@@ -1389,7 +1568,9 @@ function collectCandidateSpans(
 					? { questionKind: classifyQuestion(post.message, matched.patterns) }
 					: {}),
 				...(ack ? { ackPostId: ack.postId } : {}),
-			});
+			};
+			spans.push(span);
+			options.spanPatterns?.set(span, matched.patterns);
 		}
 	}
 	// An acknowledged agreement must survive the span cap. Sorting on confidence
@@ -1454,18 +1635,34 @@ function buildOutcomeWindow(
 	};
 }
 
-function collectRoleHints(posts: readonly EvidencePost[]): RoleHint[] {
+function collectRoleHints(
+	posts: readonly EvidencePost[],
+	options: {
+		cueTelemetry?: CueRecorder;
+		/** Populated with the patterns behind each hint, for `survived` crediting. */
+		hintPatterns?: Map<
+			RoleHint,
+			Array<{ postId: string; pattern: CuePattern }>
+		>;
+	} = {},
+): RoleHint[] {
 	const labels = Object.keys(ROLE_HINT_CUES) as RoleHintLabel[];
 	const hints: RoleHint[] = [];
 	for (const label of labels) {
 		const patterns = ROLE_HINT_CUES[label];
 		const evidencePostIds: string[] = [];
 		const cueSet = new Map<string, number>();
+		const contributions: Array<{ postId: string; pattern: CuePattern }> = [];
 		for (const post of posts) {
 			if (!post.message.trim() || post.deleteAt) continue;
-			const matched = matchCues(post.message, patterns);
+			const matched = matchCues(post.message, patterns, {
+				telemetry: cueTelemetryContext(options.cueTelemetry, post.id),
+			});
 			if (!matched.cues.length) continue;
 			evidencePostIds.push(post.id);
+			for (const pattern of matched.patterns) {
+				contributions.push({ postId: post.id, pattern });
+			}
 			for (const [index, cue] of matched.cues.entries()) {
 				const weight = matched.weights[index] ?? 0.5;
 				cueSet.set(cue, Math.max(cueSet.get(cue) ?? 0, weight));
@@ -1479,12 +1676,14 @@ function collectRoleHints(posts: readonly EvidencePost[]): RoleHint[] {
 			.slice(0, MAX_CUES_PER_SIGNAL)
 			.map(([cue]) => cue);
 		const weights = cues.map((cue) => cueSet.get(cue) ?? 0.5);
-		hints.push({
+		const hint: RoleHint = {
 			label,
 			evidencePostIds: [...new Set(evidencePostIds)],
 			cues,
 			confidence: scoreConfidence(weights),
-		});
+		};
+		hints.push(hint);
+		options.hintPatterns?.set(hint, contributions);
 	}
 	return hints.sort(
 		(left, right) =>
@@ -1605,12 +1804,67 @@ function isDecisionMetaNoise(message: string): boolean {
 	);
 }
 
+/**
+ * Brief-scoped telemetry state. Scope refinements are matched inside
+ * `buildBriefDecisions`, below the point where {@link buildSignalsWithPatterns}
+ * can see them, so their patterns are collected here instead.
+ */
+interface BriefCueTelemetry {
+	recorder: CueRecorder;
+	refinementPatterns: Map<
+		BriefScopeRefinement,
+		{ postId: string; patterns: readonly CuePattern[] }
+	>;
+}
+
+/** Recorder plus the post the observation belongs to. */
+interface CueTelemetryContext {
+	recorder: CueRecorder;
+	postId: string;
+}
+
+function cueTelemetryContext(
+	recorder: CueRecorder | undefined,
+	postId: string,
+): CueTelemetryContext | undefined {
+	return recorder ? { recorder, postId } : undefined;
+}
+
+function recordCue(
+	context: CueTelemetryContext | undefined,
+	pattern: CuePattern,
+	stage: CueStage,
+): void {
+	if (!context) return;
+	const family = CUE_FAMILY_BY_PATTERN.get(pattern);
+	if (!family) return;
+	context.recorder.record(family, pattern.cue, stage, context.postId);
+}
+
+/**
+ * Credit the cues of a signal that reached output. Called after every cap and
+ * confidence gate, so `survived` / `brief` counts describe what a consumer
+ * actually saw rather than what the matcher produced.
+ */
+function recordSurvivingCues(
+	recorder: CueRecorder | undefined,
+	stage: Extract<CueStage, "survived" | "brief">,
+	entries: Iterable<{ postId: string; patterns: readonly CuePattern[] }>,
+): void {
+	if (!recorder) return;
+	for (const { postId, patterns } of entries) {
+		const context = { recorder, postId };
+		for (const pattern of patterns) recordCue(context, pattern, stage);
+	}
+}
+
 function matchCues(
 	message: string,
 	patterns: readonly CuePattern[],
 	options: {
 		rejectInterrogativeCueSentence?: boolean;
 		rejectNegatedCue?: boolean;
+		telemetry?: CueTelemetryContext;
 	} = {},
 ): {
 	cues: string[];
@@ -1626,7 +1880,9 @@ function matchCues(
 		[];
 	for (const pattern of patterns) {
 		if (!cueMatches(message, pattern)) continue;
+		recordCue(options.telemetry, pattern, "matched");
 		if (sentences && !cueSurvivesSentenceGuards(sentences, pattern, options)) {
+			recordCue(options.telemetry, pattern, "guardRejected");
 			continue;
 		}
 		matched.push({ cue: pattern.cue, weight: pattern.weight ?? 0.5, pattern });
@@ -1642,6 +1898,18 @@ function matchCues(
 			left.cue.localeCompare(right.cue),
 	);
 	const limited = matched.slice(0, MAX_CUES_PER_SIGNAL);
+	if (options.telemetry) {
+		for (const [index, item] of matched.entries()) {
+			recordCue(
+				options.telemetry,
+				item.pattern,
+				index < limited.length ? "reported" : "capped",
+			);
+		}
+		if (limited.length === 1 && limited[0]) {
+			recordCue(options.telemetry, limited[0].pattern, "sole");
+		}
+	}
 	const weights = limited.map((item) => item.weight);
 	return {
 		cues: limited.map((item) => item.cue),
