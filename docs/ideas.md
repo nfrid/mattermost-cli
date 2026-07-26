@@ -201,7 +201,7 @@ but described backwards.
 
 ## `open_question` rests almost entirely on the bare `?`
 
-**Status:** open (found by the cue firing report, `bun run cues`)
+**Status:** done — corroboration gate shipped; `bun run questions` guards it
 
 **Problem.** The bare `?` is not one cue among many — it is the layer. Over the
 local index it accounts for 5,647 of roughly 7,900 total cue matches, and it is
@@ -242,6 +242,25 @@ not that it is wrong. Hypotheses worth testing in that order:
 
 Do not treat the low `soleRate` of the other cues as evidence they should be
 removed: they are what makes the remaining 5% specific.
+
+**What shipped.** The first hypothesis, as a qualification rule rather than a
+weight change: a span whose only cue is `?` may be inlined in `brief` and count
+toward the purpose hint only when the `?` terminates a sentence of prose *and*
+the post names the subject ticket. `signals.candidateSpans` is untouched, so the
+advisory layer still carries every question mark. Retrieval benchmark metrics
+are unchanged (this is the brief layer, not ranking). Over the live index the
+`open_question` hint fell from 23% to 20% of ticket-linked threads and from 77%
+to 23% of long threads, and inlined questions marked `unanswered` fell from
+1,457 to 26.
+
+**What is still weak.** The subject-mention rescue accounts for ~45% of the
+surviving inlined questions and it does admit ticket-naming chatter
+(«покатились?», «можно как-нибудь в перерыве взять?») alongside real requests.
+It is the only mechanical evidence available that a bare question is *about* the
+subject, so it stays until something better exists — a per-question addressee or
+a reply-graph signal would be the next thing to try. Recall on real data remains
+unmeasured: `benchmarks/questions.v1.json` was written alongside the gate and
+scores 37/37, which is weak evidence by construction.
 
 ## Candidate pools with their own budgets
 
