@@ -113,6 +113,32 @@ export interface AgentBriefDecision {
 	 * that was settled a few messages later.
 	 */
 	refinements?: AgentBriefRefinement[];
+	/**
+	 * Preceding packed proposal/intent posts that name what a short settled cue
+	 * approved. Verbatim only.
+	 */
+	supportingPostIds?: string[];
+	supportingExcerpt?: string;
+	/**
+	 * Soft marker for offline/voice approval phrasing. Does not upgrade `kind`.
+	 */
+	offlineOrVoiceApproval?: true;
+}
+
+/**
+ * Explicit late-thread acknowledgement (not adjacency pairing). Lower
+ * confidence; cite `decisionPostId` + `ackPostId` before treating as settlement.
+ */
+export interface AgentLateAcknowledgement {
+	kind: "late_thread_acknowledgement";
+	decisionPostId: string;
+	decisionKind: AgentBriefDecision["kind"];
+	ackPostId: string;
+	author: string;
+	at: string;
+	text: string;
+	textTruncated?: true;
+	confidence: number;
 }
 
 export interface AgentBriefAcknowledgement {
@@ -173,9 +199,13 @@ export interface AgentResponseExcerpt {
 
 /** Lean brief with agent-facing timestamps and inlined decision text. */
 export interface AgentThreadBrief
-	extends Omit<ThreadBrief, "decisions" | "openQuestions"> {
+	extends Omit<
+		ThreadBrief,
+		"decisions" | "openQuestions" | "lateAcknowledgement"
+	> {
 	decisions?: AgentBriefDecision[];
 	openQuestions?: AgentBriefOpenQuestion[];
+	lateAcknowledgement?: AgentLateAcknowledgement;
 }
 
 /**
@@ -185,6 +215,11 @@ export interface AgentThreadBrief
 export interface AgentMergedBrief {
 	decisions?: AgentMergedBriefDecision[];
 	openQuestions?: AgentMergedBriefOpenQuestion[];
+	/**
+	 * Strongest late-thread acknowledgement across selected threads (by
+	 * confidence, then recency). Also kept under `threads[].brief` for locality.
+	 */
+	lateAcknowledgement?: AgentLateAcknowledgement & { threadId: string };
 }
 
 export interface AgentMergedBriefDecision extends AgentBriefDecision {
@@ -259,6 +294,12 @@ export interface AgentSkip {
 		reason?: string;
 		/** Live attachments carried by the omitted posts; absent when none. */
 		files?: number;
+		/** Distinct authors in the omitted span, when known. */
+		authors?: string[];
+		/** Earliest omitted post timestamp (ISO), when known. */
+		fromAt?: string;
+		/** Latest omitted post timestamp (ISO), when known. */
+		toAt?: string;
 	};
 }
 

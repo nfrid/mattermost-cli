@@ -12,15 +12,19 @@ Agents should parse `--agent` JSON rather than treating it as prose.
 
 ## Projections
 
-`--brief`, `--navigate`, `--short`, and `--full-posts` are mutually exclusive.
+`--brief`, `--navigate`, `--short`, and `--full-posts` are mutually exclusive
+except that ticket `--agent --navigate` still keeps the top-level brief /
+`researchSummary` (lean posts + decision layer). Explicit `--brief --navigate`
+is also allowed.
 
 | Projection | Contents |
 | --- | --- |
 | default (non-ticket, or `--full-posts`) | dense `posts` and `messages`, per-thread `brief`, `evidence` |
 | ticket `--agent` default / `--brief` | decision layer only |
-| `--navigate` | lean navigation: `anchors` / `clusters` / `skips` / packing hints |
+| `--navigate` | lean navigation: `anchors` / `clusters` / `skips` / packing hints; ticket `--agent` still emits top-level `brief` |
 | `--timeline` | one merged chronology instead of per-thread `posts[]` |
 | `--short` | legacy card + timeline projection |
+| `--follow-recommended` | after packing, run `priority: "recommended"` next steps once and merge into one packet + `followLog[]` (requires `--agent`) |
 
 For a **ticket** subject, `context … --agent` applies the brief projection
 automatically (`projection: "brief"` on the envelope). Pass `--full-posts` to
@@ -29,13 +33,28 @@ post subjects keep the dense default unless `--brief` is explicit. Start ticket
 research with `context KEY --agent`.
 
 **`--navigate`** gives `anchors` / `clusters` / `skips` and packing hints with no
-dense `posts` and no top-level `messages`. It still uses the **default** total
-character budget, but reserves a fair per-thread share of `maxThreads` so one
-fat candidate cannot silently drop siblings; if budget still truncates selection,
-the packet warns `navigate_truncated_threads`. Each anchor is one post carrying
-every role it plays in `kinds[]` (`root` / `ticket_mention` / `match_hit` /
-`file` / `multi_ticket` / `codeish` / `latest`) rather than one repeated entry
-per role. `--short` conflicts with `--navigate`.
+dense `posts` and no top-level `messages`. Ticket `--agent --navigate` still
+emits top-level `brief` / `researchSummary` for orientation. It still uses the
+**default** total character budget, but reserves a fair per-thread share of
+`maxThreads` so one fat candidate cannot silently drop siblings; if budget still
+truncates selection, the packet warns `navigate_truncated_threads`. Each anchor
+is one post carrying every role it plays in `kinds[]` (`root` /
+`ticket_mention` / `match_hit` / `file` / `multi_ticket` / `codeish` / `latest`)
+rather than one repeated entry per role. `--short` conflicts with `--navigate`.
+
+**`--follow-recommended`** (requires `--agent`) executes each
+`evidence.next` step with `priority: "recommended"` once — thread gap recovery,
+inspect_dropped, and `read_attachments` (including media-only images that may
+need OCR). Broad `sync` is skipped. Steps that still need an external reader
+after inspect are logged as `skipped_external_reader` and the chain
+**continues** with remaining recommended steps. Results merge into the same
+context packet with `followLog[]` (always present when the flag ran — empty when
+there was nothing to do) and optional `followedAttachments[]`. There is no
+persistent session store.
+
+Context agent packets also emit `hints.readOrder` — a stable list of fields to
+read first. Orient on `researchSummary.primaryThreadId`, not `threads[].role`
+(role is retrieval bookkeeping and can disagree with the decision thread).
 
 **`--brief`** (and the ticket `--agent` default) returns `evidence`, a top-level
 merged `brief`, per-thread `threads[].brief`, and only the decision layer:
@@ -125,16 +144,32 @@ question. It is suppressed on a truncated packet.
 
 Each entry carries `id` / `author` / `at` / `text`, an optional `ackPostId`
 plus its inlined verbatim `acknowledgement`, optional `refinements[]` (later
-posts that narrow the decision's scope), and a `kind`. A question containing a
-scope word is not itself a refinement; only a non-interrogative follow-up is
-attached. Top-level merged entries also carry `threadId`.
+posts that narrow the decision's scope), and a `kind`. Short settled cues may
+also carry `supportingPostIds` / `supportingExcerpt` from a preceding packed
+proposal or intent (verbatim only — never a paraphrase). Soft
+`offlineOrVoiceApproval: true` marks offline/voice phrasing («обсудили голосом»,
+«на дейли») without upgrading `kind` into a substantive in-channel approval. A
+question containing a scope word is not itself a refinement; only a
+non-interrogative follow-up is attached. Top-level merged entries also carry
+`threadId`.
+
+Architectural approach statements («оставляем на стороне…», «отдельный роут»,
+«separate endpoint») surface as `proposal` only — never as
+`approved_decision`, even when short-acked.
+
+When a short affirming ack among the final packed posts confirms an earlier
+decision that adjacency pairing missed, the brief may also carry
+`lateAcknowledgement` (`kind: "late_thread_acknowledgement"`) with its own
+lower confidence. That field is not a widened `ackPostId` window. Under
+`projection: "brief"`, the strongest late ack is also promoted to top-level
+`brief.lateAcknowledgement` (with `threadId`); `hints.readOrder` points at it.
 
 | `kind` | Meaning |
 | --- | --- |
 | `approved_decision` | approval or agreement phrasing, or a personal commitment another author affirmed with a short «ок» / «да» |
 | `discussion_outcome` | someone reports where a discussion landed («обсудили…», «итого…») — not a go-ahead |
 | `implementation_intent` | one author states what *they* will do |
-| `proposal` | every sentence carrying the cue also hedges, so it is an option, not a course |
+| `proposal` | every sentence carrying the cue also hedges, so it is an option, not a course; also architectural approach cues |
 
 Entries are ordered strongest first and the cap keeps the strongest, so an
 acknowledged agreement is never displaced by a louder intent. Only
@@ -231,59 +266,87 @@ sensitive headers are replaced with `[REDACTED]` and reported through
 `sensitiveFieldsDetected` / `redactionApplied`. Detection is best effort, not an
 anonymization guarantee. The preview carries `truncated` when any bound cut it.
 
-Images and binary spreadsheets are never presented as read: their inspection is
-`status: "not_interpreted"`, `interpreted: false`, with the external reader or
-parser still required. This avoids turning OCR, captions, or ad-hoc workbook
-parsing into apparent primary evidence.
+OOXML `.xlsx` workbooks get a bounded sheet preview (`format: "spreadsheet"`)
+with `sheets` / `activeSheet` / `headers` / `rowCount` plus a CSV-like
+`preview` of the first sheet (same line/character caps and header PII
+redaction). Large workbook ZIP members (multi-MB `sharedStrings.xml` /
+worksheet XML) are accepted up to an 8 MiB critical-entry cap; sheet XML may be
+prefix-scanned for the first preview rows. `downloaded: true` / `inspected: true`
+means a textual preview was produced — not that the whole workbook was verified.
+Legacy `.xls` / `.ods` remain `not_interpreted`.
+
+Images stay `status: "not_interpreted"` when no text can be extracted
+(`downloaded: true` / `inspected: false`). OCR preference:
+
+1. `MATTERMOST_OCR_MODULE` — explicit JS module exporting `extractImageText`
+2. On macOS (Darwin), when that env is unset and `MATTERMOST_OCR_DISABLE_MACOS`
+   is not `1`, mm tries the built-in Vision helper (`macos-vision`, low trust)
+3. Otherwise `not_interpreted` + `external_image_reader_required`
+
+Successful extraction yields `status: "text_extracted"` with `trust: "low"` /
+`source: "ocr"`. Never treat OCR text as high-trust evidence. See
+[retrieval.md](./retrieval.md#opt-in-ocr).
 
 ### `read_attachments` steps
 
 When a media-only post lands after the last subject-ticket mention — or is the
-last packed post without a ticket subject — `evidence.next` carries one
-`recommended` `read_attachments` step with `impact:
-"may_contradict_visible_text"`, a `postId`, and a single-file argv. Textual files use `--inspect`; images remain
-an explicit download for an image-capable reader.
+last packed post without a ticket subject — `evidence.next` carries a
+`read_attachments` step with a `postId` and a single-file argv. Textual files and
+previewable `.xlsx` that `--inspect` can read stay `recommended` (xlsx keeps
+`impact: "cannot_verify_quantities"`). Media-only **images** stay
+`recommended` with `impact: "requires_external_reader"` so agents (and
+`--follow-recommended`) attempt OCR / download before
+`canAnswerFromSelectedEvidence` can become true. Legacy workbooks (`.xls` /
+`.ods`) on decision posts stay `optional` with `requires_external_reader`.
 
 A data file (`csv` / `tsv` / `xlsx` / `xls` / `ods` / `json` / `ndjson` / `log` /
 `sql` / `txt`) attached to a post the brief flagged — a decision, one of its
 refinements, or an open question — gets its own step with `reason:
 "data_file_on_decision_post"`. Such a post has text, so the media-only rule never
 covered it, yet the file is where a quantitative claim («вот дубли») lives.
-Bounded textual formats use `impact: "may_verify_quantitative_claim"`;
-workbooks (`xlsx` / `xls` / `ods`) use `impact: "cannot_verify_quantities"`
-because mm never parses workbook bytes. The recommended argv still includes
-`--inspect` so the packet can report `not_interpreted`; a spreadsheet parser is
-still required for quantities.
+Bounded textual formats and previewable `.xlsx` use
+`impact: "may_verify_quantitative_claim"` or `cannot_verify_quantities` and stay
+`recommended` (or `optional` behind a media-only step). Legacy workbooks
+(`.xls` / `.ods`) use `impact: "requires_external_reader"` and `optional`
+priority; the argv still includes `--inspect` so the packet can report
+`not_interpreted` plus `downloaded`/`inspected`.
 
-It is `recommended` on its own and `optional` behind a media-only step, which is
-the more urgent of the two because that post is unreadable without its file. The
-mechanical `outcomeWindow` deliberately does not qualify a post — on a short
-thread it is most of the thread.
+Pending media-only outcome attachments (and unresolved external-reader decision
+attachments) keep `canAnswerFromSelectedEvidence: false` until `--inspect` /
+follow yields `preview` or `text_extracted` for that file id.
 
 ## `evidence.next`
 
 Execute only `priority: "recommended"` entries. Packing omissions normally
-produce a `thread_around` command requesting at most 50 posts from the largest
-skipped range with `--window-only`, rather than replaying the complete thread.
-That mode disables normal structural/tail anchors and projects only the explicit
-range under the character budget. Mattermost's thread endpoint still supplies
-the thread to the local read-only hydration layer; the bound applies to emitted
-model context, not server transfer or the ignored local index. Its top-level
-`retrieval` reports requested
-and returned posts; `evidence.scope: "gap_recovery"` and `gapRecovery` appear
-**only** on `thread --window-only --agent` (the gap-window response), where
-`gapRecovery.requestedRangeComplete`, not general answerability, decides whether
-the requested delta succeeded. A context packet never carries `gapRecovery`. A
-delta that exceeds the character budget emits
-`noActionAvailable` and asks the caller to choose a narrower window; it never
-escalates itself to `thread_full`. At most one hydration step is `recommended`;
-further truncated threads appear as
-`optional`. `thread_full` remains only the fallback when a legacy timeline has
-no usable range boundary.
+produce a `thread_around` command requesting posts from the largest skipped
+range with `--window-only`, capped by both 50 posts and the per-thread character
+budget (estimated from packed post size), rather than replaying the complete
+thread. That mode disables normal structural/tail anchors and projects only the
+explicit range under the character budget. Mattermost's thread endpoint still
+supplies the thread to the local read-only hydration layer; the bound applies to
+emitted model context, not server transfer or the ignored local index. Its
+top-level `retrieval` reports requested and returned posts; `evidence.scope:
+"gap_recovery"` and `gapRecovery` appear **only** on `thread --window-only
+--agent` (the gap-window response), where `gapRecovery.requestedRangeComplete`,
+not general answerability, decides whether the requested delta succeeded. A
+context packet never carries `gapRecovery`. A delta that exceeds the character
+budget emits a narrower page in `next[]` (half the side posts) when possible;
+only when even a single-post window cannot be expressed does it set
+`noActionAvailable`. It never escalates itself to `thread_full`. At most one
+hydration step is `recommended`; further truncated threads appear as `optional`.
+`thread_full` remains only the fallback when a legacy timeline has no usable
+range boundary.
 
 Do not invent optional `sync` / `inspect_dropped` follow-ups when absent.
-`inspect_dropped`, when emitted, carries `["mm","thread",<droppedId>,"--agent"]`
-— copy that argv rather than re-running `context`.
+`inspect_dropped`, when emitted for thin/ticket actionable drops, stays
+`optional`. When `droppedByBudgetSubjectMatched > 0` and a non-thin
+subject-matched drop remains, `inspect_dropped` is `recommended` (thin bulletin
+excerpts are still withheld). It carries
+`["mm","thread",<droppedId>,"--agent"]` — copy that argv rather than re-running
+`context`.
+
+Match and dropped-candidate excerpts best-effort redact login/password/token
+phrases (`[REDACTED]`); this is not an anonymization guarantee.
 
 ## Other packet fields
 
@@ -318,4 +381,7 @@ Detailed per-conversation freshness evidence remains available in `--json`;
 warning `severity` separates material evidence limitations from informational
 routing/probe diagnostics; absence means material. `--out` receipts preserve
 the total `warnings` count and add `materialWarnings` so additive diagnostics do
-not make a clean packet look less trustworthy.
+not make a clean packet look less trustworthy. Receipts also include additive
+`canAnswer`, `recommendedActionRequired`, `blockedPermalinks`, and
+`subjectMatchedThreadsDropped` alongside `adequacy` / `threads` /
+`recommendedNext`.

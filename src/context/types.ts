@@ -391,6 +391,16 @@ export interface ContextResult {
 	people?: PersonRef[];
 	/** True when advisory signals were requested for `--agent` projection. */
 	signals?: boolean;
+	/**
+	 * Present when `context … --follow-recommended` ran recommended next steps.
+	 * One entry per attempted step (executed, skipped, or failed).
+	 */
+	followLog?: import("./follow-recommended.ts").FollowLogEntry[];
+	/**
+	 * File inspect/download artifacts produced during `--follow-recommended`.
+	 * Not a substitute for reading `followLog[]`.
+	 */
+	followedAttachments?: import("../sync/file-download.ts").FileDownloadResult[];
 }
 
 export interface SearchContextResult extends Omit<SearchResult, "candidates"> {

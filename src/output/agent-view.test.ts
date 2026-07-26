@@ -48,8 +48,11 @@ describe("agent projection", () => {
 					canAnswerFromSelectedEvidence: true,
 					// `local_only` discovery cannot claim it saw everything.
 					mayHaveMissedOtherThreads: true,
+					mayHaveMissedReason: "local_discovery",
 					selectedEvidenceMayBeStale: true,
 					recommendedActionRequired: false,
+					noActionAvailable: true,
+					noActionReason: expect.stringMatching(/local index|refresh/i),
 				},
 				completeness: {
 					selectedThreads: "complete",
@@ -278,6 +281,84 @@ describe("agent projection", () => {
 		store.close();
 	});
 
+	test("pages an incomplete gap window instead of leaving a dead-end", async () => {
+		const store = await MattermostStore.open(":memory:");
+		const posts = [
+			postFixture({
+				id: ROOT,
+				message: "gap root with enough text to spend budget characters",
+				create_at: 10,
+			}),
+			...Array.from({ length: 12 }, (_, index) =>
+				postFixture({
+					id: `${String.fromCharCode(98 + index)}${"b".repeat(25)}`,
+					root_id: ROOT,
+					message: `gap body ${index} ${"x".repeat(40)}`,
+					create_at: 20 + index,
+				}),
+			),
+		];
+		const anchor = posts[posts.length - 1];
+		if (!anchor) throw new Error("expected anchor");
+		store.writePage({
+			conversation: conversationFixture(),
+			users: [userFixture()],
+			posts,
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: anchor.id,
+				newestPostAt: anchor.create_at,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 1_000,
+				coverageComplete: true,
+			},
+		});
+		const config = configFixture();
+		config.budgets.defaultPerThreadCharacters = 120;
+		const thread = await getMattermostThread(
+			{
+				target: ROOT,
+				local: true,
+				around: anchor.id,
+				beforePosts: 10,
+				afterPosts: 0,
+				windowOnly: true,
+			},
+			{ config, store, now: () => 1_000 },
+		);
+		expect(thread.retrieval?.requestedRangeComplete).toBe(false);
+		const result = projectAgentResult(
+			commandSuccess("thread", thread, thread.warnings),
+		) as unknown as {
+			retrieval: { requestedBefore: number };
+			evidence: {
+				gapRecovery: { noActionAvailable?: true };
+				next: Array<{
+					action: string;
+					priority: string;
+					command?: string[];
+				}>;
+				verdict: { recommendedActionRequired: boolean };
+			};
+		};
+		expect(result.evidence.gapRecovery.noActionAvailable).toBeUndefined();
+		expect(result.evidence.next[0]).toMatchObject({
+			action: "thread_around",
+			priority: "recommended",
+		});
+		expect(result.evidence.verdict.recommendedActionRequired).toBe(true);
+		const beforeFlag =
+			result.evidence.next[0]?.command?.indexOf("--before-posts");
+		expect(beforeFlag).toBeGreaterThanOrEqual(0);
+		const beforeCount = Number(
+			result.evidence.next[0]?.command?.[(beforeFlag ?? 0) + 1],
+		);
+		expect(beforeCount).toBe(5);
+		expect(beforeCount).toBeLessThan(result.retrieval.requestedBefore);
+		expect(JSON.stringify(result)).not.toContain("thread_full");
+		store.close();
+	});
+
 	test("keeps attachment inspection recommendations inside a recovered delta", async () => {
 		const store = await seededStore();
 		const thread = await getMattermostThread(
@@ -315,7 +396,11 @@ describe("agent projection", () => {
 		};
 		expect(result.evidence.verdict.recommendedActionRequired).toBe(true);
 		expect(result.evidence.next).toContainEqual(
-			expect.objectContaining({ action: "read_attachments" }),
+			expect.objectContaining({
+				action: "read_attachments",
+				priority: "recommended",
+				impact: "requires_external_reader",
+			}),
 		);
 		store.close();
 	});

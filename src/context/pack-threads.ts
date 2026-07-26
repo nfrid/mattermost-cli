@@ -128,6 +128,11 @@ export class ThreadPacker {
 
 	private remainingCharacters: number;
 	private readonly perThreadCharacters: number;
+	/**
+	 * Characters held back for truncated `--permalink` / direct_post threads so
+	 * later ranked packing cannot spend the floor those threads under-used.
+	 */
+	private permalinkReserve = 0;
 	private readonly repackInputs = new Map<string, RepackInput>();
 
 	constructor(private readonly input: ThreadPackerInput) {
@@ -185,7 +190,7 @@ export class ThreadPacker {
 	get hasRoom(): boolean {
 		return (
 			this.threads.length < this.budgets.maxThreads &&
-			this.remainingCharacters > 0
+			this.remainingCharacters - this.permalinkReserve > 0
 		);
 	}
 
@@ -277,12 +282,27 @@ export class ThreadPacker {
 		}
 		if (!evidenceMatchesFilters(evidence, filters)) return;
 
-		const currentMatchingPostIds = currentMatches(
+		const liveMatchingPostIds = currentMatches(
 			evidence,
 			probes,
 			candidate.matchingPostIds,
 			candidate.structuredMatches,
 		);
+		const isPermalink = candidate.reasons.includes("direct_post");
+		// `--permalink` / direct_post anchors are caller-chosen evidence. Probe
+		// re-evaluation only keeps posts that mention the subject ticket, which
+		// drops the linked post when that thread never names the ticket — and
+		// packing then collapses to the root under ticket-window preference.
+		const currentMatchingPostIds = isPermalink
+			? [
+					...new Set([
+						...liveMatchingPostIds,
+						...candidate.matchingPostIds.filter((id) =>
+							evidence.some((post) => post.id === id && !post.deleteAt),
+						),
+					]),
+				].sort()
+			: liveMatchingPostIds;
 		for (const structured of candidate.structuredMatches ?? []) {
 			if (currentMatchingPostIds.includes(structured.postId)) {
 				this.matchedProbeValues.add(structured.probe);
@@ -292,7 +312,7 @@ export class ThreadPacker {
 			subject.kind !== "post" &&
 			!currentMatchingPostIds.length &&
 			!candidate.reasons.includes("explicit_ticket_relationship") &&
-			!candidate.reasons.includes("direct_post")
+			!isPermalink
 		) {
 			this.dropAsNoMatch(candidate.threadId);
 			return;
@@ -315,23 +335,51 @@ export class ThreadPacker {
 					clusterMergeGap: config.budgets.clusterMergeGap,
 				})
 			: undefined;
+		const permalinkAnchor = isPermalink
+			? candidate.matchingPostIds.find((id) =>
+					evidence.some((post) => post.id === id && !post.deleteAt),
+				)
+			: undefined;
+		// Permalink threads pack around the linked post under the character
+		// budget. Subject-ticket window bias is for discovery threads; applying
+		// it here starves a caller-requested thread that never names the ticket
+		// (then brief mode crushes the "historical neighbor" down to 1/N).
 		const packOptions: Omit<PackThreadOptions, "limit"> = {
 			matchingPostIds: currentMatchingPostIds,
 			neighborhoodRadius: config.budgets.matchNeighborhoodRadius,
 			ticketNeighborhoodRadius: config.budgets.ticketNeighborhoodRadius,
-			subjectTicketKey,
 			clusterMergeGap: config.budgets.clusterMergeGap,
 			mode: this.input.short ? "short" : "default",
 			gapFill: !this.input.short,
-			...(ticketMetrics ? { ticketMetrics } : {}),
+			...(isPermalink
+				? {
+						...(permalinkAnchor
+							? {
+									aroundPostId: permalinkAnchor,
+									beforePosts: config.budgets.ticketNeighborhoodRadius,
+									afterPosts: config.budgets.ticketNeighborhoodRadius,
+								}
+							: {}),
+					}
+				: {
+						subjectTicketKey,
+						...(ticketMetrics ? { ticketMetrics } : {}),
+					}),
 		};
+		const permalinkFloor = isPermalink ? this.permalinkCharacterFloor() : 0;
+		const availableForCandidate = isPermalink
+			? this.remainingCharacters
+			: Math.max(0, this.remainingCharacters - this.permalinkReserve);
 		const packed = packThread(candidate.threadId, evidence, {
 			...packOptions,
 			limit: Math.min(
-				this.input.short && ticketMetrics?.rootAnchoredFocused
-					? Math.max(this.perThreadCharacters, SHORT_ROOT_ANCHORED_PER_THREAD)
-					: this.perThreadCharacters,
-				this.remainingCharacters,
+				Math.max(
+					isPermalink ? permalinkFloor : 0,
+					this.input.short && ticketMetrics?.rootAnchoredFocused
+						? Math.max(this.perThreadCharacters, SHORT_ROOT_ANCHORED_PER_THREAD)
+						: this.perThreadCharacters,
+				),
+				availableForCandidate,
 			),
 		});
 		this.repackInputs.set(candidate.threadId, {
@@ -339,6 +387,10 @@ export class ThreadPacker {
 			options: packOptions,
 		});
 		this.remainingCharacters -= packed.budget.used;
+		if (isPermalink && permalinkFloor > packed.budget.used) {
+			// Hold the unused floor so ranked peers cannot spend it before reclaim.
+			this.permalinkReserve += permalinkFloor - packed.budget.used;
+		}
 		const surround = resolveConversationSurround(
 			store,
 			conversation,
@@ -363,16 +415,21 @@ export class ThreadPacker {
 						rootAnchoredFocused: ticketMetrics.rootAnchoredFocused,
 						exclusiveSubjectKey: ticketMetrics.exclusiveSubjectKey,
 						otherTicketDominated: ticketMetrics.otherTicketDominated,
-						...(isHistoricalNeighborThread(ticketMetrics)
-							? {
-									historicalNeighbor: true as const,
-									...(ticketMetrics.dominantOtherTicketKey
-										? {
-												relatedTicketKey: ticketMetrics.dominantOtherTicketKey,
-											}
-										: {}),
-								}
-							: {}),
+						// Explicit permalinks are never "historical neighbors" for brief
+						// shrinking — the caller already asked for this thread's history.
+						...(isPermalink
+							? {}
+							: isHistoricalNeighborThread(ticketMetrics)
+								? {
+										historicalNeighbor: true as const,
+										...(ticketMetrics.dominantOtherTicketKey
+											? {
+													relatedTicketKey:
+														ticketMetrics.dominantOtherTicketKey,
+												}
+											: {}),
+									}
+								: {}),
 						segments: ticketMetrics.segments,
 					}
 				: {}),
@@ -438,27 +495,68 @@ export class ThreadPacker {
 
 	private reclaimUnusedBudget(): void {
 		const primaryIndex = pickPrimaryThreadIndex(this.threads);
+		// Explicit `--permalink` threads won their slots by caller instruction;
+		// reclaim leftover characters into them before ordinary secondaries so a
+		// thin permalink is not left at 1/N while reclaim fattens a ranked peer.
+		const permalinkIndexes = this.threads
+			.map((thread, index) => ({ thread, index }))
+			.filter(({ thread }) => thread.reasons.includes("direct_post"))
+			.map(({ index }) => index);
+		// Release the held permalink floor into the shared leftover pool first.
+		this.remainingCharacters += this.permalinkReserve;
+		this.permalinkReserve = 0;
 		const order = [
+			...permalinkIndexes,
 			primaryIndex,
 			...this.threads
 				.map((_, index) => index)
-				.filter((index) => index !== primaryIndex),
+				.filter(
+					(index) =>
+						index !== primaryIndex && !permalinkIndexes.includes(index),
+				),
 		];
+		const seen = new Set<number>();
 		for (const index of order) {
+			if (seen.has(index)) continue;
+			seen.add(index);
 			if (this.remainingCharacters <= 0) break;
 			const thread = this.threads[index];
 			if (!thread || thread.omittedPosts <= 0) continue;
 			const input = this.repackInputs.get(thread.threadId);
 			if (!input) continue;
+			// Permalink threads get a protected floor (full per-thread share) so
+			// reclaim cannot leave them token-starved after ranked packing.
+			const permalinkFloor = thread.reasons.includes("direct_post")
+				? Math.min(
+						this.budgets.perThreadCharacters,
+						Math.max(thread.budget.limit, this.permalinkCharacterFloor()),
+					)
+				: thread.budget.limit;
 			const repacked = packThread(thread.threadId, input.posts, {
 				...input.options,
-				limit: thread.budget.limit + this.remainingCharacters,
+				limit: Math.max(
+					permalinkFloor,
+					thread.budget.limit + this.remainingCharacters,
+				),
 			});
 			const added = repacked.budget.used - thread.budget.used;
 			if (added <= 0) continue;
 			this.threads[index] = { ...thread, ...repacked };
 			this.remainingCharacters -= added;
 		}
+	}
+
+	/** Fair character floor for an explicit `--permalink` / direct_post thread. */
+	private permalinkCharacterFloor(): number {
+		return Math.min(
+			this.perThreadCharacters,
+			Math.max(
+				Math.floor(this.budgets.perThreadCharacters * 0.75),
+				Math.floor(
+					this.budgets.maxCharacters / Math.max(2, this.budgets.maxThreads),
+				),
+			),
+		);
 	}
 
 	/**
@@ -519,6 +617,9 @@ export class ThreadPacker {
 		for (const [index, thread] of this.threads.entries()) {
 			if (index === primaryIndex) continue;
 			if (!thread.historicalNeighbor) continue;
+			// Caller-requested `--permalink` threads must keep their packed depth
+			// even when ticket metrics would label them historical.
+			if (thread.reasons.includes("direct_post")) continue;
 			const input = this.repackInputs.get(thread.threadId);
 			if (!input) continue;
 			const leanLimit = Math.min(

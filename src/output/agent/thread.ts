@@ -270,6 +270,9 @@ function briefTimeline(
 	let withheld = 0;
 	let files = 0;
 	let after: string | undefined;
+	const withheldAuthors = new Set<string>();
+	let withheldFromAt: number | undefined;
+	let withheldToAt: number | undefined;
 	const flushGroup = () => {
 		if (group) items.push(group);
 		group = undefined;
@@ -277,6 +280,7 @@ function briefTimeline(
 	const flushWithheld = (before?: string) => {
 		if (withheld <= 0) return;
 		flushGroup();
+		const authors = [...withheldAuthors].slice(0, 4);
 		items.push({
 			skip: {
 				posts: withheld,
@@ -284,10 +288,20 @@ function briefTimeline(
 				...(before ? { before } : {}),
 				reason: "brief_projection",
 				...(files > 0 ? { files } : {}),
+				...(authors.length ? { authors } : {}),
+				...(withheldFromAt !== undefined
+					? { fromAt: isoTimestamp(withheldFromAt) }
+					: {}),
+				...(withheldToAt !== undefined
+					? { toAt: isoTimestamp(withheldToAt) }
+					: {}),
 			},
 		});
 		withheld = 0;
 		files = 0;
+		withheldAuthors.clear();
+		withheldFromAt = undefined;
+		withheldToAt = undefined;
 	};
 	for (const item of thread.timeline) {
 		if (item.kind === "skip") {
@@ -301,6 +315,16 @@ function briefTimeline(
 		if (!kept.has(item.post.id)) {
 			withheld += 1;
 			files += item.post.attachments.filter(({ deleteAt }) => !deleteAt).length;
+			if (item.post.authorUsername)
+				withheldAuthors.add(item.post.authorUsername);
+			withheldFromAt =
+				withheldFromAt === undefined
+					? item.post.createAt
+					: Math.min(withheldFromAt, item.post.createAt);
+			withheldToAt =
+				withheldToAt === undefined
+					? item.post.createAt
+					: Math.max(withheldToAt, item.post.createAt);
 			continue;
 		}
 		flushWithheld(item.post.id);
@@ -398,6 +422,7 @@ function projectThreadBrief(
 		!brief.purposeHints.length &&
 		!brief.decisionPostIds.length &&
 		!brief.openQuestions?.length &&
+		!brief.lateAcknowledgement &&
 		!brief.outcomeWindow
 	) {
 		return undefined;
@@ -438,6 +463,15 @@ function projectThreadBrief(
 						})),
 					}
 				: {}),
+			...(decision.supportingPostIds?.length
+				? { supportingPostIds: decision.supportingPostIds }
+				: {}),
+			...(decision.supportingExcerpt
+				? { supportingExcerpt: decision.supportingExcerpt }
+				: {}),
+			...(decision.offlineOrVoiceApproval
+				? { offlineOrVoiceApproval: true as const }
+				: {}),
 		}),
 	);
 	const openQuestions = (brief.openQuestions ?? []).map(
@@ -469,6 +503,23 @@ function projectThreadBrief(
 		decisionPostIds: brief.decisionPostIds,
 		...(decisions.length ? { decisions } : {}),
 		...(openQuestions.length ? { openQuestions } : {}),
+		...(brief.lateAcknowledgement
+			? {
+					lateAcknowledgement: {
+						kind: "late_thread_acknowledgement" as const,
+						decisionPostId: brief.lateAcknowledgement.decisionPostId,
+						decisionKind: brief.lateAcknowledgement.decisionKind,
+						ackPostId: brief.lateAcknowledgement.ackPostId,
+						author: brief.lateAcknowledgement.author,
+						at: isoTimestamp(brief.lateAcknowledgement.createAt),
+						text: brief.lateAcknowledgement.excerpt,
+						...(brief.lateAcknowledgement.excerptTruncated
+							? { textTruncated: true as const }
+							: {}),
+						confidence: brief.lateAcknowledgement.confidence,
+					},
+				}
+			: {}),
 		...(brief.outcomeWindow ? { outcomeWindow: brief.outcomeWindow } : {}),
 	};
 }

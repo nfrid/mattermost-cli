@@ -142,14 +142,14 @@ export function createProgram(
 		.addOption(
 			new Option(
 				"--navigate",
-				"lean agent navigation (anchors/clusters/skips; omit dense posts and messages)",
-			).conflicts(["short", "brief", "fullPosts"]),
+				"lean agent navigation (anchors/clusters/skips; omit dense posts and messages). Ticket --agent still keeps top-level brief",
+			).conflicts(["short", "fullPosts"]),
 		)
 		.addOption(
 			new Option(
 				"--brief",
 				"decision-only projection: evidence, per-thread brief, and outcome-window posts (default for ticket subjects under --agent)",
-			).conflicts(["short", "navigate", "fullPosts"]),
+			).conflicts(["short", "fullPosts"]),
 		)
 		.addOption(
 			new Option(
@@ -161,7 +161,7 @@ export function createProgram(
 			new Option(
 				"--timeline",
 				"merge the selected threads into one cross-thread chronology",
-			).conflicts(["short", "navigate"]),
+			).conflicts(["short"]),
 		)
 		.option(
 			"--signals",
@@ -172,6 +172,25 @@ export function createProgram(
 			"also fold this permalink or post id into the packet (repeatable)",
 			collect,
 			[],
+		)
+		.option(
+			"--follow-recommended",
+			"after packing, run priority=recommended next steps once and merge into one packet (requires --agent)",
+		)
+		.option(
+			"--max-threads <n>",
+			"override budgets.defaultMaxThreads for this request (config default 3; max 20)",
+			(value) => Number(value),
+		)
+		.option(
+			"--max-characters <n>",
+			"override budgets.defaultMaxCharacters for this request (max 200000)",
+			(value) => Number(value),
+		)
+		.option(
+			"--per-thread-characters <n>",
+			"override budgets.defaultPerThreadCharacters for this request (max 100000)",
+			(value) => Number(value),
 		)
 		.option(
 			"--out <path>",

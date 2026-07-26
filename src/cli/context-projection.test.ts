@@ -29,9 +29,9 @@ describe("resolveContextAgentBrief", () => {
 				brief: true,
 			},
 			{
-				name: "ticket --agent --navigate → not brief",
+				name: "ticket --agent --navigate → brief kept",
 				input: { agent: true, subject: "BTB-1", navigate: true },
-				brief: false,
+				brief: true,
 			},
 			{
 				name: "ticket --agent --short → not brief",

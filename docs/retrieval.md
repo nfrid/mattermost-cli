@@ -214,8 +214,10 @@ A refused conversation fails with `conversation_not_allowed` carrying
   `/tmp/mm-<id>-<name>`, or to `--out <path>` (explicit path, overwrites), or
   into `--out-dir <dir>` (attachment name, created if missing, never overwrites
   — same naming and refusal rules as `mm files`). `--out` and `--out-dir`
-  conflict. `--inspect` additionally emits a bounded textual preview or an
-  explicit `not_interpreted` state for images, spreadsheets, and other binaries.
+  conflict. `--inspect` additionally emits a bounded textual preview (including
+  OOXML `.xlsx` sheet/header/row previews), an explicit `not_interpreted` state
+  for images and legacy spreadsheets, or opt-in `text_extracted` when an OCR
+  module is configured.
 - `files` downloads a bounded batch into a required `--out-dir` from exactly one
   selector: positional `<file-id…>`, `--post <id>`, or `--thread <id>`. Defaults
   are max **20** files and **50 MiB** total. It refuses overwrites, uses
@@ -223,10 +225,31 @@ A refused conversation fails with `conversation_not_allowed` carrying
   result; the command succeeds when at least one file downloads.
 
 Attachment contents are never downloaded automatically during `context` or
-`sync`. Inspection is explicit and only decodes a bounded UTF-8 preview; the
-reported format is filename/MIME classification, not CSV/JSON/XML syntax
-validation. It does not perform OCR, image captioning, or binary spreadsheet
-parsing.
+`sync`. Inspection is explicit: UTF-8 text previews and bounded `.xlsx`
+workbook previews only. Format labels are classification, not full validation.
+OCR / image captioning is **not** on the default path (see below).
+
+### Opt-in OCR
+
+By default, images stay `not_interpreted` unless an extractor returns text.
+
+1. **Explicit module:** write a JS/TS module that exports
+   `extractImageText({ name, mimeType, bytes })` returning `{ text, engine? }`
+   or `null`, and set `MATTERMOST_OCR_MODULE` to that path.
+2. **macOS Vision (built-in):** when `MATTERMOST_OCR_MODULE` is unset on Darwin,
+   `file --inspect` tries `src/sync/macos-ocr.swift` via `swift` (size/time
+   capped). Success → `status: "text_extracted"`, `trust: "low"`,
+   `engine: "macos-vision"`. Set `MATTERMOST_OCR_DISABLE_MACOS=1` to skip.
+3. Missing or failing extractors keep the image `not_interpreted`.
+
+Treat OCR text as a pointer, never as primary evidence.
+
+### Request-scoped budget overrides
+
+`context` accepts `--max-threads`, `--max-characters`, and
+`--per-thread-characters` to override the matching `budgets.*` config fields for
+one request. Omitting them leaves config defaults (`defaultMaxThreads: 3`).
+Caps: threads 1–20, characters 1000–200000, per-thread 500–100000.
 
 ## Extra permalink targets
 

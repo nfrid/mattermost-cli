@@ -69,16 +69,41 @@ interface OutReceipt {
 	warnings: number;
 	materialWarnings: number;
 	recommendedNext?: number;
+	canAnswer?: boolean;
+	recommendedActionRequired?: boolean;
+	blockedPermalinks?: number;
+	subjectMatchedThreadsDropped?: number;
 }
 
 function outReceipt(result: CommandResult<unknown>): OutReceipt {
 	const data =
 		result.success && isRecord(result.data) ? result.data : undefined;
 	const evidence = isRecord(data?.evidence) ? data.evidence : undefined;
+	const verdict = isRecord(evidence?.verdict) ? evidence.verdict : undefined;
+	const selection = isRecord(evidence?.selection)
+		? evidence.selection
+		: undefined;
 	const next = Array.isArray(evidence?.next) ? evidence.next : [];
 	const threads = Array.isArray(data?.threads)
 		? data.threads.length
 		: undefined;
+	const researchSummary = isRecord(data?.researchSummary)
+		? data.researchSummary
+		: undefined;
+	const blockedFromSummary = Array.isArray(
+		researchSummary?.blockedOrUnresolvedPermalinks,
+	)
+		? researchSummary.blockedOrUnresolvedPermalinks.length
+		: undefined;
+	const permalinks = Array.isArray(data?.permalinks) ? data.permalinks : [];
+	const blockedFromPermalinks = permalinks.filter(
+		(entry) =>
+			isRecord(entry) &&
+			(entry.status === "not_allowed" ||
+				entry.status === "unresolved" ||
+				entry.status === "invalid"),
+	).length;
+	const blockedPermalinks = blockedFromSummary ?? blockedFromPermalinks;
 	return {
 		...(typeof evidence?.adequacy === "string"
 			? { adequacy: evidence.adequacy }
@@ -95,17 +120,43 @@ function outReceipt(result: CommandResult<unknown>): OutReceipt {
 					).length,
 				}
 			: {}),
+		...(typeof verdict?.canAnswerFromSelectedEvidence === "boolean"
+			? { canAnswer: verdict.canAnswerFromSelectedEvidence }
+			: {}),
+		...(typeof verdict?.recommendedActionRequired === "boolean"
+			? { recommendedActionRequired: verdict.recommendedActionRequired }
+			: {}),
+		...(blockedPermalinks > 0 ? { blockedPermalinks } : {}),
+		...(typeof selection?.droppedByBudgetSubjectMatched === "number"
+			? {
+					subjectMatchedThreadsDropped: selection.droppedByBudgetSubjectMatched,
+				}
+			: {}),
 	};
 }
 
 function receiptSuffix(receipt: OutReceipt): string {
 	const parts = [
 		receipt.adequacy ? `evidence ${receipt.adequacy}` : undefined,
+		receipt.canAnswer === undefined
+			? undefined
+			: receipt.canAnswer
+				? "can answer"
+				: "cannot answer from selected",
 		receipt.threads === undefined ? undefined : `${receipt.threads} thread(s)`,
 		`${receipt.materialWarnings} material / ${receipt.warnings} total warning(s)`,
 		receipt.recommendedNext === undefined
 			? undefined
 			: `${receipt.recommendedNext} recommended step(s)`,
+		receipt.recommendedActionRequired
+			? "recommended action required"
+			: undefined,
+		receipt.blockedPermalinks
+			? `${receipt.blockedPermalinks} blocked permalink(s)`
+			: undefined,
+		receipt.subjectMatchedThreadsDropped
+			? `${receipt.subjectMatchedThreadsDropped} subject-matched drop(s)`
+			: undefined,
 	].filter((part): part is string => part !== undefined);
 	return ` (${parts.join(", ")})`;
 }
@@ -175,4 +226,8 @@ export async function runCli(
 
 		return 1;
 	}
+}
+
+if (import.meta.main) {
+	process.exitCode = await runCli(Bun.argv.slice(2));
 }

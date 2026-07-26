@@ -151,6 +151,9 @@ const packedThreadSchema = z.object({
 						.enum(["outside_ticket_window", "omitted_gap", "budget"])
 						.optional(),
 					files: z.number().int().positive().optional(),
+					authors: z.array(z.string()).max(4).optional(),
+					fromAt: z.string().optional(),
+					toAt: z.string().optional(),
 				}),
 			}),
 		]),
@@ -622,8 +625,18 @@ const evidenceStatusSchema = z.object({
 		.object({
 			canAnswerFromSelectedEvidence: z.boolean(),
 			mayHaveMissedOtherThreads: z.boolean(),
+			mayHaveMissedReason: z
+				.enum([
+					"index_cutoff",
+					"stale_discovery",
+					"subject_matched_budget_drops",
+					"local_discovery",
+				])
+				.optional(),
 			selectedEvidenceMayBeStale: z.boolean(),
 			recommendedActionRequired: z.boolean(),
+			noActionAvailable: z.literal(true).optional(),
+			noActionReason: z.string().optional(),
 		})
 		.optional(),
 	completeness: z.object({
@@ -653,6 +666,7 @@ const evidenceStatusSchema = z.object({
 				"may_contradict_visible_text",
 				"may_verify_quantitative_claim",
 				"cannot_verify_quantities",
+				"requires_external_reader",
 			]),
 			/** Argv segments only — never a joined shell string. */
 			command: z.array(z.string()).optional(),
@@ -731,6 +745,45 @@ const contextDataSchema = z.object({
 	timeline: z.boolean().optional(),
 	signals: z.boolean().optional(),
 	people: z.array(personRefSchema).optional(),
+	followLog: z
+		.array(
+			z.object({
+				command: z.array(z.string()),
+				action: z.enum([
+					"thread_full",
+					"thread_around",
+					"sync",
+					"inspect_dropped",
+					"review_candidates",
+					"fresh_or_remote",
+					"read_attachments",
+				]),
+				status: z.enum([
+					"ok",
+					"error",
+					"skipped_external_reader",
+					"skipped_disallowed",
+					"skipped_no_command",
+				]),
+				error: z.string().optional(),
+				inspectionStatus: z.string().optional(),
+			}),
+		)
+		.optional(),
+	followedAttachments: z
+		.array(
+			z.object({
+				id: z.string(),
+				name: z.string(),
+				mimeType: z.string(),
+				size: z.number(),
+				path: z.string(),
+				postId: z.string(),
+				conversationId: z.string(),
+				inspection: z.unknown().optional(),
+			}),
+		)
+		.optional(),
 });
 const threadDataSchema = z.object({
 	subject: subjectSchema,
@@ -800,7 +853,7 @@ export const peopleResultV1Schema = successResult("people", peopleDataSchema);
 const fileInspectionSchema = z.discriminatedUnion("status", [
 	z.object({
 		status: z.literal("preview"),
-		format: z.enum(["text", "csv", "json", "xml"]),
+		format: z.enum(["text", "csv", "json", "xml", "spreadsheet"]),
 		decoded: z.literal(true),
 		syntaxValidated: z.literal(false),
 		preview: z.string(),
@@ -809,11 +862,30 @@ const fileInspectionSchema = z.discriminatedUnion("status", [
 		sensitiveFieldsDetected: z.array(z.string()).optional(),
 		redactionApplied: z.literal(true).optional(),
 		truncated: z.literal(true).optional(),
+		downloaded: z.literal(true).optional(),
+		inspected: z.literal(true).optional(),
+		sheets: z.array(z.string()).optional(),
+		activeSheet: z.string().optional(),
+		headers: z.array(z.string()).optional(),
+		rowCount: z.number().int().nonnegative().optional(),
+	}),
+	z.object({
+		status: z.literal("text_extracted"),
+		format: z.literal("image"),
+		trust: z.literal("low"),
+		source: z.literal("ocr"),
+		text: z.string(),
+		downloaded: z.literal(true),
+		inspected: z.literal(true),
+		engine: z.string().optional(),
+		truncated: z.literal(true).optional(),
 	}),
 	z.object({
 		status: z.literal("not_interpreted"),
 		format: z.enum(["image", "spreadsheet", "binary"]),
 		interpreted: z.literal(false),
+		downloaded: z.literal(true).optional(),
+		inspected: z.literal(false).optional(),
 		reason: z.enum([
 			"external_image_reader_required",
 			"external_spreadsheet_parser_required",

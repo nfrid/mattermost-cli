@@ -64,6 +64,23 @@ export interface CommandOptions {
 	signals?: boolean;
 	/** Repeatable `--permalink`: extra links folded into one context packet. */
 	permalink?: string[];
+	/**
+	 * After `context`, execute `priority: "recommended"` next steps once and
+	 * merge into one packet (`--agent` only).
+	 */
+	followRecommended?: boolean;
+	/**
+	 * Override `budgets.defaultMaxThreads` for this request (config default 3).
+	 */
+	maxThreads?: number;
+	/**
+	 * Override `budgets.defaultMaxCharacters` for this request.
+	 */
+	maxCharacters?: number;
+	/**
+	 * Override `budgets.defaultPerThreadCharacters` for this request.
+	 */
+	perThreadCharacters?: number;
 	limit?: number;
 	/** Excerpts per candidate in `search --agent`. */
 	excerpts?: number;

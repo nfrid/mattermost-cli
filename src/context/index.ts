@@ -1,5 +1,11 @@
 export { getMattermostContext } from "./context.ts";
 export {
+	type FollowLogEntry,
+	type FollowLogStatus,
+	type FollowRecommendedResult,
+	followRecommendedSteps,
+} from "./follow-recommended.ts";
+export {
 	getMattermostPeople,
 	listPeople,
 	type PeopleResult,

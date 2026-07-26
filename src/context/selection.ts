@@ -5,6 +5,7 @@ import type {
 	RankingReason,
 	ThreadCandidate,
 } from "../search/index.ts";
+import { redactCredentialExcerpts } from "../search/match-utils.ts";
 import { postLink } from "./helpers.ts";
 import type { DroppedCandidate, DroppedCandidateReason } from "./types.ts";
 
@@ -149,7 +150,7 @@ export function buildDroppedCandidates(input: {
 		const excerpts = [
 			...new Set(
 				candidate.matches
-					.map(({ excerpt }) => excerpt)
+					.map(({ excerpt }) => redactCredentialExcerpts(excerpt))
 					.filter((excerpt) => excerpt.length > 0),
 			),
 		].slice(0, 2);

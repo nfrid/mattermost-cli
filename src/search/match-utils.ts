@@ -24,9 +24,10 @@ export function truncateExcerpt(
 	message: string,
 	limit = SEARCH_EXCERPT_LIMIT,
 ): string {
-	const characters = [...message];
+	const redacted = redactCredentialExcerpts(message);
+	const characters = [...redacted];
 	return characters.length <= limit
-		? message
+		? redacted
 		: `${characters.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }
 
@@ -40,11 +41,30 @@ export function excerptWithTruncation(
 	limit = SEARCH_EXCERPT_LIMIT,
 ): { text: string; truncated: boolean } {
 	const text = truncateExcerpt(message, limit);
-	return { text, truncated: text !== message };
+	const redactedOnly = redactCredentialExcerpts(message);
+	return { text, truncated: text !== redactedOnly };
 }
 
 export function excerpt(message: string): string {
 	return truncateExcerpt(message, SEARCH_EXCERPT_LIMIT);
+}
+
+/**
+ * Best-effort redaction of login/password/token phrases in match and dropped
+ * excerpts. False negatives are acceptable; never invent content.
+ */
+export function redactCredentialExcerpts(value: string): string {
+	return value
+		.replace(/(password|passwd|пароль|pass)\s*[:=]\s*\S+/giu, "$1: [REDACTED]")
+		.replace(
+			/(login|логин|username|user|email)\s*[:=]\s*\S+/giu,
+			"$1: [REDACTED]",
+		)
+		.replace(
+			/(token|api[_-]?key|secret|bearer)\s*[:=]\s*\S+/giu,
+			"$1: [REDACTED]",
+		)
+		.replace(/\b(Bearer)\s+[A-Za-z0-9._\-+=/]{8,}/gu, "$1 [REDACTED]");
 }
 
 export function deduplicateMatches(

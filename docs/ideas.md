@@ -82,10 +82,10 @@ reply graphs remain deferred.
 
 ## Attachments without OCR / vision
 
-**Status:** done for explicit download (`downloadCommand` argv + `mm files` batch)
-and for surfacing (`mediaOnly` on messages/attachments plus a `recommended`
-`read_attachments` step when a text-free post lands after the last ticket
-mention); OCR / vision remain out of scope
+**Status:** partial — explicit download + bounded `.xlsx` preview shipped;
+opt-in pluggable OCR via `MATTERMOST_OCR_MODULE`; on Darwin, built-in Vision
+OCR when that env is unset (disable with `MATTERMOST_OCR_DISABLE_MACOS=1`).
+Both yield low-trust `text_extracted` only.
 
 **Problem.** UI and support threads often need screenshots. Metadata and
 `mm file` already work; auto-OCR or image captions need heavy tooling and invite
@@ -100,7 +100,8 @@ treating model text as evidence.
 - Batch download is an explicit command with safety limits; attachments are
   still not inlined into the context packet.
 - Do not auto-download on `context` / `sync`.
-- Do not add OCR or vision summarization unless product scope explicitly changes.
+- Prefer `MATTERMOST_OCR_MODULE` or the built-in macOS Vision path; do not
+  invent captions. Treat OCR as low-trust pointers only.
 
 ---
 
@@ -135,7 +136,9 @@ already exists outside the tool.
 
 ## Decisions acknowledged far downthread
 
-**Status:** open (found while validating Phase 5 against the live index)
+**Status:** done (Phase C) — `brief.lateAcknowledgement`
+(`kind: "late_thread_acknowledgement"`) with its own confidence; adjacency
+`DECISION_ACK_LOOKAHEAD` is unchanged.
 
 **Problem.** Ack pairing bounds the acknowledgement to the next few posts by
 other authors, which is right for a terse exchange. But in TECHSUPP-109 the
@@ -144,11 +147,10 @@ decider elaborates and the other party asks two clarifying questions. The pair
 the field report described is real, just not adjacent, so no adjacency window
 that stays meaningful can bridge it.
 
-**Direction to explore later.** Consider a separate, explicitly named signal for
-"the thread closes on acknowledgement": a short ack among the final posts
-confirms the strongest preceding decision candidate in that thread. That is a
-different claim from adjacency pairing and should not silently widen
-`DECISION_ACK_LOOKAHEAD`; it needs its own field and its own confidence story.
+**What shipped.** A separate late-thread acknowledgement signal: a short
+affirming ack among the final packed posts confirms the strongest preceding
+decision candidate when more than the adjacency window of other-author posts
+sits between them.
 
 ---
 
@@ -216,18 +218,36 @@ about what a guaranteed allowance costs the other pools, not a quiet tweak.
 
 ## Structured spreadsheet / CSV preview
 
-**Status:** declined (Phase 7 field report)
+**Status:** partial (Phase C) — bounded OOXML `.xlsx` sheet/header/N-row preview
+with PII redaction shipped; `.xls` / `.ods` stay `not_interpreted`
 
 **Problem.** A decision's numbers often live only in an attached XLSX or CSV, so
 the report asked for a safe in-tool preview (sheet names, columns, row counts,
 first rows).
 
-**Why not.** XLSX is a zip of XML: previewing it means a third-party parser
-inside a read-only tool that holds a Mattermost PAT — new dependency, new
-attack surface, and a new class of "the tool said" evidence — to save a step the
-caller can already take. `evidence.next` now recommends the download
-(`data_file_on_decision_post`) with `mimeType` and `size`; reading the file is
-the caller's job, with their own tools.
+**What shipped.** CSV/TSV already had textual `--inspect`. Phase C adds a
+dependency-free OOXML reader for `.xlsx` only. Download still does not imply a
+full workbook audit: `inspected: true` means a bounded preview was produced.
+
+---
+
+## `--since` “what’s new” and dry-run budget estimate
+
+**Status:** deferred (Phase C scoped out — separate request)
+
+**Problem.** Agents want a cheap “what changed since T” view and a dry-run that
+estimates how many threads/characters a subject would spend before packing.
+
+**Why deferred.** Both need new retrieval semantics (`--since` is not hard
+`--after`) or a parallel packing estimate path that must stay honest with the
+retrieval benchmark. Prefer a focused follow-up over bundling them with inspect
+and decision-layer work.
+
+**Direction to explore later.**
+
+- `--since` as a soft freshness filter with explicit packet labeling.
+- `--dry-run` that reports candidate counts and budget pressure without
+  hydrating full threads.
 
 ---
 

@@ -507,6 +507,17 @@ export async function getMattermostContext(
 					"Local mode used stale conversation evidence without network reconciliation.",
 			});
 		}
+		if (hasExplicitProbes && subject.kind !== "ticket") {
+			// Ticket subjects keep probe hits in background[]; free-text/post
+			// subjects let --query reshape ranking. Warn so agents do not treat a
+			// probed packet as a superset of the unprobed one.
+			warnings.push({
+				kind: "probe_reranked_packet",
+				severity: "informational",
+				message:
+					"--query probes can change which threads are selected and how they are packed; this packet is not a superset of the same request without --query.",
+			});
+		}
 		if (freshness.some(({ coverageComplete }) => !coverageComplete)) {
 			warnings.push(incompleteHistoryWarning(freshness));
 		}

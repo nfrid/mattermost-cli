@@ -55,11 +55,16 @@ The legacy `complete` field remains an alias for search coverage.
 actually decides on — `canAnswerFromSelectedEvidence`,
 `mayHaveMissedOtherThreads`, `selectedEvidenceMayBeStale`,
 `recommendedActionRequired`. It is derived from the axes below it; keep using
-those for audit.
+those for audit. When `mayHaveMissedOtherThreads` is true, additive
+`mayHaveMissedReason` names the cause (`index_cutoff` | `stale_discovery` |
+`subject_matched_budget_drops` | `local_discovery`). Every `true` verdict flag
+either has a covering `evidence.next` step or sets `noActionAvailable` with
+`noActionReason` so agents never stall on a lit flag with an empty `next[]`.
 
 `mayHaveMissedOtherThreads` deliberately ignores a merely budget-bounded weak
-tail. It is set by stale discovery, by bounded history on a packet that is not
-otherwise trusted, or by `evidence.selection.droppedByBudgetSubjectMatched > 0`
+tail. It is set by stale or local-only discovery, by bounded history on a packet
+that is not otherwise trusted, or by
+`evidence.selection.droppedByBudgetSubjectMatched > 0`
 — the unexamined candidates that actually named the subject ticket or matched it
 as a phrase or structured entity, as opposed to the long morphology/typo tail
 that made `budget_bounded` look alarming on every probed request.
@@ -153,7 +158,33 @@ Agent projection may additively carry a top-level merged `brief` under
 `possibly_answered`, and a thin deterministic `researchSummary`.
 `evidence.next[].impact` may be `cannot_verify_quantities` for workbook
 attachments on decision-layer posts. `gapRecovery` remains exclusive to
-`thread --window-only --agent`.
+`thread --window-only --agent`. Additive fields may also carry
+`verdict.mayHaveMissedReason` / `verdict.noActionAvailable`,
+`impact: "requires_external_reader"` for image / legacy workbook (`xls` /
+`ods`) `read_attachments`, machine-readable `downloaded`/`inspected` on file
+inspection, bounded OOXML `.xlsx` `inspection` previews (`format:
+"spreadsheet"` with `sheets` / `headers` / `rowCount`), and opt-in OCR results
+as `status: "text_extracted"` with `trust: "low"` (never the default path).
+Budget-aware `thread_around` side-post counts and gap-recovery page argv appear
+in `next[]` when a window overruns the character budget. Match and dropped-candidate
+excerpts best-effort redact login/password/token phrases. `--out` receipts add
+`canAnswer`, `recommendedActionRequired`, `blockedPermalinks`, and
+`subjectMatchedThreadsDropped` without removing existing fields.
+`context … --follow-recommended` (requires `--agent`) runs `priority:
+"recommended"` next steps once, merges their evidence into the same packet, and
+always adds `followLog[]` (argv + status; empty when nothing ran) plus optional
+`followedAttachments[]`. External-reader / failed-OCR inspects are skipped and
+remaining recommended steps continue; never runs broad `sync`. Skip markers
+may additively carry `authors` / `fromAt` / `toAt`. Brief decisions may carry
+`supportingPostIds` / `supportingExcerpt` and soft `offlineOrVoiceApproval`.
+Brief may also carry `lateAcknowledgement` (explicit late-thread ack, not
+adjacency pairing) at top-level `brief` and per-thread. Architectural approach
+cues map to `proposal` only.
+Agent projection may emit `hints.readOrder`. Informational
+`probe_reranked_packet` warns when non-ticket `--query` can reshape selection.
+Request-scoped `--max-threads` / `--max-characters` /
+`--per-thread-characters` override config budgets without changing defaults
+when omitted.
 
 ## Schemas and fixtures
 

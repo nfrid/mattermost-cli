@@ -59,6 +59,12 @@ export interface PackSkip {
 	reason?: PackSkipReason;
 	/** Live attachments carried by the omitted posts; absent when none. */
 	files?: number;
+	/** Distinct authors of omitted posts, capped. */
+	authors?: string[];
+	/** ISO timestamp of the earliest omitted post. */
+	fromAt?: string;
+	/** ISO timestamp of the latest omitted post. */
+	toAt?: string;
 }
 
 export type PackTimelineItem =
@@ -87,6 +93,81 @@ export interface PackedThread {
 
 /** Hard max posts on each side of `--around`. */
 export const MAX_AROUND_SIDE_POSTS = 50;
+
+/**
+ * Fallback average rendered size when a truncated thread has no packed posts to
+ * measure. Conservative enough that recommended `thread_around` windows stay
+ * inside the default 6k character budget (~15 side posts).
+ */
+export const DEFAULT_ESTIMATED_POST_UNITS = 400;
+
+/**
+ * Mean rendered units of packed posts, or {@link DEFAULT_ESTIMATED_POST_UNITS}
+ * when the thread returned nothing useful to measure.
+ */
+export function estimateAveragePostUnits(
+	posts: readonly (EvidencePost & { renderedUnits?: number })[] | undefined,
+): number {
+	if (!posts?.length) return DEFAULT_ESTIMATED_POST_UNITS;
+	const total = posts.reduce(
+		(sum, post) =>
+			sum +
+			(typeof post.renderedUnits === "number" && post.renderedUnits > 0
+				? post.renderedUnits
+				: renderedPostUnits(post)),
+		0,
+	);
+	return Math.max(1, Math.ceil(total / posts.length));
+}
+
+/**
+ * How many posts (including the `--around` anchor) fit under a character budget
+ * at the given average size. Always at least 1 so a single-post retry remains
+ * expressible even when the average alone exceeds the budget.
+ */
+export function maxPostsFittingBudget(
+	characterBudget: number,
+	averagePostUnits: number,
+): number {
+	const avg = Math.max(1, averagePostUnits);
+	const budget = Math.max(0, characterBudget);
+	return Math.max(1, Math.floor(budget / avg));
+}
+
+/**
+ * Cap one side of a gap window so the window (side posts + anchor) fits the
+ * per-thread character budget. Used when recommending `thread_around` argv and
+ * when paging an incomplete gap recovery.
+ */
+export function budgetAwareAroundSidePosts(input: {
+	requestedSidePosts: number;
+	characterBudget: number;
+	averagePostUnits?: number;
+}): number {
+	const requested = Math.max(
+		0,
+		Math.min(MAX_AROUND_SIDE_POSTS, Math.floor(input.requestedSidePosts)),
+	);
+	if (requested === 0) return 0;
+	const avg = input.averagePostUnits ?? DEFAULT_ESTIMATED_POST_UNITS;
+	// Window size = side + 1 (anchor). Leave room for the anchor.
+	const maxTotal = maxPostsFittingBudget(input.characterBudget, avg);
+	const maxSide = Math.max(0, maxTotal - 1);
+	return Math.min(requested, maxSide, MAX_AROUND_SIDE_POSTS);
+}
+
+/**
+ * Next narrower side-post count after an incomplete gap window. Halves until 1;
+ * returns undefined when already at the minimum (caller may then report
+ * `noActionAvailable`).
+ */
+export function narrowerAroundSidePosts(
+	requestedSidePosts: number,
+): number | undefined {
+	const current = Math.max(0, Math.floor(requestedSidePosts));
+	if (current <= 1) return undefined;
+	return Math.max(1, Math.floor(current / 2));
+}
 
 export interface PackThreadOptions {
 	matchingPostIds?: readonly string[];
@@ -413,23 +494,31 @@ export function packThread(
 		}, 0);
 		strategies.push("contiguous_ticket_core");
 	} else {
-		const preferTicketWindows = Boolean(inTicketWindow) && !options.full;
+		// An empty Set is truthy — only prefer windows that actually cover posts.
+		const preferTicketWindows =
+			Boolean(inTicketWindow && inTicketWindow.size > 0) && !options.full;
 		const latestIds = new Set(
 			chronological.slice(-LATEST_PRIORITY_COUNT).map(({ id }) => id),
 		);
+		const protectedOffWindow = new Set<string>([
+			...(options.matchingPostIds ?? []),
+			...(options.aroundPostId ? [options.aroundPostId] : []),
+		]);
 		const prioritizedOrder = historicalNeighborBrief
 			? order
 			: preferTicketWindows && inTicketWindow
 				? [
 						...order.filter((id) => inTicketWindow.has(id)),
 						// Keep only intentional off-window anchors (root / files / fences /
-						// latest), never densest-window chatter from an off-topic gap.
+						// latest / explicit matches / around target), never densest-window
+						// chatter from an off-topic gap.
 						...order.filter(
 							(id) =>
 								!inTicketWindow.has(id) &&
 								(id === rootId ||
 									isFileOrFencePost(byId.get(id)) ||
-									latestIds.has(id)),
+									latestIds.has(id) ||
+									protectedOffWindow.has(id)),
 						),
 					]
 				: order;
@@ -470,7 +559,13 @@ export function packThread(
 			let extended = false;
 			for (const post of chronological.slice().reverse()) {
 				if (selected.has(post.id)) continue;
-				if (inTicketWindow && !inTicketWindow.has(post.id)) continue;
+				if (
+					inTicketWindow &&
+					inTicketWindow.size > 0 &&
+					!inTicketWindow.has(post.id)
+				) {
+					continue;
+				}
 				const units = renderedPostUnits(post);
 				if (used + units > limit) continue;
 				selected.add(post.id);
@@ -533,6 +628,7 @@ function buildTimeline(
 	} = {},
 ): PackTimelineItem[] {
 	const byId = new Map(returned.map((post) => [post.id, post]));
+	const byIdFull = new Map(chronological.map((post) => [post.id, post]));
 	const timeline: PackTimelineItem[] = [];
 	let skipCount = 0;
 	let skipAfter: string | undefined;
@@ -542,6 +638,18 @@ function buildTimeline(
 
 	const flushSkip = (before?: string) => {
 		if (skipCount <= 0) return;
+		const omitted = skipIds
+			.map((id) => byIdFull.get(id))
+			.filter((post): post is EvidencePost => Boolean(post));
+		const authors = [
+			...new Set(omitted.map((post) => post.authorUsername).filter(Boolean)),
+		].slice(0, 4);
+		const fromAt = omitted[0]
+			? new Date(omitted[0].createAt).toISOString()
+			: undefined;
+		const toAt = omitted.length
+			? new Date(omitted.at(-1)?.createAt ?? 0).toISOString()
+			: undefined;
 		timeline.push({
 			kind: "skip",
 			skip: {
@@ -552,6 +660,9 @@ function buildTimeline(
 					? { reason: classifySkipReason(skipIds, options) }
 					: {}),
 				...(skipFiles > 0 ? { files: skipFiles } : {}),
+				...(authors.length ? { authors } : {}),
+				...(fromAt ? { fromAt } : {}),
+				...(toAt ? { toAt } : {}),
 			},
 		});
 		skipCount = 0;
@@ -878,11 +989,13 @@ function largestInternalGapIds(
 		return right.length - left.length;
 	});
 	// Prefer a ticket-window gap; never gap-fill a fully off-topic span.
+	// Empty windows must not block gap-fill (an empty Set is truthy).
+	const hasTicketWindow = Boolean(inTicketWindow && inTicketWindow.size > 0);
 	const preferred = ranked.find((gap) =>
-		inTicketWindow ? gap.some((id) => inTicketWindow.has(id)) : true,
+		hasTicketWindow ? gap.some((id) => inTicketWindow?.has(id)) : true,
 	);
 	if (!preferred?.length) return [];
-	if (!inTicketWindow) return preferred;
+	if (!hasTicketWindow || !inTicketWindow) return preferred;
 	// Only spend budget on posts that actually sit inside the ticket window.
 	return preferred.filter((id) => inTicketWindow.has(id));
 }
@@ -905,6 +1018,7 @@ function classifySkipReason(
 	if (omitted) return "omitted_gap";
 	if (
 		options.inTicketWindow &&
+		options.inTicketWindow.size > 0 &&
 		skipIds.every((id) => !options.inTicketWindow?.has(id))
 	) {
 		return "outside_ticket_window";

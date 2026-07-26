@@ -46,6 +46,9 @@ explicitly under `directMessages`.
     "alice": "Product manager"
   },
   "budgets": {
+    "defaultMaxCharacters": 16000,
+    "defaultPerThreadCharacters": 6000,
+    "defaultMaxThreads": 3,
     "matchNeighborhoodRadius": 2,
     "ticketNeighborhoodRadius": 8,
     "clusterMergeGap": 2,
@@ -70,6 +73,11 @@ explicitly under `directMessages`.
   }
 }
 ```
+
+`context` may override `defaultMaxThreads` / `defaultMaxCharacters` /
+`defaultPerThreadCharacters` for one request via `--max-threads`,
+`--max-characters`, and `--per-thread-characters`. Defaults stay config-backed
+when those flags are omitted.
 
 ### Synonyms and concepts
 
@@ -101,8 +109,16 @@ MATTERMOST_URL
 MATTERMOST_TOKEN
 MATTERMOST_CONFIG
 MATTERMOST_DATABASE
+MATTERMOST_OCR_MODULE
+MATTERMOST_OCR_DISABLE_MACOS
 ```
 
-Overrides may select alternate files only under this repository's
-`.mattermost/` directory; paths outside that private, ignored runtime boundary
-are rejected.
+`MATTERMOST_OCR_MODULE` is an optional path to a JS module exporting
+`extractImageText` for image OCR during `file --inspect` (see
+[retrieval.md](./retrieval.md#opt-in-ocr)). When unset on macOS, mm tries the
+built-in Vision helper unless `MATTERMOST_OCR_DISABLE_MACOS=1`. OCR text is
+always low-trust; failure leaves images `not_interpreted`.
+
+Overrides for config/database paths may select alternate files only under this
+repository's `.mattermost/` directory; paths outside that private, ignored
+runtime boundary are rejected.

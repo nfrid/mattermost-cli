@@ -329,4 +329,155 @@ describe("--permalink targets", () => {
 		);
 		store.close();
 	});
+
+	test("brief mode keeps a meaningful permalink pack beside a fat ticket sibling", async () => {
+		// Live smoke (BTB-2080): permalink packed as 1/26 under ticket --agent brief
+		// while a discovery sibling took 32/32. Root cause was ticket-window + brief
+		// historical-neighbor crush, not character-budget floor alone.
+		const store = await MattermostStore.open(":memory:");
+		const ticketRoot = "t0t0t0t0t0t0t0t0t0t0t0t0t0";
+		const permalinkRoot = "p0p0p0p0p0p0p0p0p0p0p0p0p0";
+		const permalinkHit = "p1p1p1p1p1p1p1p1p1p1p1p1p1";
+		store.writePage({
+			conversation: conversationFixture("payments", "channel-payments"),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: ticketRoot,
+					channel_id: "channel-payments",
+					message: "BTB-2080 kickoff with action_id confusion",
+					create_at: 1_000,
+				}),
+				...Array.from({ length: 30 }, (_, index) =>
+					postFixture({
+						id: `d${String(index).padStart(25, "0")}`,
+						root_id: ticketRoot,
+						channel_id: "channel-payments",
+						message: `BTB-2080 discovery detail ${index} ${"y".repeat(40)}`,
+						create_at: 1_100 + index,
+					}),
+				),
+				postFixture({
+					id: "dzzzzzzzzzzzzzzzzzzzzzzzz",
+					root_id: ticketRoot,
+					channel_id: "channel-payments",
+					message: "BTB-2080 resolved on discovery thread",
+					create_at: 2_000,
+				}),
+			],
+			checkpoint: {
+				conversationId: "channel-payments",
+				newestPostId: "dzzzzzzzzzzzzzzzzzzzzzzzz",
+				newestPostAt: 2_000,
+				oldestCoveredAt: 1_000,
+				lastSuccessAt: 2_000,
+				coverageComplete: true,
+			},
+		});
+		store.linkTicketThread("BTB-2080", ticketRoot, ticketRoot, "explicit");
+		const permalinkPosts = [
+			postFixture({
+				id: permalinkRoot,
+				channel_id: "channel-platform",
+				message: "promo engine design kickoff",
+				create_at: 10,
+			}),
+			...Array.from({ length: 20 }, (_, index) =>
+				postFixture({
+					id: `m${String(index).padStart(25, "0")}`,
+					root_id: permalinkRoot,
+					channel_id: "channel-platform",
+					message: `design discussion ${index}`,
+					create_at: 20 + index,
+				}),
+			),
+			postFixture({
+				id: permalinkHit,
+				root_id: permalinkRoot,
+				channel_id: "channel-platform",
+				message: "decision: action_id is the promo code",
+				create_at: 50,
+			}),
+			postFixture({
+				id: "mttttttttttttttttttttttttt",
+				root_id: permalinkRoot,
+				channel_id: "channel-platform",
+				message: "ack, shipping that",
+				create_at: 60,
+			}),
+			postFixture({
+				id: "muuuuuuuuuuuuuuuuuuuuuuuuu",
+				root_id: permalinkRoot,
+				channel_id: "channel-platform",
+				message: "follow-up note",
+				create_at: 70,
+			}),
+			postFixture({
+				id: "mvvvvvvvvvvvvvvvvvvvvvvvvv",
+				root_id: permalinkRoot,
+				channel_id: "channel-platform",
+				message: "closing",
+				create_at: 80,
+			}),
+			postFixture({
+				id: "mwwwwwwwwwwwwwwwwwwwwwwwww",
+				root_id: permalinkRoot,
+				channel_id: "channel-platform",
+				message: "done",
+				create_at: 90,
+			}),
+		];
+		expect(permalinkPosts).toHaveLength(26);
+		store.writePage({
+			conversation: conversationFixture("platform", "channel-platform"),
+			users: [userFixture()],
+			posts: permalinkPosts,
+			checkpoint: {
+				conversationId: "channel-platform",
+				newestPostId: "mwwwwwwwwwwwwwwwwwwwwwwwww",
+				newestPostAt: 90,
+				oldestCoveredAt: 10,
+				lastSuccessAt: 2_000,
+				coverageComplete: true,
+			},
+		});
+
+		const context = await getMattermostContext(
+			{
+				subject: "BTB-2080",
+				permalinks: [permalinkHit],
+				brief: true,
+				local: true,
+			},
+			{
+				config: configFixture({
+					budgets: {
+						...configFixture().budgets,
+						defaultMaxCharacters: 24_000,
+						defaultPerThreadCharacters: 8_000,
+						defaultMaxThreads: 3,
+					},
+				}),
+				store,
+				now: () => 3_000,
+			},
+		);
+
+		const permalink = context.threads.find(
+			({ threadId }) => threadId === permalinkRoot,
+		);
+		const discovery = context.threads.find(
+			({ threadId }) => threadId === ticketRoot,
+		);
+		expect(permalink).toBeDefined();
+		expect(discovery).toBeDefined();
+		expect(permalink?.reasons).toContain("direct_post");
+		expect(permalink?.historicalNeighbor).toBeUndefined();
+		expect(permalink?.totalPosts).toBe(26);
+		// Must not collapse to the pre-fix 1/26 stub under brief + fat sibling.
+		expect(permalink?.returnedPosts ?? 0).toBeGreaterThanOrEqual(8);
+		expect(permalink?.posts.some(({ id }) => id === permalinkHit)).toBe(true);
+		expect(discovery?.returnedPosts ?? 0).toBeGreaterThan(1);
+		store.close();
+	});
 });

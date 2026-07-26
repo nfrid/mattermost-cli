@@ -36,7 +36,7 @@ function packedThread(input: {
 		unreportedOmittedAttachments: 0,
 		budget: {
 			measurement: "unicode_code_points_in_rendered_post",
-			limit: 100,
+			limit: 6_000,
 			used: 100,
 		},
 		posts: [],
@@ -187,7 +187,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 10,
 					},
 					posts: [],
@@ -326,7 +326,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 10,
 					},
 					posts: [],
@@ -393,7 +393,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 100,
 					},
 					posts: [],
@@ -533,7 +533,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 100,
 					},
 					posts: [],
@@ -591,6 +591,62 @@ describe("buildEvidence", () => {
 		]);
 	});
 
+	test("caps thread_around side posts to the per-thread character budget", () => {
+		const evidence = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: false,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				{
+					...packedThread({
+						threadId: "root-budget",
+						totalPosts: 40,
+						omittedPosts: 30,
+						skip: 25,
+					}),
+					budget: {
+						measurement: "unicode_code_points_in_rendered_post",
+						limit: 2_000,
+						used: 2_000,
+					},
+					timeline: [
+						{
+							kind: "skip",
+							skip: {
+								posts: 25,
+								before: "kept",
+								reason: "budget",
+							},
+						},
+					],
+				},
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+		});
+		const step = evidence.next.find(({ action }) => action === "thread_around");
+		expect(step?.command).toEqual([
+			"mm",
+			"thread",
+			"root-budget",
+			"--around",
+			"kept",
+			"--before-posts",
+			"4",
+			"--after-posts",
+			"0",
+			"--window-only",
+			"--agent",
+		]);
+	});
+
 	test("uses the kept post after a leading skip as the range anchor", () => {
 		const evidence = buildEvidence({
 			searchCoverageComplete: true,
@@ -623,7 +679,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 100,
 					},
 					posts: [],
@@ -715,7 +771,7 @@ describe("buildEvidence", () => {
 				"--before-posts",
 				"0",
 				"--after-posts",
-				"50",
+				"14",
 				"--window-only",
 				"--agent",
 			],
@@ -769,7 +825,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 10,
 					},
 					posts: [],
@@ -852,7 +908,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 10,
 					},
 					posts: [],
@@ -927,7 +983,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 10,
 					},
 					posts: [],
@@ -1018,7 +1074,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 10,
 					},
 					posts: [],
@@ -1103,7 +1159,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 10,
 					},
 					posts: [],
@@ -1183,7 +1239,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 10,
 					},
 					posts: [],
@@ -1262,7 +1318,7 @@ describe("buildEvidence", () => {
 					unreportedOmittedAttachments: 0,
 					budget: {
 						measurement: "unicode_code_points_in_rendered_post",
-						limit: 100,
+						limit: 6_000,
 						used: 10,
 					},
 					posts: [
@@ -1522,7 +1578,7 @@ describe("buildEvidence", () => {
 		expect(step).toMatchObject({
 			reason: "media_only_outcome_post",
 			priority: "recommended",
-			impact: "may_contradict_visible_text",
+			impact: "requires_external_reader",
 			threadId: "t1",
 			postId: "p3",
 		});
@@ -1534,6 +1590,61 @@ describe("buildEvidence", () => {
 			"--inspect",
 			"--agent",
 		]);
+		expect(evidence.verdict.canAnswerFromSelectedEvidence).toBe(false);
+		expect(evidence.verdict.recommendedActionRequired).toBe(true);
+	});
+
+	test("resolved media-only inspect clears the answerability block", () => {
+		const threads = [
+			threadWithPosts("t1", [
+				evidencePost({ id: "p1", createAt: 10, message: "BTB-1 broke" }),
+				evidencePost({
+					id: "p3",
+					createAt: 30,
+					message: "",
+					files: ["file-1"],
+				}),
+			]),
+		];
+		const pending = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads,
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+			subjectTicket: "BTB-1",
+		});
+		expect(pending.verdict.canAnswerFromSelectedEvidence).toBe(false);
+
+		const resolved = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads,
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+			subjectTicket: "BTB-1",
+			resolvedAttachmentFileIds: ["file-1"],
+		});
+		expect(resolved.verdict.canAnswerFromSelectedEvidence).toBe(true);
+		expect(
+			resolved.next.some(({ action }) => action === "read_attachments"),
+		).toBe(false);
 	});
 
 	test("stays quiet for media-only posts before the last ticket mention", () => {
@@ -1767,6 +1878,7 @@ describe("evidence verdict", () => {
 
 		expect(evidence.completeness.selection).toBe("budget_bounded");
 		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(false);
+		expect(evidence.verdict.mayHaveMissedReason).toBeUndefined();
 	});
 
 	test("one unexamined subject-matched candidate does claim missed threads", () => {
@@ -1782,9 +1894,12 @@ describe("evidence verdict", () => {
 		});
 
 		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(true);
+		expect(evidence.verdict.mayHaveMissedReason).toBe(
+			"subject_matched_budget_drops",
+		);
 	});
 
-	test("subject-matched budget drop emits optional inspect_dropped without forcing recommended", () => {
+	test("subject-matched budget drop emits recommended inspect_dropped", () => {
 		const evidence = buildEvidence({
 			...baseInput(),
 			selection: {
@@ -1813,13 +1928,16 @@ describe("evidence verdict", () => {
 		);
 
 		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(true);
+		expect(evidence.verdict.mayHaveMissedReason).toBe(
+			"subject_matched_budget_drops",
+		);
 		expect(inspect).toMatchObject({
-			priority: "optional",
+			priority: "recommended",
 			impact: "may_add_dropped_pointer",
 			command: ["mm", "thread", "t-budget", "--agent"],
 			threadId: "t-budget",
 		});
-		expect(evidence.verdict.recommendedActionRequired).toBe(false);
+		expect(evidence.verdict.recommendedActionRequired).toBe(true);
 	});
 
 	test("subject-matched budget drop still skips thin bulletin excerpts", () => {
@@ -1847,10 +1965,15 @@ describe("evidence verdict", () => {
 		});
 
 		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(true);
+		expect(evidence.verdict.mayHaveMissedReason).toBe(
+			"subject_matched_budget_drops",
+		);
 		expect(evidence.next.map(({ action }) => action)).not.toContain(
 			"inspect_dropped",
 		);
 		expect(evidence.verdict.recommendedActionRequired).toBe(false);
+		expect(evidence.verdict.noActionAvailable).toBe(true);
+		expect(evidence.verdict.noActionReason).toMatch(/inspect_dropped/);
 	});
 
 	test("never contradicts the axes it is derived from", () => {
@@ -2028,8 +2151,9 @@ describe("data-file attachments on decision-layer posts", () => {
 
 	test("recommends a spreadsheet attached to an open question", () => {
 		// BTB-2080: the post had text, so the media-only rule never fired, yet the
-		// XLSX was the only place the duplicate count could be checked — and mm
-		// still cannot verify quantities from unparsed workbook bytes.
+		// XLSX was the only place the duplicate count could be checked. Bounded
+		// `--inspect` can preview sheets/headers/rows, but quantities still need
+		// a careful read — so impact stays cannot_verify_quantities.
 		const evidence = build([
 			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
 			dataPost("p2", "вот дубли, что с ними делать?", 20, "duplicates.xlsx"),
@@ -2108,6 +2232,7 @@ describe("data-file attachments on decision-layer posts", () => {
 		expect(steps[0]).toMatchObject({
 			reason: "media_only_outcome_post",
 			priority: "recommended",
+			impact: "requires_external_reader",
 		});
 		expect(steps[1]).toMatchObject({
 			reason: "data_file_on_decision_post",

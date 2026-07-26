@@ -10,9 +10,13 @@ import type {
 import type { PersonRef } from "../../context/people.ts";
 import { pickPrimaryThreadIndex } from "../../context/selection.ts";
 import type { PermalinkResolution } from "../../context/types.ts";
-import type { EvidenceStatus } from "../../evidence/evidence.ts";
+import type {
+	EvidenceNextStep,
+	EvidenceStatus,
+} from "../../evidence/evidence.ts";
 import { buildEvidence } from "../../evidence/evidence.ts";
 import type { PackedThread } from "../../evidence/packing.ts";
+import { narrowerAroundSidePosts } from "../../evidence/packing.ts";
 import {
 	MAX_DECISION_POST_IDS,
 	MAX_OPEN_QUESTIONS,
@@ -35,6 +39,7 @@ import type {
 	AgentCandidate,
 	AgentCommandResult,
 	AgentEnvelope,
+	AgentLateAcknowledgement,
 	AgentMergedBrief,
 	AgentMergedBriefDecision,
 	AgentMergedBriefOpenQuestion,
@@ -221,6 +226,13 @@ function projectContext(
 		subject: subjectValue(data.subject),
 		...(resolved ? { resolved } : {}),
 		status: status(data.freshnessMode),
+		hints: {
+			readOrder: contextReadOrder({
+				brief: Boolean(mergedBrief),
+				navigate,
+				timeline,
+			}),
+		},
 		// The packet says which projection produced it: `brief` withholds packed
 		// posts by request, and a reader must not mistake that for the transcript.
 		...(brief ? { projection: "brief" as const } : {}),
@@ -243,6 +255,19 @@ function projectContext(
 		...(relatedTickets.length ? { relatedTickets } : {}),
 		...(messages?.length ? { messages } : {}),
 		threads,
+		...(data.followLog ? { followLog: data.followLog } : {}),
+		...(data.followedAttachments?.length
+			? {
+					followedAttachments: data.followedAttachments.map((file) => ({
+						id: file.id,
+						name: file.name,
+						path: file.path,
+						...(file.inspection
+							? { inspectionStatus: file.inspection.status }
+							: {}),
+					})),
+				}
+			: {}),
 		...(projectAgentBackground(data.background).length
 			? { background: projectAgentBackground(data.background) }
 			: {}),
@@ -252,6 +277,24 @@ function projectContext(
 		...(data.permalinks?.length ? { permalinks: data.permalinks } : {}),
 		warnings,
 	};
+}
+
+/** Stable orientation path for agents reading a context packet. */
+function contextReadOrder(input: {
+	brief: boolean;
+	navigate: boolean;
+	timeline: boolean;
+}): string[] {
+	const order = ["evidence.verdict", "researchSummary", "hints.readOrder"];
+	if (input.brief) {
+		order.push("brief", "brief.lateAcknowledgement");
+	}
+	order.push("evidence.next", "people");
+	if (input.timeline) order.push("timeline");
+	if (input.navigate) order.push("threads[].anchors", "threads[].skips");
+	else order.push("threads");
+	order.push("attachments");
+	return order;
 }
 
 /**
@@ -421,13 +464,19 @@ function projectThread(
 					step.action !== "thread_around" && step.action !== "thread_full",
 			)
 		: [];
+	const incompleteGapPage =
+		data.retrieval && !data.retrieval.requestedRangeComplete
+			? gapRecoveryPageStep(data.retrieval, data.thread.threadId)
+			: undefined;
+	if (incompleteGapPage) deltaNext.unshift(incompleteGapPage);
 	const scopedEvidence = data.retrieval
 		? {
 				...evidence,
 				scope: "gap_recovery" as const,
 				verdict: {
 					...evidence.verdict,
-					// A delta never recommends chasing intentionally out-of-range posts.
+					// A delta never recommends chasing intentionally out-of-range posts
+					// except the narrower page that recovers this incomplete window.
 					recommendedActionRequired: deltaNext.some(
 						({ priority }) => priority === "recommended",
 					),
@@ -443,11 +492,16 @@ function projectThread(
 					remainingPostsOutsideRange:
 						data.thread.totalPosts - data.retrieval.requestedPosts,
 					...(!data.retrieval.requestedRangeComplete
-						? {
-								noActionAvailable: true as const,
-								reason:
-									"requested posts exceeded the bounded character budget; retry with a narrower window",
-							}
+						? incompleteGapPage
+							? {
+									reason:
+										"requested posts exceeded the bounded character budget; a narrower page is in next[]",
+								}
+							: {
+									noActionAvailable: true as const,
+									reason:
+										"requested posts exceeded the bounded character budget; even a single-post window does not fit — retry manually with a leaner around post or higher budget",
+								}
 						: {}),
 				},
 			}
@@ -475,6 +529,52 @@ function projectThread(
 }
 
 /**
+ * When a gap window overran the character budget, emit the next half-sized
+ * page instead of leaving the agent with `noActionAvailable` and no argv.
+ */
+function gapRecoveryPageStep(
+	retrieval: NonNullable<ThreadResult["retrieval"]>,
+	threadId: string,
+): EvidenceNextStep | undefined {
+	const nextBefore =
+		retrieval.requestedBefore > 0
+			? narrowerAroundSidePosts(retrieval.requestedBefore)
+			: 0;
+	const nextAfter =
+		retrieval.requestedAfter > 0
+			? narrowerAroundSidePosts(retrieval.requestedAfter)
+			: 0;
+	// A non-zero side that cannot shrink further leaves no machine-safe page.
+	if (nextBefore === undefined || nextAfter === undefined) return undefined;
+	if (
+		nextBefore === retrieval.requestedBefore &&
+		nextAfter === retrieval.requestedAfter
+	) {
+		return undefined;
+	}
+	return {
+		action: "thread_around",
+		reason: "gap_window_budget_page",
+		priority: "recommended",
+		impact: "may_recover_omitted_core",
+		command: [
+			"mm",
+			"thread",
+			threadId,
+			"--around",
+			retrieval.anchorPostId,
+			"--before-posts",
+			String(nextBefore),
+			"--after-posts",
+			String(nextAfter),
+			"--window-only",
+			"--agent",
+		],
+		threadId,
+	};
+}
+
+/**
  * Merge per-thread decision layers for `projection: "brief"`. Strongest
  * decisions and most dangling open questions win the global caps; each entry
  * keeps `threadId` so locality is recoverable without scanning `threads[]`.
@@ -484,6 +584,9 @@ function mergeThreadBriefs(
 ): AgentMergedBrief | undefined {
 	const decisions: AgentMergedBriefDecision[] = [];
 	const openQuestions: AgentMergedBriefOpenQuestion[] = [];
+	let lateAcknowledgement:
+		| (AgentLateAcknowledgement & { threadId: string })
+		| undefined;
 	for (const thread of threads) {
 		for (const decision of thread.brief?.decisions ?? []) {
 			decisions.push({ ...decision, threadId: thread.threadId });
@@ -491,15 +594,34 @@ function mergeThreadBriefs(
 		for (const question of thread.brief?.openQuestions ?? []) {
 			openQuestions.push({ ...question, threadId: thread.threadId });
 		}
+		const late = thread.brief?.lateAcknowledgement;
+		if (late) {
+			const candidate = { ...late, threadId: thread.threadId };
+			if (
+				!lateAcknowledgement ||
+				candidate.confidence > lateAcknowledgement.confidence ||
+				(candidate.confidence === lateAcknowledgement.confidence &&
+					candidate.at > lateAcknowledgement.at)
+			) {
+				lateAcknowledgement = candidate;
+			}
+		}
 	}
 	decisions.sort(compareMergedDecisions);
 	openQuestions.sort(compareMergedOpenQuestions);
 	const cappedDecisions = decisions.slice(0, MAX_DECISION_POST_IDS);
 	const cappedQuestions = openQuestions.slice(0, MAX_OPEN_QUESTIONS);
-	if (!cappedDecisions.length && !cappedQuestions.length) return undefined;
+	if (
+		!cappedDecisions.length &&
+		!cappedQuestions.length &&
+		!lateAcknowledgement
+	) {
+		return undefined;
+	}
 	return {
 		...(cappedDecisions.length ? { decisions: cappedDecisions } : {}),
 		...(cappedQuestions.length ? { openQuestions: cappedQuestions } : {}),
+		...(lateAcknowledgement ? { lateAcknowledgement } : {}),
 	};
 }
 

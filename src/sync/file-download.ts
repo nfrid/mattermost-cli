@@ -8,7 +8,11 @@ import {
 } from "../shared/errors.ts";
 import type { IndexedFile, MattermostStore } from "../store/index.ts";
 import { resolveConfiguredAllowlist } from "./conversations.ts";
-import { type FileInspection, inspectDownloadedFile } from "./file-inspect.ts";
+import {
+	type FileInspection,
+	inspectDownloadedFile,
+	loadConfiguredOcrExtractor,
+} from "./file-inspect.ts";
 
 export interface FileDownloadInput {
 	fileId: string;
@@ -63,6 +67,7 @@ export async function downloadMattermostFile(
 		config: MattermostConfig;
 		store: MattermostStore;
 		client?: FileDownloadClient;
+		env?: Record<string, string | undefined>;
 	},
 ): Promise<FileDownloadResult> {
 	const fileId = input.fileId.trim();
@@ -173,11 +178,14 @@ export async function downloadMattermostFile(
 		conversationId: meta.conversationId,
 		...(input.inspect
 			? {
-					inspection: inspectDownloadedFile({
+					inspection: await inspectDownloadedFile({
 						name: meta.name,
 						mimeType: meta.mimeType,
 						bytes,
 						previewLines: input.previewLines,
+						extractImageText: await loadConfiguredOcrExtractor(
+							dependencies.env ?? Bun.env,
+						),
 					}),
 				}
 			: {}),

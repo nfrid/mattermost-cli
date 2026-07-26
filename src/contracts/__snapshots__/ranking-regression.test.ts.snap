@@ -324,6 +324,9 @@ exports[`ranking regression snapshots locks populated deterministic search and c
       "verdict": {
         "canAnswerFromSelectedEvidence": true,
         "mayHaveMissedOtherThreads": true,
+        "mayHaveMissedReason": "local_discovery",
+        "noActionAvailable": true,
+        "noActionReason": "discovery used the local index only; no refresh step is available for this packet",
         "recommendedActionRequired": false,
         "selectedEvidenceMayBeStale": true,
       },

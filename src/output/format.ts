@@ -767,6 +767,17 @@ function formatFile(data: FileDownloadResult): string {
 			styles.hint(data.inspection.recommendedAction),
 		].join("\n");
 	}
+	if (data.inspection.status === "text_extracted") {
+		return [
+			downloaded,
+			joinParts([
+				styles.warning("OCR text (low trust)"),
+				data.inspection.engine ? styles.hint(data.inspection.engine) : "",
+				data.inspection.truncated ? styles.warning("truncated") : "",
+			]),
+			data.inspection.text,
+		].join("\n");
+	}
 	return [
 		downloaded,
 		joinParts([

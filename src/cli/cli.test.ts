@@ -262,6 +262,9 @@ describe("CLI output", () => {
 			warnings: expect.any(Number),
 			materialWarnings: expect.any(Number),
 			recommendedNext: expect.any(Number),
+			canAnswer: expect.any(Boolean),
+			recommendedActionRequired: expect.any(Boolean),
+			subjectMatchedThreadsDropped: expect.any(Number),
 		});
 		// The receipt is a pointer, not the packet.
 		expect(stdout.text).not.toContain("payment timeout exact evidence");

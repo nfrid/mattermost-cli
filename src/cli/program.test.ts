@@ -148,6 +148,44 @@ describe("thread --window-only", () => {
 	});
 });
 
+describe("context budget overrides", () => {
+	test("accepts --max-threads and character budget flags", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		const program = createProgram(async (command, _global, commandOptions) => {
+			seen.push({ command, ...(commandOptions ?? {}) });
+			return {
+				command,
+				schemaVersion: SCHEMA_VERSION,
+				success: true,
+				data: {},
+				warnings: [],
+			};
+		});
+
+		await program.parseAsync(
+			[
+				"context",
+				"BTB-1",
+				"--agent",
+				"--max-threads",
+				"5",
+				"--max-characters",
+				"20000",
+				"--per-thread-characters",
+				"8000",
+			],
+			{ from: "user" },
+		);
+		expect(seen.at(-1)).toMatchObject({
+			command: "context",
+			subject: "BTB-1",
+			maxThreads: 5,
+			maxCharacters: 20_000,
+			perThreadCharacters: 8_000,
+		});
+	});
+});
+
 describe("file command", () => {
 	test("accepts file-id, --out, and bounded --inspect with --agent", async () => {
 		const seen: Array<Record<string, unknown>> = [];

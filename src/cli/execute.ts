@@ -1,16 +1,27 @@
 import {
 	type LoadConfigOptions,
 	loadMattermostConfig,
+	type MattermostConfig,
 } from "../config/config.ts";
-import type { SearchInput } from "../context/index.ts";
+import {
+	type ContextResult,
+	followRecommendedSteps,
+	type SearchInput,
+} from "../context/index.ts";
 import { parseCommandResultV1 } from "../contracts/contracts.ts";
+import {
+	connectionFromConfig,
+	MattermostClient,
+} from "../mattermost/client.ts";
 import { projectAgentResult } from "../output/agent-view.ts";
 import { formatHumanResult } from "../output/format.ts";
 import { styles } from "../output/styles.ts";
 import {
 	type CommandResult,
 	commandFailure,
+	commandSuccess,
 } from "../shared/command-result.ts";
+import { ConfigError } from "../shared/errors.ts";
 import type { FileBatchSelector } from "../sync/file-batch-download.ts";
 import {
 	type CommandDependencies,
@@ -69,6 +80,12 @@ export async function executeCommand(
 			case "doctor":
 				return await doctorCommand(config, dependencies);
 			case "context": {
+				if (commandOptions.followRecommended && !options.agent) {
+					throw new ConfigError(
+						"--follow-recommended requires --agent.",
+						"invalid_follow_recommended",
+					);
+				}
 				const brief = resolveContextAgentBrief({
 					agent: Boolean(options.agent),
 					subject: commandOptions.subject,
@@ -78,8 +95,9 @@ export async function executeCommand(
 					short: commandOptions.short,
 					fullPosts: commandOptions.fullPosts,
 				});
-				return await contextCommand(
-					config,
+				const contextConfig = applyBudgetOverrides(config, commandOptions);
+				const result = await contextCommand(
+					contextConfig,
 					{
 						...retrievalInput(commandOptions),
 						fresh: commandOptions.fresh,
@@ -92,6 +110,26 @@ export async function executeCommand(
 						permalinks: commandOptions.permalink,
 					},
 					dependencies,
+				);
+				if (
+					!commandOptions.followRecommended ||
+					!result.success ||
+					!isContextData(result.data)
+				) {
+					return result;
+				}
+				const followed = await followRecommendedSteps({
+					context: result.data,
+					config: contextConfig,
+					local: commandOptions.local,
+					client: commandOptions.local
+						? undefined
+						: createFollowClient(contextConfig, dependencies),
+				});
+				return commandSuccess(
+					"context",
+					followed.context,
+					followed.context.warnings,
 				);
 			}
 			case "people":
@@ -169,6 +207,26 @@ export async function executeCommand(
 	}
 }
 
+function createFollowClient(
+	config: MattermostConfig,
+	dependencies: CommandDependencies,
+): MattermostClient {
+	return new MattermostClient(connectionFromConfig(config), {
+		fetch: dependencies.fetch,
+		timeoutMs: dependencies.timeoutMs,
+	});
+}
+
+function isContextData(data: unknown): data is ContextResult {
+	return (
+		typeof data === "object" &&
+		data !== null &&
+		"threads" in data &&
+		"evidence" in data &&
+		"subject" in data
+	);
+}
+
 /**
  * The subject, routing, and filter options `context` and `search` share. Both
  * commands expose the same retrieval flags, so the mapping lives in one place.
@@ -191,6 +249,79 @@ function retrievalInput(
 		local: commandOptions.local,
 		noWiden: commandOptions.widen === false,
 		includeAutomation: commandOptions.includeAutomation,
+	};
+}
+
+const MAX_THREADS_CLI_CAP = 20;
+const MAX_CHARACTERS_CLI_CAP = 200_000;
+const PER_THREAD_CHARACTERS_CLI_CAP = 100_000;
+
+/**
+ * Apply request-scoped budget CLI overrides onto a config copy. Defaults stay
+ * config-backed when flags are omitted (including `defaultMaxThreads: 3`).
+ */
+export function applyBudgetOverrides(
+	config: MattermostConfig,
+	options: Pick<
+		CommandOptions,
+		"maxThreads" | "maxCharacters" | "perThreadCharacters"
+	>,
+): MattermostConfig {
+	const maxThreads = options.maxThreads;
+	const maxCharacters = options.maxCharacters;
+	const perThreadCharacters = options.perThreadCharacters;
+	if (
+		maxThreads === undefined &&
+		maxCharacters === undefined &&
+		perThreadCharacters === undefined
+	) {
+		return config;
+	}
+	if (
+		maxThreads !== undefined &&
+		(!Number.isInteger(maxThreads) ||
+			maxThreads < 1 ||
+			maxThreads > MAX_THREADS_CLI_CAP)
+	) {
+		throw new ConfigError(
+			`--max-threads must be an integer from 1 to ${MAX_THREADS_CLI_CAP}.`,
+			"invalid_budget_override",
+		);
+	}
+	if (
+		maxCharacters !== undefined &&
+		(!Number.isInteger(maxCharacters) ||
+			maxCharacters < 1_000 ||
+			maxCharacters > MAX_CHARACTERS_CLI_CAP)
+	) {
+		throw new ConfigError(
+			`--max-characters must be an integer from 1000 to ${MAX_CHARACTERS_CLI_CAP}.`,
+			"invalid_budget_override",
+		);
+	}
+	if (
+		perThreadCharacters !== undefined &&
+		(!Number.isInteger(perThreadCharacters) ||
+			perThreadCharacters < 500 ||
+			perThreadCharacters > PER_THREAD_CHARACTERS_CLI_CAP)
+	) {
+		throw new ConfigError(
+			`--per-thread-characters must be an integer from 500 to ${PER_THREAD_CHARACTERS_CLI_CAP}.`,
+			"invalid_budget_override",
+		);
+	}
+	return {
+		...config,
+		budgets: {
+			...config.budgets,
+			...(maxThreads !== undefined ? { defaultMaxThreads: maxThreads } : {}),
+			...(maxCharacters !== undefined
+				? { defaultMaxCharacters: maxCharacters }
+				: {}),
+			...(perThreadCharacters !== undefined
+				? { defaultPerThreadCharacters: perThreadCharacters }
+				: {}),
+		},
 	};
 }
 

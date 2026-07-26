@@ -1,7 +1,10 @@
+import { shouldUseMacosVisionOcr } from "./macos-ocr.ts";
+import { previewXlsxWorkbook } from "./xlsx-preview.ts";
+
 export type FileInspection =
 	| {
 			status: "preview";
-			format: "text" | "csv" | "json" | "xml";
+			format: "text" | "csv" | "json" | "xml" | "spreadsheet";
 			decoded: true;
 			/** Classification only; syntax/rows are not validated or parsed. */
 			syntaxValidated: false;
@@ -12,11 +15,35 @@ export type FileInspection =
 			sensitiveFieldsDetected?: string[];
 			redactionApplied?: true;
 			truncated?: true;
+			/** Bytes were written locally and a textual preview was produced. */
+			downloaded?: true;
+			inspected?: true;
+			/** Present for workbook previews. */
+			sheets?: string[];
+			activeSheet?: string;
+			headers?: string[];
+			rowCount?: number;
+	  }
+	| {
+			status: "text_extracted";
+			format: "image";
+			/** OCR / external extractor output — never treat as high-trust evidence. */
+			trust: "low";
+			source: "ocr";
+			text: string;
+			downloaded: true;
+			inspected: true;
+			engine?: string;
+			truncated?: true;
 	  }
 	| {
 			status: "not_interpreted";
 			format: "image" | "spreadsheet" | "binary";
 			interpreted: false;
+			/** Bytes were written locally; contents were not read as evidence. */
+			downloaded: true;
+			/** mm did not produce a textual inspection of the file body. */
+			inspected: false;
 			reason:
 				| "external_image_reader_required"
 				| "external_spreadsheet_parser_required"
@@ -42,7 +69,8 @@ const TEXT_EXTENSIONS = new Set([
 	"yaml",
 	"yml",
 ]);
-const SPREADSHEET_EXTENSIONS = new Set(["xlsx", "xls", "ods"]);
+/** Binary workbook formats mm still does not parse (OLE / ODF). */
+const LEGACY_SPREADSHEET_EXTENSIONS = new Set(["xls", "ods"]);
 const IMAGE_EXTENSIONS = new Set([
 	"png",
 	"jpg",
@@ -54,38 +82,55 @@ const IMAGE_EXTENSIONS = new Set([
 ]);
 
 /**
- * Inspect only bounded, directly decodable text. Binary formats stay explicit:
- * pretending a downloaded spreadsheet or image was read is worse than requiring
- * a capable external viewer.
+ * Optional image-text extractor. Callers may pass a hook, or
+ * {@link loadConfiguredOcrExtractor} loads `MATTERMOST_OCR_MODULE` or the
+ * built-in macOS Vision backend. Returned text is always tagged `trust: "low"`.
  */
-export function inspectDownloadedFile(input: {
+export type ImageTextExtractor = (input: {
+	name: string;
+	mimeType: string;
+	bytes: Uint8Array;
+}) =>
+	| { text: string; engine?: string; truncated?: true }
+	| null
+	| undefined
+	| Promise<
+			{ text: string; engine?: string; truncated?: true } | null | undefined
+	  >;
+
+/**
+ * Inspect only bounded, directly decodable text (and bounded XLSX sheet
+ * previews). Binary formats stay explicit unless an opt-in image extractor
+ * returns text. Async only because OCR hooks may be async; the default path
+ * does not await network or subprocesses.
+ */
+export async function inspectDownloadedFile(input: {
 	name: string;
 	mimeType: string;
 	bytes: Uint8Array;
 	previewLines?: number;
-}): FileInspection {
+	extractImageText?: ImageTextExtractor;
+}): Promise<FileInspection> {
 	const extension = input.name.split(".").pop()?.toLowerCase() ?? "";
 	if (
 		IMAGE_EXTENSIONS.has(extension) ||
 		input.mimeType.toLowerCase().startsWith("image/")
 	) {
-		return {
-			status: "not_interpreted",
-			format: "image",
-			interpreted: false,
-			reason: "external_image_reader_required",
-			recommendedAction:
-				"the local path is readable by an image-capable agent or tool; mm does not perform OCR or generate captions",
-		};
+		return await inspectImage(input);
 	}
-	if (SPREADSHEET_EXTENSIONS.has(extension)) {
+	if (extension === "xlsx") {
+		return inspectXlsx(input);
+	}
+	if (LEGACY_SPREADSHEET_EXTENSIONS.has(extension)) {
 		return {
 			status: "not_interpreted",
 			format: "spreadsheet",
 			interpreted: false,
+			downloaded: true,
+			inspected: false,
 			reason: "external_spreadsheet_parser_required",
 			recommendedAction:
-				"open the downloaded path with a spreadsheet parser; mm does not treat unparsed workbook bytes as evidence",
+				"open the downloaded path with a spreadsheet parser; mm only previews OOXML .xlsx workbooks",
 		};
 	}
 	const textLike =
@@ -99,6 +144,8 @@ export function inspectDownloadedFile(input: {
 			status: "not_interpreted",
 			format: "binary",
 			interpreted: false,
+			downloaded: true,
+			inspected: false,
 			reason: "unsupported_binary_format",
 			recommendedAction:
 				"open the downloaded path with a parser appropriate for its MIME type",
@@ -114,6 +161,8 @@ export function inspectDownloadedFile(input: {
 			status: "not_interpreted",
 			format: "binary",
 			interpreted: false,
+			downloaded: true,
+			inspected: false,
 			reason: "unsupported_binary_format",
 			recommendedAction:
 				"the nominally textual file contains binary data; inspect the downloaded path with a format-specific parser",
@@ -131,6 +180,8 @@ export function inspectDownloadedFile(input: {
 			status: "not_interpreted",
 			format: "binary",
 			interpreted: false,
+			downloaded: true,
+			inspected: false,
 			reason: "unsupported_binary_format",
 			recommendedAction:
 				"the nominally textual file is not valid UTF-8; inspect the downloaded path with a format-specific parser",
@@ -177,6 +228,8 @@ export function inspectDownloadedFile(input: {
 		lines: table
 			? table.records.length
 			: Math.min(allLines.length, previewLineLimit),
+		downloaded: true,
+		inspected: true,
 		...(table?.fields.length
 			? {
 					sensitiveFieldsDetected: table.fields,
@@ -187,8 +240,203 @@ export function inspectDownloadedFile(input: {
 	};
 }
 
+async function inspectImage(input: {
+	name: string;
+	mimeType: string;
+	bytes: Uint8Array;
+	extractImageText?: ImageTextExtractor;
+}): Promise<FileInspection> {
+	const notInterpreted = (): FileInspection => ({
+		status: "not_interpreted",
+		format: "image",
+		interpreted: false,
+		downloaded: true,
+		inspected: false,
+		reason: "external_image_reader_required",
+		recommendedAction:
+			"the local path is readable by an image-capable agent or tool; mm did not extract text (configure MATTERMOST_OCR_MODULE, or on macOS ensure Vision OCR is available)",
+	});
+	if (!input.extractImageText) return notInterpreted();
+	try {
+		const extracted = await input.extractImageText({
+			name: input.name,
+			mimeType: input.mimeType,
+			bytes: input.bytes,
+		});
+		const text = extracted?.text?.trim();
+		if (!text) return notInterpreted();
+		const characters = [...text];
+		const clipped = characters.slice(0, MAX_PREVIEW_CHARACTERS).join("");
+		return {
+			status: "text_extracted",
+			format: "image",
+			trust: "low",
+			source: "ocr",
+			text: clipped,
+			downloaded: true,
+			inspected: true,
+			...(extracted?.engine ? { engine: extracted.engine } : {}),
+			...(extracted?.truncated || characters.length > MAX_PREVIEW_CHARACTERS
+				? { truncated: true as const }
+				: {}),
+		};
+	} catch {
+		return notInterpreted();
+	}
+}
+
+function inspectXlsx(input: {
+	name: string;
+	mimeType: string;
+	bytes: Uint8Array;
+	previewLines?: number;
+}): FileInspection {
+	const previewLineLimit = Math.max(
+		1,
+		Math.min(
+			MAX_PREVIEW_LINES,
+			Math.floor(input.previewLines ?? DEFAULT_PREVIEW_LINES),
+		),
+	);
+	const workbook = previewXlsxWorkbook(input.bytes, previewLineLimit);
+	if (!workbook) {
+		return {
+			status: "not_interpreted",
+			format: "spreadsheet",
+			interpreted: false,
+			downloaded: true,
+			inspected: false,
+			reason: "external_spreadsheet_parser_required",
+			recommendedAction:
+				"open the downloaded path with a spreadsheet parser; mm could not produce a bounded OOXML preview",
+		};
+	}
+	const redacted = redactWorkbookPreview(workbook);
+	const characters = [...redacted.preview];
+	const preview = characters.slice(0, MAX_PREVIEW_CHARACTERS).join("");
+	const truncated =
+		workbook.truncated || characters.length > MAX_PREVIEW_CHARACTERS;
+	return {
+		status: "preview",
+		format: "spreadsheet",
+		decoded: true,
+		syntaxValidated: false,
+		preview,
+		bytesExamined: input.bytes.byteLength,
+		lines: redacted.headers.length ? redacted.rowCount + 1 : redacted.rowCount,
+		downloaded: true,
+		inspected: true,
+		sheets: workbook.sheets,
+		activeSheet: workbook.activeSheet,
+		headers: redacted.headers,
+		rowCount: redacted.rowCount,
+		...(redacted.sensitiveFieldsDetected.length
+			? {
+					sensitiveFieldsDetected: redacted.sensitiveFieldsDetected,
+					redactionApplied: true as const,
+				}
+			: {}),
+		...(truncated ? { truncated: true as const } : {}),
+	};
+}
+
+/**
+ * Load an image-text extractor. Preference order:
+ * 1. `MATTERMOST_OCR_MODULE` (explicit JS module)
+ * 2. Built-in macOS Vision helper when on Darwin and not disabled
+ * 3. `undefined` → images stay `not_interpreted`
+ */
+export async function loadConfiguredOcrExtractor(
+	env: Record<string, string | undefined> = Bun.env,
+): Promise<ImageTextExtractor | undefined> {
+	const modulePath = env.MATTERMOST_OCR_MODULE?.trim();
+	if (modulePath) {
+		try {
+			const loaded = (await import(modulePath)) as {
+				extractImageText?: ImageTextExtractor;
+				default?:
+					| ImageTextExtractor
+					| { extractImageText?: ImageTextExtractor };
+			};
+			if (typeof loaded.extractImageText === "function") {
+				return loaded.extractImageText;
+			}
+			if (typeof loaded.default === "function") {
+				return loaded.default;
+			}
+			if (
+				loaded.default &&
+				typeof loaded.default === "object" &&
+				typeof loaded.default.extractImageText === "function"
+			) {
+				return loaded.default.extractImageText;
+			}
+		} catch {
+			return undefined;
+		}
+		return undefined;
+	}
+	if (shouldUseMacosVisionOcr(env)) {
+		const { createMacosVisionOcrExtractor } = await import("./macos-ocr.ts");
+		return createMacosVisionOcrExtractor();
+	}
+	return undefined;
+}
+
 const SENSITIVE_HEADER =
 	/(?:^|[_\s-])(phone|mobile|telephone|телефон|email|e-mail|почта|passport|паспорт|inn|инн|snils|снилс|card|карта|account|счет|счёт)(?:$|[_\s-])/iu;
+
+function redactWorkbookPreview(workbook: {
+	headers: string[];
+	rows: string[][];
+	preview: string;
+	rowCount: number;
+}): {
+	headers: string[];
+	rows: string[][];
+	preview: string;
+	rowCount: number;
+	sensitiveFieldsDetected: string[];
+	redactionApplied?: true;
+} {
+	const sensitiveIndexes = workbook.headers
+		.map((value, index) => ({ value: value.trim(), index }))
+		.filter(({ value }) => SENSITIVE_HEADER.test(value));
+	const indexes = new Set(sensitiveIndexes.map(({ index }) => index));
+	const headers = workbook.headers;
+	const rows = workbook.rows.map((row) =>
+		row.map((cell, index) =>
+			indexes.has(index) && cell
+				? "[REDACTED]"
+				: redactObviousSensitiveValues(cell),
+		),
+	);
+	const records = [
+		headers,
+		...rows.map((row) =>
+			row.map((cell) =>
+				indexes.size ? cell : redactObviousSensitiveValues(cell),
+			),
+		),
+	];
+	const preview = records
+		.map((row) =>
+			row
+				.map((cell) =>
+					encodeDelimitedField(cell.replace(/\r\n|\r|\n/gu, "\\n"), ","),
+				)
+				.join(","),
+		)
+		.join("\n");
+	return {
+		headers,
+		rows,
+		preview,
+		rowCount: workbook.rowCount,
+		sensitiveFieldsDetected: sensitiveIndexes.map(({ value }) => value),
+		...(sensitiveIndexes.length ? { redactionApplied: true as const } : {}),
+	};
+}
 
 /** Best-effort table minimization. Parsing remains deliberately unvalidated. */
 function redactSensitiveTable(

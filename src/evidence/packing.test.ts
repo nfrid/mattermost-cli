@@ -1,15 +1,50 @@
 import { describe, expect, test } from "bun:test";
 import { ConfigError } from "../shared/errors.ts";
 import {
+	budgetAwareAroundSidePosts,
 	clampAroundSidePosts,
 	type EvidencePost,
 	hasInternalBudgetSkipInCore,
 	isMediaOnlyPost,
 	MAX_AROUND_SIDE_POSTS,
+	narrowerAroundSidePosts,
 	packThread,
 	renderedPostUnits,
 	ticketCorePostIds,
 } from "./packing.ts";
+
+describe("budget-aware around windows", () => {
+	test("clamps side posts to the character budget", () => {
+		expect(
+			budgetAwareAroundSidePosts({
+				requestedSidePosts: 25,
+				characterBudget: 6_000,
+				averagePostUnits: 400,
+			}),
+		).toBe(14);
+		expect(
+			budgetAwareAroundSidePosts({
+				requestedSidePosts: 8,
+				characterBudget: 6_000,
+				averagePostUnits: 400,
+			}),
+		).toBe(8);
+		expect(
+			budgetAwareAroundSidePosts({
+				requestedSidePosts: 25,
+				characterBudget: 400,
+				averagePostUnits: 400,
+			}),
+		).toBe(0);
+	});
+
+	test("halves an incomplete window until a single post remains", () => {
+		expect(narrowerAroundSidePosts(25)).toBe(12);
+		expect(narrowerAroundSidePosts(2)).toBe(1);
+		expect(narrowerAroundSidePosts(1)).toBeUndefined();
+		expect(narrowerAroundSidePosts(0)).toBeUndefined();
+	});
+});
 
 describe("thread packing", () => {
 	test("selects root, matches, neighborhoods, then latest and restores chronology", () => {
@@ -41,7 +76,10 @@ describe("thread packing", () => {
 			{ kind: "post", post: expect.objectContaining({ id: "p1" }) },
 			{ kind: "post", post: expect.objectContaining({ id: "p2" }) },
 			{ kind: "post", post: expect.objectContaining({ id: "p3" }) },
-			{ kind: "skip", skip: { posts: 2, after: "p3" } },
+			{
+				kind: "skip",
+				skip: expect.objectContaining({ posts: 2, after: "p3" }),
+			},
 		]);
 	});
 
@@ -73,8 +111,14 @@ describe("thread packing", () => {
 			"p10",
 		]);
 		expect(limited.timeline.filter((item) => item.kind === "skip")).toEqual([
-			{ kind: "skip", skip: { posts: 4, after: "p3", before: "p8" } },
-			{ kind: "skip", skip: { posts: 1, after: "p10" } },
+			{
+				kind: "skip",
+				skip: expect.objectContaining({ posts: 4, after: "p3", before: "p8" }),
+			},
+			{
+				kind: "skip",
+				skip: expect.objectContaining({ posts: 1, after: "p10" }),
+			},
 		]);
 
 		const near = packThread("p0", posts, {
@@ -104,7 +148,10 @@ describe("thread packing", () => {
 			"p7",
 		]);
 		expect(near.timeline.filter((item) => item.kind === "skip")).toEqual([
-			{ kind: "skip", skip: { posts: 4, after: "p7" } },
+			{
+				kind: "skip",
+				skip: expect.objectContaining({ posts: 4, after: "p7" }),
+			},
 		]);
 	});
 
@@ -141,7 +188,10 @@ describe("thread packing", () => {
 			"p11",
 		]);
 		expect(packed.timeline.filter((item) => item.kind === "skip")).toEqual([
-			{ kind: "skip", skip: { posts: 5, after: "p2", before: "p8" } },
+			{
+				kind: "skip",
+				skip: expect.objectContaining({ posts: 5, after: "p2", before: "p8" }),
+			},
 		]);
 	});
 
@@ -171,7 +221,10 @@ describe("thread packing", () => {
 		expect(selected.budget.used).toBe(renderedPostUnits(root));
 		expect(selected.timeline).toEqual([
 			{ kind: "post", post: expect.objectContaining({ id: "root" }) },
-			{ kind: "skip", skip: { posts: 1, after: "root", files: 1 } },
+			{
+				kind: "skip",
+				skip: expect.objectContaining({ posts: 1, after: "root", files: 1 }),
+			},
 		]);
 
 		const full = packThread("root", [root, oversized], {
@@ -513,8 +566,14 @@ describe("thread packing", () => {
 			"p8",
 		]);
 		expect(asymmetric.timeline.filter((item) => item.kind === "skip")).toEqual([
-			{ kind: "skip", skip: { posts: 3, after: "p0", before: "p4" } },
-			{ kind: "skip", skip: { posts: 1, after: "p8" } },
+			{
+				kind: "skip",
+				skip: expect.objectContaining({ posts: 3, after: "p0", before: "p4" }),
+			},
+			{
+				kind: "skip",
+				skip: expect.objectContaining({ posts: 1, after: "p8" }),
+			},
 		]);
 
 		const defaults = packThread("p0", posts, {
@@ -642,6 +701,51 @@ describe("thread packing", () => {
 		expect(lean.selectionStrategy).toContain("ticket_mentions");
 		expect(lean.selectionStrategy).not.toContain("ticket_neighborhoods");
 		expect(lean.selectionStrategy).not.toContain("gap_fill");
+	});
+
+	test("empty ticket window does not starve matching anchors under budget", () => {
+		const posts = [
+			evidence("root", 0, "unrelated kickoff"),
+			...Array.from({ length: 20 }, (_, index) =>
+				evidence(`m${index}`, index + 1, `discussion ${index}`),
+			),
+			evidence("link", 21, "decision without ticket key"),
+			evidence("a", 22, "ack"),
+			evidence("b", 23, "more"),
+			evidence("c", 24, "tail1"),
+			evidence("d", 25, "tail2"),
+		];
+		const packed = packThread("root", posts, {
+			subjectTicketKey: "BTB-2080",
+			matchingPostIds: ["link"],
+			aroundPostId: "link",
+			beforePosts: 8,
+			afterPosts: 4,
+			neighborhoodRadius: 2,
+			ticketNeighborhoodRadius: 8,
+			structuralAnchors: false,
+			limit: 50_000,
+		});
+		expect(packed.posts.some(({ id }) => id === "link")).toBe(true);
+		expect(packed.returnedPosts).toBeGreaterThanOrEqual(8);
+
+		// No subject-ticket hits and no match anchors: an empty window must not
+		// collapse packing to root-only (Boolean(empty Set) used to prefer windows).
+		const noAnchor = packThread("root", posts, {
+			subjectTicketKey: "BTB-2080",
+			matchingPostIds: [],
+			neighborhoodRadius: 2,
+			ticketNeighborhoodRadius: 8,
+			structuralAnchors: false,
+			limit: 50_000,
+		});
+		expect(noAnchor.returnedPosts).toBe(posts.length);
+		expect(
+			noAnchor.timeline.some(
+				(item) =>
+					item.kind === "skip" && item.skip.reason === "outside_ticket_window",
+			),
+		).toBe(false);
 	});
 
 	test("treats only text-free posts with a live file as media-only", () => {

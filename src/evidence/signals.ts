@@ -164,6 +164,38 @@ export interface BriefDecision {
 	 * decision read without them is routinely implemented wider than agreed.
 	 */
 	refinements?: BriefScopeRefinement[];
+	/**
+	 * Preceding packed proposal/intent posts that supply the subject for a short
+	 * settled cue («можно делать»). Verbatim excerpts only — never an LLM
+	 * paraphrase.
+	 */
+	supportingPostIds?: string[];
+	/** Short verbatim excerpt from the first supporting post, when present. */
+	supportingExcerpt?: string;
+	/**
+	 * Soft marker: the decision text names an offline/voice approval
+	 * («обсудили голосом», «на дейли»). Does **not** upgrade kind into a
+	 * substantive in-channel `approved_decision` on its own.
+	 */
+	offlineOrVoiceApproval?: true;
+}
+
+/**
+ * Explicit late-thread acknowledgement: a short ack among the final packed
+ * posts confirms the strongest preceding decision candidate when adjacency
+ * pairing ({@link DECISION_ACK_LOOKAHEAD}) did not catch it. Separate field and
+ * lower confidence — never a silent widening of adjacency.
+ */
+export interface LateThreadAcknowledgement {
+	kind: "late_thread_acknowledgement";
+	decisionPostId: string;
+	decisionKind: DecisionKind;
+	ackPostId: string;
+	author: string;
+	createAt: number;
+	excerpt: string;
+	excerptTruncated?: true;
+	confidence: number;
 }
 
 /** Verbatim short response mechanically paired with a decision candidate. */
@@ -237,6 +269,11 @@ export interface ThreadBrief {
 	 * Emitted only when non-empty.
 	 */
 	openQuestions?: BriefOpenQuestion[];
+	/**
+	 * Late-thread acknowledgement when a short ack in the final posts confirms
+	 * an earlier decision outside the adjacency window. Emitted only when found.
+	 */
+	lateAcknowledgement?: LateThreadAcknowledgement;
 	outcomeWindow?: OutcomeWindow;
 }
 
@@ -292,6 +329,12 @@ export const MAX_HINT_EVIDENCE_POST_IDS = 5;
 export const MAX_OPEN_QUESTIONS = 3;
 /** Max scope refinements inlined per decision candidate. */
 export const MAX_REFINEMENTS_PER_DECISION = 2;
+/** Look back this many packed posts for a short settled decision's antecedent. */
+const ANTECEDENT_LOOKBACK = 6;
+/** Settled decision excerpts at or under this length get antecedent bundling. */
+const SHORT_SETTLED_EXCERPT_LIMIT = 80;
+/** Max supporting posts attached to one short settled decision. */
+const MAX_SUPPORTING_POSTS = 2;
 /** Packed posts scanned after a decision for a scope refinement. */
 const REFINEMENT_LOOKAHEAD = 6;
 /**
@@ -321,6 +364,13 @@ const DECISION_ACK_BONUS = 0.15;
 const DECISION_ACK_LOOKAHEAD = 2;
 /** Short-message ceiling (code points) for an acknowledgement reply. */
 const ACK_MAX_MESSAGE_CHARS = 30;
+/**
+ * How many trailing packed posts may supply a late-thread acknowledgement.
+ * Separate from {@link DECISION_ACK_LOOKAHEAD}.
+ */
+const LATE_ACK_TAIL_POSTS = 8;
+/** Base confidence for a late-thread acknowledgement (below adjacency pairing). */
+const LATE_ACK_BASE_CONFIDENCE = 0.45;
 
 /** Strongest first; drives both `decisions[]` order and which survive the cap. */
 const DECISION_KIND_PRIORITY: Readonly<Record<DecisionKind, number>> = {
@@ -440,6 +490,28 @@ const DECISION_CUES: readonly CuePattern[] = [
 	{ cue: "i'll go with", weight: 0.65, commitment: "personal" },
 	{ cue: "let's just", weight: 0.55, commitment: "personal" },
 	{ cue: "going to remove", weight: 0.6, commitment: "personal" },
+];
+
+/**
+ * Architectural approach statements. Always classified as {@link DecisionKind}
+ * `proposal` — never silently as `approved_decision`. Matched separately so a
+ * bare «отдельный роут» does not ride a settled cue into an approval.
+ */
+const TECH_APPROACH_CUES: readonly CuePattern[] = [
+	{ cue: "оставляем на стороне", weight: 0.55, commitment: "personal" },
+	{ cue: "на стороне бэка", weight: 0.55, commitment: "personal" },
+	{ cue: "на стороне фронта", weight: 0.55, commitment: "personal" },
+	{ cue: "на стороне backend", weight: 0.55, commitment: "personal" },
+	{ cue: "на стороне frontend", weight: 0.55, commitment: "personal" },
+	{ cue: "отдельный роут", weight: 0.55, commitment: "personal" },
+	{ cue: "отдельный endpoint", weight: 0.55, commitment: "personal" },
+	{ cue: "отдельный сервис", weight: 0.55, commitment: "personal" },
+	{ cue: "выносим на отдельный", weight: 0.55, commitment: "personal" },
+	{ cue: "keep it on the backend", weight: 0.55, commitment: "personal" },
+	{ cue: "keep it on the frontend", weight: 0.55, commitment: "personal" },
+	{ cue: "separate route", weight: 0.55, commitment: "personal" },
+	{ cue: "separate endpoint", weight: 0.55, commitment: "personal" },
+	{ cue: "separate service", weight: 0.55, commitment: "personal" },
 ];
 
 /**
@@ -611,7 +683,10 @@ const SPAN_KIND_CUES: ReadonlyArray<{
 	kind: CandidateSpanKind;
 	patterns: readonly CuePattern[];
 }> = [
-	{ kind: "decision_candidate", patterns: DECISION_CUES },
+	{
+		kind: "decision_candidate",
+		patterns: [...DECISION_CUES, ...TECH_APPROACH_CUES],
+	},
 	{ kind: "rejected_option_candidate", patterns: REJECTED_CUES },
 	{ kind: "open_question_candidate", patterns: OPEN_QUESTION_CUES },
 ];
@@ -737,11 +812,18 @@ export function buildThreadBrief(
 		briefExcerptLimit,
 	);
 
+	const lateAcknowledgement = findLateThreadAcknowledgement(
+		chronological,
+		cappedDecisionSpans,
+		briefExcerptLimit,
+	);
+
 	return {
 		purposeHints,
 		decisionPostIds,
 		...(decisions.length ? { decisions } : {}),
 		...(openQuestions.length ? { openQuestions } : {}),
+		...(lateAcknowledgement ? { lateAcknowledgement } : {}),
 		...(signals.outcomeWindow ? { outcomeWindow: signals.outcomeWindow } : {}),
 	};
 }
@@ -862,10 +944,14 @@ function collectDecisionBoundaryIds(
 		) {
 			continue;
 		}
-		const matched = matchCues(post.message, DECISION_CUES, {
-			rejectInterrogativeCueSentence: true,
-			rejectNegatedCue: true,
-		});
+		const matched = matchCues(
+			post.message,
+			[...DECISION_CUES, ...TECH_APPROACH_CUES],
+			{
+				rejectInterrogativeCueSentence: true,
+				rejectNegatedCue: true,
+			},
+		);
 		if (matched.cues.length) ids.add(post.id);
 	}
 	return ids;
@@ -893,14 +979,21 @@ function buildBriefDecisions(
 		const ackExcerpt = ack
 			? excerptWithTruncation(ack.message, excerptLimit)
 			: undefined;
+		const kind = span.decisionKind ?? "implementation_intent";
+		const antecedent =
+			kind === "approved_decision" || kind === "discussion_outcome"
+				? collectDecisionAntecedent(chronological, post, excerptLimit)
+				: undefined;
+		const offlineOrVoiceApproval = hasOfflineOrVoiceApprovalMarker(
+			post.message,
+		);
 		decisions.push({
 			postId: span.postId,
 			author: post.authorUsername,
 			createAt: post.createAt,
 			excerpt: excerpt.text,
 			...(excerpt.truncated ? { excerptTruncated: true as const } : {}),
-			// Unreachable in practice; the middle class under-claims safely.
-			kind: span.decisionKind ?? "implementation_intent",
+			kind,
 			cues: [...span.cues],
 			confidence: span.confidence,
 			...(span.ackPostId ? { ackPostId: span.ackPostId } : {}),
@@ -918,9 +1011,80 @@ function buildBriefDecisions(
 					}
 				: {}),
 			...(refinements.length ? { refinements } : {}),
+			...(antecedent?.supportingPostIds.length
+				? {
+						supportingPostIds: antecedent.supportingPostIds,
+						...(antecedent.supportingExcerpt
+							? { supportingExcerpt: antecedent.supportingExcerpt }
+							: {}),
+					}
+				: {}),
+			...(offlineOrVoiceApproval
+				? { offlineOrVoiceApproval: true as const }
+				: {}),
 		});
 	}
 	return decisions;
+}
+
+const OFFLINE_OR_VOICE_MARKERS = [
+	"обсудили голосом",
+	"голосом обсудили",
+	"на дейли",
+	"на daily",
+	"offline",
+	"созвоне",
+	"на созвоне",
+] as const;
+
+function hasOfflineOrVoiceApprovalMarker(message: string): boolean {
+	return OFFLINE_OR_VOICE_MARKERS.some((marker) =>
+		containsNormalizedText(message, marker),
+	);
+}
+
+/**
+ * For short settled cues («можно делать»), attach the nearest preceding packed
+ * proposal/intent so the decision names *what* was approved. Mechanical only.
+ */
+function collectDecisionAntecedent(
+	chronological: readonly EvidencePost[],
+	decision: EvidencePost,
+	excerptLimit: number,
+): { supportingPostIds: string[]; supportingExcerpt?: string } | undefined {
+	const excerpt = excerptWithTruncation(decision.message, excerptLimit);
+	if (excerpt.text.length > SHORT_SETTLED_EXCERPT_LIMIT) return undefined;
+	const index = chronological.findIndex((post) => post.id === decision.id);
+	if (index <= 0) return undefined;
+	const supportingPostIds: string[] = [];
+	let supportingExcerpt: string | undefined;
+	const window = chronological.slice(
+		Math.max(0, index - ANTECEDENT_LOOKBACK),
+		index,
+	);
+	for (const post of [...window].reverse()) {
+		if (post.deleteAt || !post.message.trim()) continue;
+		const matched = matchCues(post.message, DECISION_CUES, {
+			rejectInterrogativeCueSentence: true,
+			rejectNegatedCue: true,
+		});
+		if (!matched.cues.length) continue;
+		const kind = classifyDecision(post.message, matched.patterns, false);
+		if (kind !== "proposal" && kind !== "implementation_intent") continue;
+		supportingPostIds.push(post.id);
+		if (!supportingExcerpt) {
+			supportingExcerpt = excerptWithTruncation(
+				post.message,
+				excerptLimit,
+			).text;
+		}
+		if (supportingPostIds.length >= MAX_SUPPORTING_POSTS) break;
+	}
+	if (!supportingPostIds.length) return undefined;
+	return {
+		supportingPostIds: supportingPostIds.reverse(),
+		...(supportingExcerpt ? { supportingExcerpt } : {}),
+	};
 }
 
 /**
@@ -1334,8 +1498,21 @@ function classifyDecision(
 	affirmed: boolean,
 ): DecisionKind {
 	if (isFullyHedged(message, patterns)) return "proposal";
+	// Architectural approach cues are never approvals, even when affirmed.
+	if (
+		patterns.length > 0 &&
+		patterns.every((pattern) => TECH_APPROACH_CUE_SET.has(pattern.cue))
+	) {
+		return "proposal";
+	}
 	if (patterns.some((pattern) => pattern.commitment === "settled")) {
 		return "approved_decision";
+	}
+	if (
+		patterns.some((pattern) => TECH_APPROACH_CUE_SET.has(pattern.cue)) &&
+		!patterns.some((pattern) => pattern.commitment === "settled")
+	) {
+		return "proposal";
 	}
 	if (patterns.some((pattern) => pattern.commitment === "personal")) {
 		return affirmed ? "approved_decision" : "implementation_intent";
@@ -1344,6 +1521,10 @@ function classifyDecision(
 	// "we discussed it" agrees that a discussion happened.
 	return "discussion_outcome";
 }
+
+const TECH_APPROACH_CUE_SET = new Set(
+	TECH_APPROACH_CUES.map((pattern) => pattern.cue),
+);
 
 /**
  * True when *every* sentence carrying a matched cue also carries a hedge. One
@@ -1556,6 +1737,101 @@ function findAckPostId(
 		}
 	}
 	return undefined;
+}
+
+/**
+ * When adjacency pairing missed an acknowledgement, look for a short affirming
+ * ack in the final packed posts that confirms the strongest preceding decision
+ * candidate. Explicitly named and lower-confidence — not a widened lookahead.
+ */
+function findLateThreadAcknowledgement(
+	chronological: readonly EvidencePost[],
+	decisionSpans: readonly CandidateSpan[],
+	excerptLimit: number,
+): LateThreadAcknowledgement | undefined {
+	if (!chronological.length || !decisionSpans.length) return undefined;
+	const byId = new Map(chronological.map((post) => [post.id, post]));
+	const indexById = new Map(
+		chronological.map((post, index) => [post.id, index] as const),
+	);
+
+	const alreadyPaired = new Set(
+		decisionSpans
+			.map((span) => span.ackPostId)
+			.filter((id): id is string => Boolean(id)),
+	);
+
+	const tail = chronological.slice(-LATE_ACK_TAIL_POSTS);
+	type Candidate = {
+		decision: CandidateSpan;
+		ack: EvidencePost;
+		decisionIndex: number;
+		ackIndex: number;
+	};
+	let best: Candidate | undefined;
+
+	for (const [tailOffset, ack] of tail.entries()) {
+		const ackIndex = chronological.length - tail.length + tailOffset;
+		if (!ack || ack.deleteAt || !ack.message.trim()) continue;
+		if (alreadyPaired.has(ack.id)) continue;
+		const token = acknowledgementToken(ack.message);
+		if (token === undefined || !AFFIRMING_ACK_TOKENS.has(token)) continue;
+
+		for (const span of decisionSpans) {
+			const decision = byId.get(span.postId);
+			const decisionIndex = indexById.get(span.postId);
+			if (!decision || decisionIndex === undefined) continue;
+			if (decisionIndex >= ackIndex) continue;
+			if (decision.userId === ack.userId) continue;
+			// Only fire when adjacency would have already given up: more than
+			// DECISION_ACK_LOOKAHEAD other-author posts between decision and ack.
+			let otherAuthors = 0;
+			for (let index = decisionIndex + 1; index < ackIndex; index += 1) {
+				const between = chronological[index];
+				if (!between || between.deleteAt) continue;
+				if (between.userId === decision.userId) continue;
+				otherAuthors += 1;
+			}
+			if (otherAuthors <= DECISION_ACK_LOOKAHEAD) continue;
+
+			const kind = span.decisionKind ?? "implementation_intent";
+			const better =
+				!best ||
+				DECISION_KIND_PRIORITY[kind] <
+					DECISION_KIND_PRIORITY[
+						best.decision.decisionKind ?? "implementation_intent"
+					] ||
+				(DECISION_KIND_PRIORITY[kind] ===
+					DECISION_KIND_PRIORITY[
+						best.decision.decisionKind ?? "implementation_intent"
+					] &&
+					span.confidence > best.decision.confidence) ||
+				(span.postId === best.decision.postId && ackIndex > best.ackIndex);
+			if (better) {
+				best = { decision: span, ack, decisionIndex, ackIndex };
+			}
+		}
+	}
+
+	if (!best) return undefined;
+	const excerpt = excerptWithTruncation(best.ack.message, excerptLimit);
+	return {
+		kind: "late_thread_acknowledgement",
+		decisionPostId: best.decision.postId,
+		decisionKind: best.decision.decisionKind ?? "implementation_intent",
+		ackPostId: best.ack.id,
+		author: best.ack.authorUsername,
+		createAt: best.ack.createAt,
+		excerpt: excerpt.text,
+		...(excerpt.truncated ? { excerptTruncated: true as const } : {}),
+		confidence: roundConfidence(
+			Math.min(
+				0.7,
+				LATE_ACK_BASE_CONFIDENCE +
+					Math.min(0.15, best.decision.confidence * 0.2),
+			),
+		),
+	};
 }
 
 /** The leading ack token, or undefined when the message is not an ack at all. */

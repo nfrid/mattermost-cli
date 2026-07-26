@@ -13,7 +13,13 @@ import type {
 	SelectionEvidence,
 } from "../context/types.ts";
 import { extractTicketKeys } from "../search/extract.ts";
-import { isMediaOnlyPost, largestTimelineSkip } from "./packing.ts";
+import {
+	budgetAwareAroundSidePosts,
+	estimateAveragePostUnits,
+	isMediaOnlyPost,
+	largestTimelineSkip,
+	MAX_AROUND_SIDE_POSTS,
+} from "./packing.ts";
 import { buildThreadBrief } from "./signals.ts";
 
 export type EvidenceAdequacy = "usable" | "thin" | "insufficient";
@@ -59,7 +65,22 @@ export type EvidenceNextImpact =
 	| "may_contradict_visible_text"
 	| "may_verify_quantitative_claim"
 	/** Spreadsheet bytes on a decision post; mm cannot verify quantities. */
-	| "cannot_verify_quantities";
+	| "cannot_verify_quantities"
+	/**
+	 * Image/workbook bytes: `file --inspect` downloads them but cannot interpret
+	 * contents; an external reader is required.
+	 */
+	| "requires_external_reader";
+
+/**
+ * Why {@link EvidenceVerdict.mayHaveMissedOtherThreads} is true. Absent when
+ * the flag is false. Prefer the most actionable cause when several apply.
+ */
+export type EvidenceMayHaveMissedReason =
+	| "index_cutoff"
+	| "stale_discovery"
+	| "subject_matched_budget_drops"
+	| "local_discovery";
 
 export interface EvidenceNextStep {
 	action: EvidenceNextAction;
@@ -105,10 +126,21 @@ export interface EvidenceVerdict {
 	 * {@link EvidenceHistory} always report the bound in full.
 	 */
 	mayHaveMissedOtherThreads: boolean;
+	/**
+	 * Additive cause for {@link mayHaveMissedOtherThreads}. Absent when the flag
+	 * is false.
+	 */
+	mayHaveMissedReason?: EvidenceMayHaveMissedReason;
 	/** The returned threads themselves may be behind the server. */
 	selectedEvidenceMayBeStale: boolean;
 	/** At least one `next` step is `recommended`. */
 	recommendedActionRequired: boolean;
+	/**
+	 * A true verdict flag has no safe follow-up in `next[]`. Agents must not
+	 * invent one; the reason explains the bound.
+	 */
+	noActionAvailable?: true;
+	noActionReason?: string;
 }
 
 export interface EvidenceStatus {
@@ -195,6 +227,12 @@ export function buildEvidence(input: {
 	subject?: string;
 	/** Subject ticket key, when the subject is a ticket. */
 	subjectTicket?: string;
+	/**
+	 * Attachment file ids already interpreted via `--inspect` / follow
+	 * (`preview` or `text_extracted`). Clears pending mediaOnly answerability
+	 * blocks so OCR / workbook preview can complete a recommended step.
+	 */
+	resolvedAttachmentFileIds?: readonly string[];
 }): EvidenceStatus {
 	const warningKinds = new Set(input.warnings.map(({ kind }) => kind));
 	const cutoffBoundedConversations = input.freshness.filter(
@@ -270,15 +308,40 @@ export function buildEvidence(input: {
 	const selectedMessages = input.threads.flatMap((thread) =>
 		thread.posts.map(({ message }) => message),
 	);
+	const resolvedAttachmentIds = new Set(input.resolvedAttachmentFileIds ?? []);
 	const unreadOutcomeAttachment = findUnreadOutcomeAttachment(
 		input.threads,
 		input.subjectTicket,
+		resolvedAttachmentIds,
+	);
+	const decisionDataAttachment = findDecisionDataAttachment(
+		input.threads,
+		input.subjectTicket,
+		unreadOutcomeAttachment?.postId,
+		resolvedAttachmentIds,
+	);
+	// A media-only outcome (or external-reader decision attachment) still pending
+	// means the packet's text may omit the root cause — do not claim answerable.
+	const pendingMaterialAttachment = Boolean(
+		unreadOutcomeAttachment ||
+			(decisionDataAttachment &&
+				requiresExternalReader(decisionDataAttachment.fileName)),
 	);
 	const canAnswerFromSelectedEvidence =
-		adequacy === "usable" && selectedThreads === "complete";
+		adequacy === "usable" &&
+		selectedThreads === "complete" &&
+		!pendingMaterialAttachment;
 	// One rule, one place: `next` and `verdict` both ask whether the packet is
 	// trustworthy on its own, and two spellings of that would drift apart.
 	const packetTrusted = canAnswerFromSelectedEvidence && currency === "current";
+	const mayHaveMissedReason = resolveMayHaveMissedReason({
+		discovery,
+		indexHistory,
+		packetTrusted,
+		droppedByBudgetSubjectMatched:
+			input.selection.droppedByBudgetSubjectMatched,
+	});
+	const mayHaveMissedOtherThreads = mayHaveMissedReason !== undefined;
 	const next = collectNextActions({
 		packetTrusted,
 		rankedTruncated,
@@ -301,11 +364,18 @@ export function buildEvidence(input: {
 		warningKinds,
 		subject: input.subject,
 		unreadOutcomeAttachment,
-		decisionDataAttachment: findDecisionDataAttachment(
-			input.threads,
-			input.subjectTicket,
-			unreadOutcomeAttachment?.postId,
-		),
+		decisionDataAttachment,
+	});
+	const selectedEvidenceMayBeStale = currency !== "current";
+	const recommendedActionRequired = next.some(
+		({ priority }) => priority === "recommended",
+	);
+	const verdictNoAction = resolveVerdictNoAction({
+		mayHaveMissedOtherThreads,
+		mayHaveMissedReason,
+		selectedEvidenceMayBeStale,
+		canAnswerFromSelectedEvidence,
+		next,
 	});
 
 	return {
@@ -313,19 +383,11 @@ export function buildEvidence(input: {
 		currency,
 		verdict: {
 			canAnswerFromSelectedEvidence,
-			mayHaveMissedOtherThreads:
-				discovery !== "current" ||
-				// Bounded history counts only when the packet is not otherwise
-				// trustworthy — the same judgment the `sync` step already makes.
-				// Nearly every conversation is cutoff-bounded by `historyDays`, so
-				// counting it unconditionally would pin this flag to `true` forever
-				// and make the roll-up worthless.
-				(indexHistory === "cutoff_bounded" && !packetTrusted) ||
-				input.selection.droppedByBudgetSubjectMatched > 0,
-			selectedEvidenceMayBeStale: currency !== "current",
-			recommendedActionRequired: next.some(
-				({ priority }) => priority === "recommended",
-			),
+			mayHaveMissedOtherThreads,
+			...(mayHaveMissedReason ? { mayHaveMissedReason } : {}),
+			selectedEvidenceMayBeStale,
+			recommendedActionRequired,
+			...verdictNoAction,
 		},
 		completeness: {
 			selectedThreads,
@@ -352,6 +414,93 @@ export function buildEvidence(input: {
 		},
 		...(history ? { history } : {}),
 	};
+}
+
+/** Prefer the most actionable cause when several axes would set the flag. */
+function resolveMayHaveMissedReason(input: {
+	discovery: EvidenceDiscoveryCurrency;
+	indexHistory: EvidenceIndexHistory;
+	packetTrusted: boolean;
+	droppedByBudgetSubjectMatched: number;
+}): EvidenceMayHaveMissedReason | undefined {
+	if (input.droppedByBudgetSubjectMatched > 0) {
+		return "subject_matched_budget_drops";
+	}
+	if (input.discovery === "local_only") return "local_discovery";
+	if (input.discovery === "possibly_stale") return "stale_discovery";
+	if (input.indexHistory === "cutoff_bounded" && !input.packetTrusted) {
+		return "index_cutoff";
+	}
+	return undefined;
+}
+
+/**
+ * Every `true` verdict flag must either point at a `next` step or declare that
+ * no safe follow-up exists. Without this, agents stall on a lit flag with an
+ * empty `next[]`.
+ */
+function resolveVerdictNoAction(input: {
+	mayHaveMissedOtherThreads: boolean;
+	mayHaveMissedReason: EvidenceMayHaveMissedReason | undefined;
+	selectedEvidenceMayBeStale: boolean;
+	canAnswerFromSelectedEvidence: boolean;
+	next: readonly EvidenceNextStep[];
+}): { noActionAvailable: true; noActionReason: string } | undefined {
+	const actions = new Set(input.next.map(({ action }) => action));
+	if (input.mayHaveMissedOtherThreads) {
+		const covered =
+			actions.has("inspect_dropped") ||
+			actions.has("review_candidates") ||
+			actions.has("sync") ||
+			actions.has("fresh_or_remote");
+		if (!covered) {
+			return {
+				noActionAvailable: true,
+				noActionReason: mayHaveMissedNoActionReason(input.mayHaveMissedReason),
+			};
+		}
+	}
+	if (input.selectedEvidenceMayBeStale && !actions.has("fresh_or_remote")) {
+		return {
+			noActionAvailable: true,
+			noActionReason:
+				"selected evidence may be stale but no refresh step is available for this packet",
+		};
+	}
+	if (
+		!input.canAnswerFromSelectedEvidence &&
+		!actions.has("thread_around") &&
+		!actions.has("thread_full") &&
+		!actions.has("read_attachments")
+	) {
+		// Empty / thin packets and complete-but-unusable selections already
+		// expose adequacy; only flag when nothing explains the gap.
+		if (input.next.length === 0) {
+			return {
+				noActionAvailable: true,
+				noActionReason:
+					"selected evidence is not answerable and no follow-up command is available",
+			};
+		}
+	}
+	return undefined;
+}
+
+function mayHaveMissedNoActionReason(
+	reason: EvidenceMayHaveMissedReason | undefined,
+): string {
+	switch (reason) {
+		case "index_cutoff":
+			return "index history is cutoff-bounded; no channel-scoped sync step is available";
+		case "stale_discovery":
+			return "discovery may be stale; no refresh step is available for this packet";
+		case "local_discovery":
+			return "discovery used the local index only; no refresh step is available for this packet";
+		case "subject_matched_budget_drops":
+			return "subject-matched candidates were dropped by budget but no inspect_dropped step is available";
+		default:
+			return "mayHaveMissedOtherThreads is set but no follow-up command is available";
+	}
 }
 
 /** Cutoff-bounded conversations reported per packet. */
@@ -411,6 +560,7 @@ interface UnreadOutcomeAttachment {
 function findUnreadOutcomeAttachment(
 	threads: readonly ContextThread[],
 	subjectTicket?: string,
+	resolvedFileIds: ReadonlySet<string> = new Set(),
 ): UnreadOutcomeAttachment | undefined {
 	const subject = subjectTicket?.toUpperCase();
 	let best: (UnreadOutcomeAttachment & { createAt: number }) | undefined;
@@ -431,7 +581,9 @@ function findUnreadOutcomeAttachment(
 		}
 		for (const post of posts.slice(anchorIndex + 1)) {
 			if (!isMediaOnlyPost(post)) continue;
-			const live = post.attachments.filter(({ deleteAt }) => !deleteAt);
+			const live = post.attachments.filter(
+				({ deleteAt, id }) => !deleteAt && !resolvedFileIds.has(id),
+			);
 			const first = live[0];
 			if (!first) continue;
 			const candidate = {
@@ -475,9 +627,8 @@ const DATA_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
 	"txt",
 ]);
 
-/** Workbook formats mm never parses; CSV/TSV stay verifiable via `--inspect`. */
-const SPREADSHEET_DATA_EXTENSIONS: ReadonlySet<string> = new Set([
-	"xlsx",
+/** Workbook formats mm never parses as a bounded preview (OLE / ODF). */
+const UNPREVIEWABLE_SPREADSHEET_EXTENSIONS: ReadonlySet<string> = new Set([
 	"xls",
 	"ods",
 ]);
@@ -496,6 +647,7 @@ function findDecisionDataAttachment(
 	threads: readonly ContextThread[],
 	subjectTicket: string | undefined,
 	excludePostId: string | undefined,
+	resolvedFileIds: ReadonlySet<string> = new Set(),
 ): UnreadOutcomeAttachment | undefined {
 	let best: (UnreadOutcomeAttachment & { createAt: number }) | undefined;
 	for (const thread of threads) {
@@ -521,7 +673,8 @@ function findDecisionDataAttachment(
 			if (post.id === excludePostId) continue;
 			if (!decisionLayer.has(post.id)) continue;
 			const live = post.attachments.filter(
-				({ deleteAt, name }) => !deleteAt && isDataFileName(name),
+				({ deleteAt, name, id }) =>
+					!deleteAt && isDataFileName(name) && !resolvedFileIds.has(id),
 			);
 			const first = live[0];
 			if (!first) continue;
@@ -554,11 +707,62 @@ function isDataFileName(name: string): boolean {
 
 function isSpreadsheetDataFileName(name: string): boolean {
 	const extension = name.split(".").pop()?.toLowerCase();
-	return Boolean(extension && SPREADSHEET_DATA_EXTENSIONS.has(extension));
+	return Boolean(
+		extension &&
+			(extension === "xlsx" ||
+				UNPREVIEWABLE_SPREADSHEET_EXTENSIONS.has(extension)),
+	);
+}
+
+const IMAGE_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
+	"png",
+	"jpg",
+	"jpeg",
+	"gif",
+	"webp",
+	"bmp",
+	"svg",
+]);
+
+/** Formats `file --inspect` downloads but cannot interpret as primary evidence. */
+function requiresExternalReader(fileName: string): boolean {
+	const extension = fileName.split(".").pop()?.toLowerCase() ?? "";
+	return (
+		IMAGE_FILE_EXTENSIONS.has(extension) ||
+		UNPREVIEWABLE_SPREADSHEET_EXTENSIONS.has(extension)
+	);
 }
 
 function attachmentCommand(attachment: UnreadOutcomeAttachment): string[] {
 	return ["mm", "file", attachment.fileId, "--inspect", "--agent"];
+}
+
+function attachmentNextStep(
+	attachment: UnreadOutcomeAttachment,
+	input: {
+		reason: string;
+		/** Priority when the file is directly interpretable via `--inspect`. */
+		interpretablePriority: EvidenceNextPriority;
+		interpretableImpact: EvidenceNextImpact;
+		/**
+		 * Keep `interpretablePriority` even when an external reader / OCR is
+		 * required. Media-only outcome screenshots stay recommended so agents
+		 * (and `--follow-recommended`) attempt them before claiming answerable.
+		 */
+		keepRecommendedWhenExternal?: boolean;
+	},
+): EvidenceNextStep {
+	const external = requiresExternalReader(attachment.fileName);
+	const demoteExternal = external && !input.keepRecommendedWhenExternal;
+	return {
+		action: "read_attachments",
+		reason: input.reason,
+		priority: demoteExternal ? "optional" : input.interpretablePriority,
+		impact: external ? "requires_external_reader" : input.interpretableImpact,
+		command: attachmentCommand(attachment),
+		threadId: attachment.threadId,
+		postId: attachment.postId,
+	};
 }
 
 export function shouldRecommendFull(thread: {
@@ -602,26 +806,49 @@ function rankTruncatedThreads(
 	});
 }
 
-const MAX_TARGETED_AROUND_POSTS = 50;
+const MAX_TARGETED_AROUND_POSTS = MAX_AROUND_SIDE_POSTS;
 
 /**
  * Prefer one bounded omitted range over replaying the complete thread. The kept
  * post before an internal/trailing skip is the preferred `--around` anchor, so
  * normal chronological selection starts with the nearest omitted posts. A
- * leading skip uses the kept post after it. The regular character budget still
- * applies; fall back to `--full` only when no usable boundary exists.
+ * leading skip uses the kept post after it. Side-post counts are capped by both
+ * {@link MAX_TARGETED_AROUND_POSTS} and the thread's character budget so the
+ * recommended argv is expected to fit; fall back to `--full` only when no
+ * usable boundary exists.
+ *
+ * Skip choice prefers gaps that recover truncated decision/open-question text
+ * or `responseExcerpts` anchors over merely the largest skip.
  */
 function targetedHydrationStep(
 	thread: ContextThread,
 	recommended: boolean,
 ): EvidenceNextStep {
+	const brief = buildThreadBrief(thread.posts, {
+		omittedPosts: thread.omittedPosts,
+		reasons: thread.reasons,
+	});
+	const highValuePostIds = highValueGapAnchorIds(brief);
 	const skips = thread.timeline
 		.filter((item) => item.kind === "skip")
 		.map(({ skip }) => skip)
-		.sort((left, right) => right.posts - left.posts);
+		.sort((left, right) => {
+			const leftValue = skipGapValue(left, highValuePostIds);
+			const rightValue = skipGapValue(right, highValuePostIds);
+			return rightValue - leftValue || right.posts - left.posts;
+		});
 	const skip = skips[0];
 	const priority = recommended ? "recommended" : "optional";
+	const averagePostUnits = estimateAveragePostUnits(thread.posts);
+	const characterBudget = thread.budget.limit;
+	const sidePosts = (requested: number) =>
+		budgetAwareAroundSidePosts({
+			requestedSidePosts: Math.min(requested, MAX_TARGETED_AROUND_POSTS),
+			characterBudget,
+			averagePostUnits,
+		});
 	if (skip?.after) {
+		const afterPosts = sidePosts(skip.posts);
 		return {
 			action: "thread_around",
 			reason: "packing_incomplete_range",
@@ -636,7 +863,7 @@ function targetedHydrationStep(
 				"--before-posts",
 				"0",
 				"--after-posts",
-				String(Math.min(skip.posts, MAX_TARGETED_AROUND_POSTS)),
+				String(afterPosts),
 				"--window-only",
 				"--agent",
 			],
@@ -644,6 +871,7 @@ function targetedHydrationStep(
 		};
 	}
 	if (skip?.before) {
+		const beforePosts = sidePosts(skip.posts);
 		return {
 			action: "thread_around",
 			reason: "packing_incomplete_range",
@@ -656,7 +884,7 @@ function targetedHydrationStep(
 				"--around",
 				skip.before,
 				"--before-posts",
-				String(Math.min(skip.posts, MAX_TARGETED_AROUND_POSTS)),
+				String(beforePosts),
 				"--after-posts",
 				"0",
 				"--window-only",
@@ -673,6 +901,43 @@ function targetedHydrationStep(
 		command: ["mm", "thread", thread.threadId, "--full", "--agent"],
 		threadId: thread.threadId,
 	};
+}
+
+/** Post ids whose neighboring skip is more valuable than raw size. */
+function highValueGapAnchorIds(brief: ReturnType<typeof buildThreadBrief>): {
+	truncatedDecisionOrQuestion: ReadonlySet<string>;
+	responseAnchors: ReadonlySet<string>;
+} {
+	const truncatedDecisionOrQuestion = new Set<string>();
+	const responseAnchors = new Set<string>();
+	for (const decision of brief.decisions ?? []) {
+		if (decision.excerptTruncated)
+			truncatedDecisionOrQuestion.add(decision.postId);
+	}
+	for (const question of brief.openQuestions ?? []) {
+		if (question.excerptTruncated)
+			truncatedDecisionOrQuestion.add(question.postId);
+		for (const id of question.responsePostIds ?? []) responseAnchors.add(id);
+	}
+	return { truncatedDecisionOrQuestion, responseAnchors };
+}
+
+function skipGapValue(
+	skip: { after?: string; before?: string; posts: number },
+	anchors: {
+		truncatedDecisionOrQuestion: ReadonlySet<string>;
+		responseAnchors: ReadonlySet<string>;
+	},
+): number {
+	const neighbors = [skip.after, skip.before].filter((id): id is string =>
+		Boolean(id),
+	);
+	let value = 0;
+	for (const id of neighbors) {
+		if (anchors.truncatedDecisionOrQuestion.has(id)) value += 100;
+		if (anchors.responseAnchors.has(id)) value += 50;
+	}
+	return value;
 }
 
 function collectNextActions(input: {
@@ -703,34 +968,31 @@ function collectNextActions(input: {
 	const next: EvidenceNextStep[] = [];
 	const attachment = input.unreadOutcomeAttachment;
 	if (attachment) {
-		next.push({
-			action: "read_attachments",
-			reason:
-				attachment.files > 1
-					? "media_only_outcome_post_multiple_files"
-					: "media_only_outcome_post",
-			priority: "recommended",
-			impact: "may_contradict_visible_text",
-			command: attachmentCommand(attachment),
-			threadId: attachment.threadId,
-			postId: attachment.postId,
-		});
+		next.push(
+			attachmentNextStep(attachment, {
+				reason:
+					attachment.files > 1
+						? "media_only_outcome_post_multiple_files"
+						: "media_only_outcome_post",
+				interpretablePriority: "recommended",
+				interpretableImpact: "may_contradict_visible_text",
+				keepRecommendedWhenExternal: true,
+			}),
+		);
 	}
 	const dataFile = input.decisionDataAttachment;
 	if (dataFile) {
-		next.push({
-			action: "read_attachments",
-			reason: "data_file_on_decision_post",
-			// A media-only post is unreadable without its file; this post has text,
-			// so it is the second call to make, not the first.
-			priority: attachment ? "optional" : "recommended",
-			impact: isSpreadsheetDataFileName(dataFile.fileName)
-				? "cannot_verify_quantities"
-				: "may_verify_quantitative_claim",
-			command: attachmentCommand(dataFile),
-			threadId: dataFile.threadId,
-			postId: dataFile.postId,
-		});
+		next.push(
+			attachmentNextStep(dataFile, {
+				reason: "data_file_on_decision_post",
+				// A media-only post is unreadable without its file; this post has text,
+				// so it is the second call to make, not the first.
+				interpretablePriority: attachment ? "optional" : "recommended",
+				interpretableImpact: isSpreadsheetDataFileName(dataFile.fileName)
+					? "cannot_verify_quantities"
+					: "may_verify_quantitative_claim",
+			}),
+		);
 	}
 	for (const [index, thread] of input.rankedTruncated.entries()) {
 		next.push(targetedHydrationStep(thread, index === 0));
@@ -763,7 +1025,8 @@ function collectNextActions(input: {
 	);
 	// When subject-matched budget drops set mayHaveMissedOtherThreads but no
 	// thin/ticket inspect fired, point at the best budget drop that still adds
-	// an unseen excerpt — optional only; never forces recommendedActionRequired.
+	// an unseen excerpt. Promote to recommended — the flag already says real
+	// subject evidence may be missing.
 	const subjectMatchedBudgetDrop =
 		!actionableDropped &&
 		input.selectionCounts.droppedByBudgetSubjectMatched > 0
@@ -776,10 +1039,12 @@ function collectNextActions(input: {
 	const inspectDropped = actionableDropped ?? subjectMatchedBudgetDrop;
 	if (inspectDropped) {
 		const droppedThreadId = inspectDropped.threadId;
+		const subjectMatchedOnly =
+			!actionableDropped && subjectMatchedBudgetDrop !== undefined;
 		next.push({
 			action: "inspect_dropped",
 			reason: "selection_dropped",
-			priority: "optional",
+			priority: subjectMatchedOnly ? "recommended" : "optional",
 			impact: "may_add_dropped_pointer",
 			...(droppedThreadId
 				? {

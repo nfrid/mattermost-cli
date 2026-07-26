@@ -451,7 +451,7 @@ function addLexicalHits(
 			postId: hit.post.id,
 			probe: probe.value,
 			...(probe.kind ? { probeKind: probe.kind } : {}),
-			excerpt: hit.snippet,
+			excerpt: excerpt(hit.snippet),
 			lexicalSource: hit.source,
 			sourceQuery: hit.sourceQuery,
 			sourceRank: hit.rank,

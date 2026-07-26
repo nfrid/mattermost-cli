@@ -556,11 +556,25 @@ export function isTruncatedRussianStemTerm(term: string): boolean {
 	const analysis = analyzeSearchToken(term);
 	if (analysis.language !== "russian") return false;
 	if (!analysis.stem || analysis.stem !== analysis.normalized) return false;
+	// Complete lemmas often equal their stem («месяц», «платеж»). Truncated
+	// paste-stems like «транзакц» end in a consonant cluster; require that so
+	// full word forms do not false-positive the hint.
+	if (!endsWithRussianConsonantCluster(analysis.normalized)) return false;
 	// Confirm the token is a productive stem of longer surface forms.
 	return RUSSIAN_STEM_PROBE_ENDINGS.some(
 		(ending) =>
 			stemRussianSnowball(analysis.normalized + ending) === analysis.stem,
 	);
+}
+
+const RUSSIAN_VOWELS = new Set("аеёиоуыэюя");
+
+function endsWithRussianConsonantCluster(term: string): boolean {
+	if (term.length < 2) return false;
+	const last = term.at(-1);
+	const prev = term.at(-2);
+	if (!last || !prev) return false;
+	return !RUSSIAN_VOWELS.has(last) && !RUSSIAN_VOWELS.has(prev);
 }
 
 /**
