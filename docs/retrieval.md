@@ -37,8 +37,11 @@ and remote-search diagnostics.
 Queries are independent ranking and retrieval signals, not mandatory filters. A
 ticket relationship or other stronger evidence can still select a candidate with
 no textual query match, and the result emits an `unmatched_retrieval_probe`
-warning when that happens. Unknown repository or scope metadata hints emit
-`unmapped_routing_hint` rather than being ignored silently.
+warning when that happens. Unknown repository or scope metadata hints emit the
+informational `unmapped_routing_hint` rather than being ignored silently. These
+hints are exact configured metadata values, not workspace names inferred from a
+ticket: an unmapped hint did not narrow routing, but does not make otherwise
+selected evidence invalid.
 
 Probes change *which* threads are selected, not only how the selected ones are
 ordered: a packet built with `--query` is not a superset of the same subject
@@ -96,10 +99,13 @@ A refused conversation fails with `conversation_not_allowed` carrying
 - `reason` — `not_configured` when the conversation is absent from the config,
   `channel_restriction` when the caller's own `--channel` excluded an otherwise
   configured one;
-- `postId` / `conversationId` — values the caller already holds or can read off
-  the permalink, so nothing from inside the refused conversation is disclosed;
-- `restrictedTo` for a restriction;
-- `recommendedAction` naming what would change it.
+- `postId` echoes the caller-supplied target;
+- `conversationId` is present only for `channel_restriction`, where the
+  conversation is configured and already visible through `mm channels`; an
+  unconfigured refusal never reveals its conversation identity;
+- `restrictedTo` for a caller-supplied restriction;
+- `recommendedAction` naming what would change it. Advice to drop or widen
+  `--channel` is emitted only when that flag actually caused the refusal.
 
 `mm` never widens the allowlist itself.
 

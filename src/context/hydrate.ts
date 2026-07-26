@@ -52,7 +52,22 @@ export async function resolveDirectTarget(
 	if (options.preferLocal && local) return local;
 
 	try {
-		return indexedPost(await client.getPost(postId));
+		const remote = indexedPost(await client.getPost(postId));
+		if (
+			allowedConversationIds &&
+			!allowedConversationIds.has(remote.conversationId)
+		) {
+			throw new ConfigError(
+				"The post is outside configured conversations.",
+				"conversation_not_allowed",
+				undefined,
+				conversationNotAllowedDetails({
+					reason: "not_configured",
+					postId,
+				}),
+			);
+		}
+		return remote;
 	} catch (error) {
 		if (isRecoverableRemoteError(error) && local) {
 			options.warnings?.push({

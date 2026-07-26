@@ -116,7 +116,9 @@ before confidence, alongside the additive `evidence.verdict`,
 `evidence.selection.droppedByBudgetSubjectMatched`, `probeCoverage[]`,
 `permalinks[]`, per-thread `totalPosts`, `conversation_not_allowed`
 `error.details`, and the `brief` decision-layer fields (`kind`,
-`textTruncated`).
+`textTruncated`). Permalink refusal details may additionally retain the safe,
+caller-supplied `postId`; `conversationId` remains restricted to a configured
+conversation excluded by the caller's own `--channel`.
 
 ## Schemas and fixtures
 

@@ -42,13 +42,28 @@ export async function resolvePermalinkTargets(input: {
 
 	for (const raw of input.permalinks) {
 		const value = raw.trim();
-		if (!value || seenInputs.has(value)) continue;
+		if (!value) {
+			resolutions.push({
+				input: raw,
+				status: "invalid",
+				reason: "empty_permalink",
+			});
+			continue;
+		}
+		if (seenInputs.has(value)) {
+			resolutions.push({
+				input: raw,
+				status: "duplicate",
+				reason: "duplicate_input",
+			});
+			continue;
+		}
 		seenInputs.add(value);
 
 		const subject = classifySubject(value);
 		if (subject.kind !== "post") {
 			resolutions.push({
-				input: value,
+				input: raw,
 				status: "invalid",
 				reason: "not_a_permalink_or_post_id",
 			});
@@ -68,7 +83,7 @@ export async function resolvePermalinkTargets(input: {
 			const refused =
 				error instanceof AppError && error.kind === "conversation_not_allowed";
 			resolutions.push({
-				input: value,
+				input: raw,
 				postId: subject.postId,
 				status: refused ? "not_allowed" : "unresolved",
 				reason:
@@ -90,13 +105,15 @@ export async function resolvePermalinkTargets(input: {
 			// allowlist is never widened to serve an explicit link. The id is safe
 			// to name here — the caller can already see it in `mm channels`.
 			resolutions.push({
-				input: value,
+				input: raw,
 				postId: subject.postId,
 				conversationId: target.conversationId,
 				status: "not_allowed",
 				reason: "conversation_not_allowed",
 				details: conversationNotAllowedDetails({
 					reason: "channel_restriction",
+					postId: subject.postId,
+					conversationId: target.conversationId,
 					restrictedTo: input.restrictedTo ?? [],
 				}),
 			});
@@ -105,7 +122,7 @@ export async function resolvePermalinkTargets(input: {
 
 		const threadId = target.rootId || target.id;
 		resolutions.push({
-			input: value,
+			input: raw,
 			postId: target.id,
 			threadId,
 			conversationId: conversation.id,

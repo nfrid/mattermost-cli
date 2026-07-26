@@ -464,6 +464,7 @@ const permalinkResolutionSchema = z.object({
 	details: z
 		.object({
 			reason: z.enum(["not_configured", "channel_restriction"]),
+			postId: z.string().optional(),
 			conversationId: z.string().optional(),
 			restrictedTo: z.array(z.string()).optional(),
 			recommendedAction: z.string(),

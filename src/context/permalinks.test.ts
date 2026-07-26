@@ -7,6 +7,7 @@ import {
 	userFixture,
 } from "../test-fixtures.ts";
 import { getMattermostContext } from "./index.ts";
+import { FakeContextClient } from "./test-helpers.ts";
 
 const TICKET_ROOT = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 const DESIGN_ROOT = "cccccccccccccccccccccccccc";
@@ -130,6 +131,36 @@ describe("--permalink targets", () => {
 		store.close();
 	});
 
+	test("rejects a remotely resolved post outside the configured allowlist", async () => {
+		const store = await seededStore();
+		const client = new FakeContextClient();
+		client.posts.set(
+			OUTSIDE_ROOT,
+			postFixture({
+				id: OUTSIDE_ROOT,
+				channel_id: "channel-secret",
+				message: "remote content must not cross the allowlist",
+			}),
+		);
+		const context = await getMattermostContext(
+			{ subject: "BTB-1", permalinks: [OUTSIDE_ROOT], fresh: true },
+			{ config: configFixture(), store, client, now: () => 2_000 },
+		);
+
+		expect(context.permalinks?.[0]).toMatchObject({
+			postId: OUTSIDE_ROOT,
+			status: "not_allowed",
+			details: {
+				reason: "not_configured",
+				postId: OUTSIDE_ROOT,
+			},
+		});
+		expect(context.permalinks?.[0]?.details).not.toHaveProperty(
+			"conversationId",
+		);
+		store.close();
+	});
+
 	test("keeps an explicit --channel restriction over an explicit link", async () => {
 		const store = await seededStore();
 		const context = await getMattermostContext(
@@ -149,25 +180,44 @@ describe("--permalink targets", () => {
 		store.close();
 	});
 
-	test("reports a repeated link once and a non-permalink as invalid", async () => {
+	test("reports every repeated or invalid input in argument order", async () => {
 		const store = await seededStore();
+		const padded = `  ${DESIGN_REPLY}  `;
 		const context = await getMattermostContext(
 			{
 				subject: "BTB-1",
 				permalinks: [
+					padded,
 					DESIGN_REPLY,
 					`https://chat.example.test/_redirect/pl/${DESIGN_ROOT}`,
 					"BTB-9",
+					" ",
 				],
 				local: true,
 			},
 			{ config: configFixture(), store, now: () => 2_000 },
 		);
 
-		expect(context.permalinks?.map(({ status }) => status)).toEqual([
-			"resolved",
-			"duplicate",
-			"invalid",
+		expect(
+			context.permalinks?.map(({ input, status, reason }) => ({
+				input,
+				status,
+				reason,
+			})),
+		).toEqual([
+			{ input: padded, status: "resolved", reason: undefined },
+			{ input: DESIGN_REPLY, status: "duplicate", reason: "duplicate_input" },
+			{
+				input: `https://chat.example.test/_redirect/pl/${DESIGN_ROOT}`,
+				status: "duplicate",
+				reason: undefined,
+			},
+			{
+				input: "BTB-9",
+				status: "invalid",
+				reason: "not_a_permalink_or_post_id",
+			},
+			{ input: " ", status: "invalid", reason: "empty_permalink" },
 		]);
 		expect(
 			context.threads.filter(({ threadId }) => threadId === DESIGN_ROOT),
@@ -213,6 +263,8 @@ describe("--permalink targets", () => {
 
 		expect(restricted.permalinks?.[0]?.details).toMatchObject({
 			reason: "channel_restriction",
+			postId: DESIGN_REPLY,
+			conversationId: "channel-platform",
 			restrictedTo: ["payments"],
 		});
 		expect(
