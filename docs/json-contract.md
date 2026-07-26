@@ -120,7 +120,12 @@ before confidence, alongside the additive `evidence.verdict`,
 caller-supplied `postId`; `conversationId` remains restricted to a configured
 conversation excluded by the caller's own `--channel`. Brief entries may also
 carry additive `decisions[].acknowledgement` and packet-local
-`openQuestions[].resolution` / `responsePostIds`.
+`openQuestions[].resolution` / `responsePostIds`. Packing may expose
+`recommendedHydrationThreadIds`; the historical `recommendFullThreadIds` stays
+as a V1 compatibility alias even when the recommended action is bounded
+`thread_around`. Version 5 already includes `thread_around` in the
+`evidence.next[].action` enum; this release begins emitting it for skips with a
+usable boundary.
 
 ## Schemas and fixtures
 

@@ -359,15 +359,22 @@ describe("agent projection", () => {
 					selectedThreads: "truncated",
 				}),
 				packing: expect.objectContaining({
+					recommendedHydrationThreadIds: expect.arrayContaining([longRoot]),
 					recommendFullThreadIds: expect.arrayContaining([longRoot]),
 				}),
 				next: expect.arrayContaining([
 					expect.objectContaining({
-						action: "thread_full",
+						action: "thread_around",
 						threadId: longRoot,
 						priority: "recommended",
 						impact: "may_recover_omitted_core",
-						command: ["mm", "thread", longRoot, "--full", "--agent"],
+						command: expect.arrayContaining([
+							"mm",
+							"thread",
+							longRoot,
+							"--around",
+							"--agent",
+						]),
 					}),
 				]),
 			}),

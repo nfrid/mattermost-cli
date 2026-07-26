@@ -129,6 +129,24 @@ const noRemoteSearch: RemoteSearchEvidence = {
 	failures: 0,
 };
 
+function evidenceForThread(thread: ContextThread) {
+	return buildEvidence({
+		searchCoverageComplete: true,
+		selectedThreadsComplete: false,
+		freshnessMode: "network",
+		freshness: [freshChannel],
+		searchedConversations: [{ id: "channel-1" }],
+		threads: [thread],
+		remoteSearch: noRemoteSearch,
+		selection: {
+			...emptySelection(),
+			candidateThreads: 1,
+			returnedThreads: 1,
+		},
+		warnings: [],
+	});
+}
+
 function assertArgv(command: string[] | undefined): void {
 	expect(command).toBeDefined();
 	expect(Array.isArray(command)).toBe(true);
@@ -436,18 +454,29 @@ describe("buildEvidence", () => {
 			"fresh_or_remote",
 			"inspect_dropped",
 			"sync",
-			"thread_full",
+			"thread_around",
 		]);
 		const byAction = Object.fromEntries(
 			evidence.next.map((step) => [step.action, step]),
 		);
-		expect(byAction.thread_full).toMatchObject({
+		expect(byAction.thread_around).toMatchObject({
 			priority: "recommended",
 			impact: "may_recover_omitted_core",
-			command: ["mm", "thread", "t1", "--full", "--agent"],
+			command: [
+				"mm",
+				"thread",
+				"t1",
+				"--around",
+				"a",
+				"--before-posts",
+				"0",
+				"--after-posts",
+				"12",
+				"--agent",
+			],
 			threadId: "t1",
 		});
-		expect(byAction.thread_around).toBeUndefined();
+		expect(byAction.thread_full).toBeUndefined();
 		expect(byAction.sync).toMatchObject({
 			priority: "optional",
 			impact: "older_discovery_only",
@@ -471,7 +500,7 @@ describe("buildEvidence", () => {
 		}
 	});
 
-	test("emits thread_full with recommended argv", () => {
+	test("emits bounded thread_around with recommended argv", () => {
 		const evidence = buildEvidence({
 			searchCoverageComplete: true,
 			selectedThreadsComplete: false,
@@ -539,17 +568,28 @@ describe("buildEvidence", () => {
 		});
 		expect(evidence.next).toEqual([
 			{
-				action: "thread_full",
-				reason: "packing_incomplete",
+				action: "thread_around",
+				reason: "packing_incomplete_range",
 				priority: "recommended",
 				impact: "may_recover_omitted_core",
-				command: ["mm", "thread", "root-1", "--full", "--agent"],
+				command: [
+					"mm",
+					"thread",
+					"root-1",
+					"--around",
+					"a",
+					"--before-posts",
+					"0",
+					"--after-posts",
+					"12",
+					"--agent",
+				],
 				threadId: "root-1",
 			},
 		]);
 	});
 
-	test("does not emit thread_around even when skip boundaries exist", () => {
+	test("uses the kept post after a leading skip as the range anchor", () => {
 		const evidence = buildEvidence({
 			searchCoverageComplete: true,
 			selectedThreadsComplete: false,
@@ -590,7 +630,6 @@ describe("buildEvidence", () => {
 							kind: "skip",
 							skip: {
 								posts: 8,
-								after: "a",
 								before: "first-kept",
 								reason: "budget",
 							},
@@ -621,7 +660,66 @@ describe("buildEvidence", () => {
 			warnings: [],
 		});
 		expect(evidence.packing.recommendFullThreadIds).toEqual(["root-2"]);
-		expect(evidence.next.map(({ action }) => action)).toEqual(["thread_full"]);
+		expect(evidence.next).toEqual([
+			{
+				action: "thread_around",
+				reason: "packing_incomplete_range",
+				priority: "recommended",
+				impact: "may_recover_omitted_core",
+				command: [
+					"mm",
+					"thread",
+					"root-2",
+					"--around",
+					"first-kept",
+					"--before-posts",
+					"8",
+					"--after-posts",
+					"0",
+					"--agent",
+				],
+				threadId: "root-2",
+			},
+		]);
+	});
+
+	test("caps a trailing range and falls back to full without a boundary", () => {
+		const trailing = packedThread({
+			threadId: "trailing",
+			totalPosts: 100,
+			omittedPosts: 75,
+			skip: 75,
+		});
+		trailing.timeline = [
+			{ kind: "skip", skip: { posts: 75, after: "last-kept" } },
+		];
+		const malformed = packedThread({
+			threadId: "legacy",
+			totalPosts: 20,
+			omittedPosts: 15,
+			skip: 15,
+		});
+		malformed.timeline = [{ kind: "skip", skip: { posts: 15 } }];
+
+		expect(evidenceForThread(trailing).next[0]).toMatchObject({
+			action: "thread_around",
+			command: [
+				"mm",
+				"thread",
+				"trailing",
+				"--around",
+				"last-kept",
+				"--before-posts",
+				"0",
+				"--after-posts",
+				"50",
+				"--agent",
+			],
+		});
+		expect(evidenceForThread(malformed).next[0]).toMatchObject({
+			action: "thread_full",
+			command: ["mm", "thread", "legacy", "--full", "--agent"],
+		});
 	});
 
 	test("skips sync when usable current packet is complete despite incomplete history", () => {
@@ -1246,7 +1344,7 @@ describe("buildEvidence", () => {
 		expect(evidence.completeness.selectedThreads).toBe("not_applicable");
 	});
 
-	test("recommends exactly one thread_full and keeps the rest optional", () => {
+	test("recommends exactly one bounded hydration and keeps the rest optional", () => {
 		const evidence = buildEvidence({
 			searchCoverageComplete: true,
 			selectedThreadsComplete: false,
@@ -1283,32 +1381,33 @@ describe("buildEvidence", () => {
 			},
 			warnings: [],
 		});
-		expect(evidence.next).toEqual([
+		expect(
+			evidence.next.map(({ action, priority, threadId }) => ({
+				action,
+				priority,
+				threadId,
+			})),
+		).toEqual([
 			{
-				action: "thread_full",
-				reason: "packing_incomplete",
+				action: "thread_around",
 				priority: "recommended",
-				impact: "may_recover_omitted_core",
-				command: ["mm", "thread", "primary", "--full", "--agent"],
 				threadId: "primary",
 			},
 			{
-				action: "thread_full",
-				reason: "packing_incomplete",
+				action: "thread_around",
 				priority: "optional",
-				impact: "may_recover_omitted_core",
-				command: ["mm", "thread", "wide-skip", "--full", "--agent"],
 				threadId: "wide-skip",
 			},
 			{
-				action: "thread_full",
-				reason: "packing_incomplete",
+				action: "thread_around",
 				priority: "optional",
-				impact: "may_recover_omitted_core",
-				command: ["mm", "thread", "thin-stub", "--full", "--agent"],
 				threadId: "thin-stub",
 			},
 		]);
+		for (const step of evidence.next) {
+			expect(step.command).toContain("--around");
+			expect(step.command).not.toContain("--full");
+		}
 		expect(
 			evidence.next.filter(({ priority }) => priority === "recommended"),
 		).toHaveLength(1);
@@ -1319,7 +1418,7 @@ describe("buildEvidence", () => {
 		]);
 	});
 
-	test("orders non-primary thread_full steps by skip, omitted ratio, then id", () => {
+	test("orders non-primary hydration steps by skip, omitted ratio, then id", () => {
 		const evidence = buildEvidence({
 			searchCoverageComplete: true,
 			selectedThreadsComplete: false,

@@ -12,7 +12,9 @@
    rarely needed. Skip `presentation: "announce"` and
    `surroundRelevance: "low"` unless needed.
 
-4. Use `thread --full --agent` only for a selected incomplete thread; for
+4. For an incomplete selected thread, copy the provided bounded
+   `thread --around … --agent` argv. Use `thread --full --agent` only as an
+   explicit last resort when no range command is available; for
    `inspect_dropped`, copy the provided `thread … --agent` argv.
 
    Consult `attachments[]` before concluding from text alone: an entry with

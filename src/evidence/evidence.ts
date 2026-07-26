@@ -140,6 +140,9 @@ export interface EvidenceStatus {
 	packing: {
 		omittedPosts: number;
 		largestSkip: number;
+		/** Threads for which a bounded or full hydration step is available. */
+		recommendedHydrationThreadIds?: string[];
+		/** Legacy alias retained for V1 compatibility. */
 		recommendFullThreadIds: string[];
 	};
 	/** Present only when some searched conversation has cutoff-bounded history. */
@@ -215,7 +218,7 @@ export function buildEvidence(input: {
 	const recommendFullThreadIds = truncatedThreads.map(
 		({ threadId }) => threadId,
 	);
-	const rankedFullThreadIds = rankTruncatedThreads(
+	const rankedTruncated = rankTruncatedThreads(
 		truncatedThreads,
 		input.threads[pickPrimaryThreadIndex(input.threads)]?.threadId,
 	);
@@ -275,7 +278,7 @@ export function buildEvidence(input: {
 	const packetTrusted = canAnswerFromSelectedEvidence && currency === "current";
 	const next = collectNextActions({
 		packetTrusted,
-		rankedFullThreadIds,
+		rankedTruncated,
 		cutoffBoundedConversations,
 		staleRouted,
 		localFallback,
@@ -341,6 +344,7 @@ export function buildEvidence(input: {
 		packing: {
 			omittedPosts,
 			largestSkip,
+			recommendedHydrationThreadIds: recommendFullThreadIds,
 			recommendFullThreadIds,
 		},
 		...(history ? { history } : {}),
@@ -558,32 +562,98 @@ export function shouldRecommendFull(thread: {
 function rankTruncatedThreads(
 	threads: readonly ContextThread[],
 	primaryThreadId: string | undefined,
-): string[] {
-	return threads
-		.map((thread) => ({
+): ContextThread[] {
+	return [...threads].sort((left, right) => {
+		const leftPrimary = left.threadId === primaryThreadId ? 0 : 1;
+		const rightPrimary = right.threadId === primaryThreadId ? 0 : 1;
+		const leftRatio =
+			left.totalPosts > 0 ? left.omittedPosts / left.totalPosts : 0;
+		const rightRatio =
+			right.totalPosts > 0 ? right.omittedPosts / right.totalPosts : 0;
+		return (
+			leftPrimary - rightPrimary ||
+			largestTimelineSkip(right.timeline) -
+				largestTimelineSkip(left.timeline) ||
+			rightRatio - leftRatio ||
+			left.threadId.localeCompare(right.threadId)
+		);
+	});
+}
+
+const MAX_TARGETED_AROUND_POSTS = 50;
+
+/**
+ * Prefer one bounded omitted range over replaying the complete thread. The kept
+ * post before an internal/trailing skip is the preferred `--around` anchor, so
+ * normal chronological selection starts with the nearest omitted posts. A
+ * leading skip uses the kept post after it. The regular character budget still
+ * applies; fall back to `--full` only when no usable boundary exists.
+ */
+function targetedHydrationStep(
+	thread: ContextThread,
+	recommended: boolean,
+): EvidenceNextStep {
+	const skips = thread.timeline
+		.filter((item) => item.kind === "skip")
+		.map(({ skip }) => skip)
+		.sort((left, right) => right.posts - left.posts);
+	const skip = skips[0];
+	const priority = recommended ? "recommended" : "optional";
+	if (skip?.after) {
+		return {
+			action: "thread_around",
+			reason: "packing_incomplete_range",
+			priority,
+			impact: "may_recover_omitted_core",
+			command: [
+				"mm",
+				"thread",
+				thread.threadId,
+				"--around",
+				skip.after,
+				"--before-posts",
+				"0",
+				"--after-posts",
+				String(Math.min(skip.posts, MAX_TARGETED_AROUND_POSTS)),
+				"--agent",
+			],
 			threadId: thread.threadId,
-			primaryRank: thread.threadId === primaryThreadId ? 0 : 1,
-			largestSkip: largestTimelineSkip(thread.timeline),
-			omittedRatio:
-				thread.totalPosts > 0 ? thread.omittedPosts / thread.totalPosts : 0,
-		}))
-		.sort(
-			(left, right) =>
-				left.primaryRank - right.primaryRank ||
-				right.largestSkip - left.largestSkip ||
-				right.omittedRatio - left.omittedRatio ||
-				(left.threadId < right.threadId
-					? -1
-					: left.threadId > right.threadId
-						? 1
-						: 0),
-		)
-		.map(({ threadId }) => threadId);
+		};
+	}
+	if (skip?.before) {
+		return {
+			action: "thread_around",
+			reason: "packing_incomplete_range",
+			priority,
+			impact: "may_recover_omitted_core",
+			command: [
+				"mm",
+				"thread",
+				thread.threadId,
+				"--around",
+				skip.before,
+				"--before-posts",
+				String(Math.min(skip.posts, MAX_TARGETED_AROUND_POSTS)),
+				"--after-posts",
+				"0",
+				"--agent",
+			],
+			threadId: thread.threadId,
+		};
+	}
+	return {
+		action: "thread_full",
+		reason: "packing_incomplete",
+		priority,
+		impact: "may_recover_omitted_core",
+		command: ["mm", "thread", thread.threadId, "--full", "--agent"],
+		threadId: thread.threadId,
+	};
 }
 
 function collectNextActions(input: {
 	/** Truncated threads, best first; only the first is `recommended`. */
-	rankedFullThreadIds: readonly string[];
+	rankedTruncated: readonly ContextThread[];
 	/** Usable, complete inside the selected threads, and current. */
 	packetTrusted: boolean;
 	cutoffBoundedConversations: number;
@@ -636,15 +706,8 @@ function collectNextActions(input: {
 			postId: dataFile.postId,
 		});
 	}
-	for (const [index, threadId] of input.rankedFullThreadIds.entries()) {
-		next.push({
-			action: "thread_full",
-			reason: "packing_incomplete",
-			priority: index === 0 ? "recommended" : "optional",
-			impact: "may_recover_omitted_core",
-			command: ["mm", "thread", threadId, "--full", "--agent"],
-			threadId,
-		});
+	for (const [index, thread] of input.rankedTruncated.entries()) {
+		next.push(targetedHydrationStep(thread, index === 0));
 	}
 	const historyIncomplete =
 		input.cutoffBoundedConversations > 0 ||

@@ -205,9 +205,14 @@ thread it is most of the thread.
 
 ## `evidence.next`
 
-Execute only `priority: "recommended"` entries. At most one `thread_full` is ever
-`recommended` (the primary or widest-skip thread); further truncated threads
-appear as `optional`.
+Execute only `priority: "recommended"` entries. Packing omissions normally
+produce a `thread_around` command requesting at most 50 posts from the largest
+skipped range, rather than replaying the complete thread. The normal character
+budget and structural anchors still apply, so the result can contain fewer
+requested posts and some repeated context. At most one hydration step is
+`recommended`; further truncated threads appear as
+`optional`. `thread_full` remains only the fallback when a legacy timeline has
+no usable range boundary.
 
 Do not invent optional `sync` / `inspect_dropped` follow-ups when absent.
 `inspect_dropped`, when emitted, carries `["mm","thread",<droppedId>,"--agent"]`

@@ -307,6 +307,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
         "largestSkip": 0,
         "omittedPosts": 0,
         "recommendFullThreadIds": [],
+        "recommendedHydrationThreadIds": [],
       },
       "selection": {
         "candidateThreads": 1,

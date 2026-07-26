@@ -640,6 +640,7 @@ const evidenceStatusSchema = z.object({
 	packing: z.object({
 		omittedPosts: z.number().int().nonnegative(),
 		largestSkip: z.number().int().nonnegative(),
+		recommendedHydrationThreadIds: z.array(z.string()).optional(),
 		recommendFullThreadIds: z.array(z.string()),
 	}),
 	history: z
