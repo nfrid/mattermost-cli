@@ -28,6 +28,24 @@ The smoke database is created in an OS temporary directory and removed
 afterward. The suite does not post, react, edit, delete, download attachments,
 or write captured messages to tracked fixtures.
 
+## Packet regression harness
+
+`bun run packet-diff` runs `context` for the given subjects against two
+checkouts and compares the emitted packets byte for byte across nine
+projections — human, `--brief`, `--timeline`, `--agent`, `--json`, and their
+variants. The unit suite pins behavior it knows about; this pins the document a
+caller actually receives, against the real local index.
+
+```bash
+bun run packet-diff --baseline <git-ref> TECHSUPP-109 BTB-2113
+bun run packet-diff TECHSUPP-109            # snapshot current packets only
+```
+
+Read-only and offline: every run passes `--local`, so nothing contacts
+Mattermost and nothing is written to the index. Wall-clock fields (`observedAt`,
+`ageSeconds`, the human `observed` line) are masked; everything else must match.
+Worth running for any change to retrieval, packing, evidence, or output.
+
 ## Benchmarks
 
 ```bash

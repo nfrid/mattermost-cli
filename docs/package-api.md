@@ -42,21 +42,32 @@ contextResultV1Schema.parse({
 
 ## Source layout
 
+Layered lowest-first: a module imports from its own layer or a lower one, never
+a higher one. `src/architecture.test.ts` enforces that, plus a no-cycles rule.
+
 ```text
 src/
-  cli/           Commander program, command handlers, bin entry
-  config/        Local config load + validation
-  contracts/     V1 Zod schemas and golden fixtures
-  context/       Orchestration: prepare, freshen, hydrate, selection, filters
-  evidence/      Packing, ticket segments, evidence status summary
-  mattermost/    Read-only HTTP client (`http.ts` transport + resource methods)
-  output/        Human format, `--agent` projection, cross-thread timeline, shared labels
-  search/        Subject/probes, routing, lexical retrieval, fusion, ranking
-  store/         SQLite schema, reads/writes, FTS/trigram helpers
-  sync/          Sync, setup/doctor, file download, conversation allowlist
+  text/          Text kernel: normalization, morphology, excerpts, entity and
+                 ticket extraction, concept tokens. Imports nothing else here
   shared/        Errors, locks, limits, paths, concurrency
-  benchmark/     Retrieval benchmark + compare CLIs
+  config/        Local config load + validation
+  mattermost/    Read-only HTTP client (`http.ts` transport + resource methods)
+  store/         SQLite schema, reads/writes, FTS/trigram helpers
+  search/        Subject/probes, routing, lexical retrieval, fusion, ranking/
+  evidence/      packing/, ticket segments, signals/, status/ coverage trust
+  sync/          Sync, setup/doctor, file download, conversation allowlist
+  context/       Orchestration: prepare, retrieve, freshen, hydrate, selection
+  output/        human/ formatting, agent/ projection, cross-thread timeline
+  cli/           Commander program, command handlers, bin entry
+
+  contracts/     V1 Zod schemas and golden fixtures (leaf consumer)
+  benchmark/     Retrieval benchmark + compare CLIs (leaf consumer)
 ```
+
+Where a module sits beside a same-named folder — `signals.ts` + `signals/`,
+`packing.ts` + `packing/`, `ranking.ts` + `ranking/`, `contracts.ts` +
+`schema/`, `agent-view.ts` + `agent/` — the module is the import site and the
+folder is its internal split.
 
 Internal modules under those directories are not part of the documented package
 API.
