@@ -13,6 +13,7 @@ import type {
 } from "../context/types.ts";
 import { extractTicketKeys } from "../search/extract.ts";
 import { isMediaOnlyPost, largestTimelineSkip } from "./packing.ts";
+import { buildThreadBrief } from "./signals.ts";
 
 export type EvidenceAdequacy = "usable" | "thin" | "insufficient";
 export type EvidenceCurrency = "current" | "possibly_stale" | "local_only";
@@ -54,7 +55,8 @@ export type EvidenceNextImpact =
 	| "older_discovery_only"
 	| "may_add_dropped_pointer"
 	| "may_refresh_selected_or_discovery"
-	| "may_contradict_visible_text";
+	| "may_contradict_visible_text"
+	| "may_verify_quantitative_claim";
 
 export interface EvidenceNextStep {
 	action: EvidenceNextAction;
@@ -262,6 +264,10 @@ export function buildEvidence(input: {
 	const selectedMessages = input.threads.flatMap((thread) =>
 		thread.posts.map(({ message }) => message),
 	);
+	const unreadOutcomeAttachment = findUnreadOutcomeAttachment(
+		input.threads,
+		input.subjectTicket,
+	);
 	const canAnswerFromSelectedEvidence =
 		adequacy === "usable" && selectedThreads === "complete";
 	// One rule, one place: `next` and `verdict` both ask whether the packet is
@@ -288,9 +294,11 @@ export function buildEvidence(input: {
 		freshness: input.freshness,
 		warningKinds,
 		subject: input.subject,
-		unreadOutcomeAttachment: findUnreadOutcomeAttachment(
+		unreadOutcomeAttachment,
+		decisionDataAttachment: findDecisionDataAttachment(
 			input.threads,
 			input.subjectTicket,
+			unreadOutcomeAttachment?.postId,
 		),
 	});
 
@@ -439,6 +447,94 @@ function findUnreadOutcomeAttachment(
 	return found;
 }
 
+/**
+ * Extensions whose content is the claim rather than an illustration of it. A
+ * spreadsheet of duplicates or a log excerpt cannot be summarized from the post
+ * text that links to it — "вот дубли" plus an XLSX is one sentence and several
+ * hundred rows of evidence.
+ */
+const DATA_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
+	"csv",
+	"tsv",
+	"xlsx",
+	"xls",
+	"ods",
+	"json",
+	"ndjson",
+	"log",
+	"sql",
+	"txt",
+]);
+
+/**
+ * A data file hanging off a decision-layer post (a decision, its refinements,
+ * an open question, or the outcome window).
+ *
+ * `read_attachments` used to fire only for media-only posts, so a post that
+ * *had* text — "вот дубли, посмотри" with the spreadsheet attached — was never
+ * recommended, even though the file carried the quantitative claim the text only
+ * gestured at. Deliberately narrow: only the decision layer, only data
+ * extensions, and never a post already covered by the media-only rule.
+ */
+function findDecisionDataAttachment(
+	threads: readonly ContextThread[],
+	subjectTicket: string | undefined,
+	excludePostId: string | undefined,
+): UnreadOutcomeAttachment | undefined {
+	let best: (UnreadOutcomeAttachment & { createAt: number }) | undefined;
+	for (const thread of threads) {
+		const brief = buildThreadBrief(thread.posts, {
+			...(subjectTicket ? { subjectTicket } : {}),
+			omittedPosts: thread.omittedPosts,
+		});
+		// Built explicitly rather than via `briefRetainedPostIds`, whose fallback
+		// keeps the last packed post when a thread yielded no brief at all — that
+		// would make every thread's tail a "decision-layer" post.
+		// `outcomeWindow` is deliberately excluded: it is every packed post after
+		// the last ticket mention, which on a short thread is most of the thread.
+		// Only posts the brief actually flagged qualify.
+		const decisionLayer = new Set<string>([
+			...brief.decisionPostIds,
+			...(brief.decisions ?? []).flatMap((decision) => [
+				decision.postId,
+				...(decision.refinements ?? []).map(({ postId }) => postId),
+			]),
+			...(brief.openQuestions ?? []).map(({ postId }) => postId),
+		]);
+		for (const post of thread.posts) {
+			if (post.id === excludePostId) continue;
+			if (!decisionLayer.has(post.id)) continue;
+			const live = post.attachments.filter(
+				({ deleteAt, name }) => !deleteAt && isDataFileName(name),
+			);
+			const first = live[0];
+			if (!first) continue;
+			const candidate = {
+				threadId: thread.threadId,
+				postId: post.id,
+				fileId: first.id,
+				files: live.length,
+				createAt: post.createAt,
+			};
+			if (
+				!best ||
+				candidate.createAt > best.createAt ||
+				(candidate.createAt === best.createAt && candidate.postId < best.postId)
+			) {
+				best = candidate;
+			}
+		}
+	}
+	if (!best) return undefined;
+	const { createAt: _createAt, ...found } = best;
+	return found;
+}
+
+function isDataFileName(name: string): boolean {
+	const extension = name.split(".").pop()?.toLowerCase();
+	return Boolean(extension && DATA_FILE_EXTENSIONS.has(extension));
+}
+
 export function shouldRecommendFull(thread: {
 	omittedPosts: number;
 	totalPosts: number;
@@ -508,6 +604,7 @@ function collectNextActions(input: {
 	warningKinds: ReadonlySet<string>;
 	subject?: string;
 	unreadOutcomeAttachment?: UnreadOutcomeAttachment;
+	decisionDataAttachment?: UnreadOutcomeAttachment;
 }): EvidenceNextStep[] {
 	const next: EvidenceNextStep[] = [];
 	const attachment = input.unreadOutcomeAttachment;
@@ -523,6 +620,20 @@ function collectNextActions(input: {
 			command: ["mm", "file", attachment.fileId, "--agent"],
 			threadId: attachment.threadId,
 			postId: attachment.postId,
+		});
+	}
+	const dataFile = input.decisionDataAttachment;
+	if (dataFile) {
+		next.push({
+			action: "read_attachments",
+			reason: "data_file_on_decision_post",
+			// A media-only post is unreadable without its file; this post has text,
+			// so it is the second call to make, not the first.
+			priority: attachment ? "optional" : "recommended",
+			impact: "may_verify_quantitative_claim",
+			command: ["mm", "file", dataFile.fileId, "--agent"],
+			threadId: dataFile.threadId,
+			postId: dataFile.postId,
 		});
 	}
 	for (const [index, threadId] of input.rankedFullThreadIds.entries()) {

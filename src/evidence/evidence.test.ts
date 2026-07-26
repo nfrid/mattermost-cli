@@ -1813,3 +1813,103 @@ describe("verdict states the axes must agree with", () => {
 		expect(evidence.verdict.canAnswerFromSelectedEvidence).toBe(false);
 	});
 });
+
+describe("data-file attachments on decision-layer posts", () => {
+	const build = (posts: ContextThread["posts"]) =>
+		buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [threadWithPosts("t1", posts)],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+			subjectTicket: "BTB-2080",
+		});
+
+	const dataPost = (
+		id: string,
+		message: string,
+		createAt: number,
+		file: string,
+	): ContextThread["posts"][number] => {
+		const post = evidencePost({ id, createAt, message, files: [file] });
+		const attachment = post.attachments[0];
+		if (attachment) {
+			attachment.name = file;
+			attachment.extension = file.split(".").pop() ?? "";
+		}
+		return post;
+	};
+
+	test("recommends a spreadsheet attached to an open question", () => {
+		// BTB-2080: the post had text, so the media-only rule never fired, yet the
+		// XLSX was the only place the duplicate count could be checked.
+		const evidence = build([
+			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
+			dataPost("p2", "вот дубли, что с ними делать?", 20, "duplicates.xlsx"),
+		]);
+		const step = evidence.next.find(
+			({ action }) => action === "read_attachments",
+		);
+
+		expect(step).toMatchObject({
+			reason: "data_file_on_decision_post",
+			priority: "recommended",
+			impact: "may_verify_quantitative_claim",
+			postId: "p2",
+		});
+		expect(step?.command).toEqual(["mm", "file", "duplicates.xlsx", "--agent"]);
+	});
+
+	test("stays quiet for a data file outside the decision layer", () => {
+		const evidence = build([
+			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
+			dataPost("p2", "кстати вот выгрузка за март", 20, "march.csv"),
+			evidencePost({ id: "p3", createAt: 30, message: "спасибо" }),
+		]);
+
+		expect(
+			evidence.next.some(({ action }) => action === "read_attachments"),
+		).toBe(false);
+	});
+
+	test("stays quiet for a screenshot, which the media-only rule owns", () => {
+		const evidence = build([
+			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
+			dataPost("p2", "вот скрин, что делать?", 20, "screen.png"),
+		]);
+
+		expect(
+			evidence.next.some(
+				({ reason }) => reason === "data_file_on_decision_post",
+			),
+		).toBe(false);
+	});
+
+	test("a media-only outcome post keeps priority over a data file", () => {
+		const evidence = build([
+			evidencePost({ id: "p1", createAt: 10, message: "BTB-2080 импорт" }),
+			dataPost("p2", "вот дубли, что делать?", 20, "duplicates.csv"),
+			evidencePost({ id: "p3", createAt: 30, message: "", files: ["shot"] }),
+		]);
+		const steps = evidence.next.filter(
+			({ action }) => action === "read_attachments",
+		);
+
+		expect(steps[0]).toMatchObject({
+			reason: "media_only_outcome_post",
+			priority: "recommended",
+		});
+		expect(steps[1]).toMatchObject({
+			reason: "data_file_on_decision_post",
+			priority: "optional",
+		});
+	});
+});

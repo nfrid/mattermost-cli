@@ -593,6 +593,7 @@ const evidenceStatusSchema = z.object({
 				"may_add_dropped_pointer",
 				"may_refresh_selected_or_discovery",
 				"may_contradict_visible_text",
+				"may_verify_quantitative_claim",
 			]),
 			/** Argv segments only — never a joined shell string. */
 			command: z.array(z.string()).optional(),
