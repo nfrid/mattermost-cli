@@ -238,11 +238,17 @@ export function createProgram(
 	const thread = program
 		.command("thread")
 		.description("Retrieve one configured Mattermost thread.")
-		.argument("<target>", "post ID or permalink")
+		.argument(
+			"<target>",
+			"post ID or permalink (thread root or any post in it)",
+		)
 		.option("--local", "perform no network calls")
 		.option("--fresh", "force a remote thread refresh when possible")
 		.option("--full", "return the complete selected thread")
-		.option("--around <post-id>", "prioritize a neighborhood around one post")
+		.option(
+			"--around <post-id>",
+			"prioritize a neighborhood around one post (requires <target>; not a substitute for it)",
+		)
 		.option(
 			"--before-posts <n>",
 			"posts before --around (default: match neighborhood radius; max 50)",

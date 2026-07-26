@@ -147,4 +147,73 @@ describe("followRecommendedSteps", () => {
 			),
 		).toBe(true);
 	});
+
+	test("re-runs context for recommended review_candidates max-threads bump", async () => {
+		const next: EvidenceNextStep[] = [
+			{
+				action: "review_candidates",
+				reason: "subject_matched_budget_drops",
+				priority: "recommended",
+				impact: "may_add_dropped_pointer",
+				command: ["mm", "context", "BTB-1", "--max-threads", "5", "--agent"],
+			},
+		];
+		const expanded = emptyContext();
+		expanded.budget = { ...expanded.budget, maxThreads: 5 };
+		expanded.selection = {
+			...expanded.selection,
+			returnedThreads: 5,
+			droppedByBudgetSubjectMatched: 0,
+		};
+
+		const { followLog, context } = await followRecommendedSteps({
+			context: emptyContext(next),
+			config: {
+				databasePath: ":memory:",
+				concepts: {},
+			} as never,
+			dependencies: { store: { close() {} } as never },
+			rerunContext: async (maxThreads) => {
+				expect(maxThreads).toBe(5);
+				return expanded;
+			},
+		});
+
+		expect(followLog).toEqual([
+			{
+				command: ["mm", "context", "BTB-1", "--max-threads", "5", "--agent"],
+				action: "review_candidates",
+				status: "ok",
+			},
+		]);
+		expect(context.budget.maxThreads).toBe(5);
+		expect(context.followLog).toEqual(followLog);
+	});
+
+	test("skips review_candidates when no rerun hook is provided", async () => {
+		const next: EvidenceNextStep[] = [
+			{
+				action: "review_candidates",
+				reason: "subject_matched_budget_drops",
+				priority: "recommended",
+				impact: "may_add_dropped_pointer",
+				command: ["mm", "context", "BTB-1", "--max-threads", "5", "--agent"],
+			},
+		];
+		const { followLog } = await followRecommendedSteps({
+			context: emptyContext(next),
+			config: {
+				databasePath: ":memory:",
+				concepts: {},
+			} as never,
+			dependencies: { store: { close() {} } as never },
+		});
+		expect(followLog).toEqual([
+			{
+				command: ["mm", "context", "BTB-1", "--max-threads", "5", "--agent"],
+				action: "review_candidates",
+				status: "skipped_disallowed",
+			},
+		]);
+	});
 });

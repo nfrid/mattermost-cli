@@ -776,8 +776,14 @@ describe("context pipeline", () => {
 		expect(result.threads[0]?.reasons).toContain("all_terms_in_thread");
 		expect(result.evidence.currency).toBe("current");
 		expect(result.evidence.completeness.discovery).toBe("possibly_stale");
-		expect(result.evidence.next).not.toContainEqual(
-			expect.objectContaining({ action: "fresh_or_remote" }),
+		expect(result.evidence.verdict.mayHaveMissedReason).toBe("stale_discovery");
+		expect(result.evidence.verdict.noActionAvailable).toBeUndefined();
+		expect(result.evidence.next).toContainEqual(
+			expect.objectContaining({
+				action: "fresh_or_remote",
+				reason: "stale_discovery",
+				priority: "optional",
+			}),
 		);
 		expect(client.threadRequests).toEqual([ROOT]);
 		store.close();

@@ -358,7 +358,94 @@ describe("buildEvidence", () => {
 		});
 		expect(evidence.currency).toBe("current");
 		expect(evidence.completeness.discovery).toBe("possibly_stale");
-		expect(evidence.next).toEqual([]);
+		expect(evidence.verdict.mayHaveMissedReason).toBe("stale_discovery");
+		expect(evidence.verdict.noActionAvailable).toBeUndefined();
+		expect(evidence.next).toEqual([
+			expect.objectContaining({
+				action: "fresh_or_remote",
+				reason: "stale_discovery",
+				priority: "optional",
+				impact: "may_refresh_selected_or_discovery",
+			}),
+		]);
+		// Without a subject there is still a step shape, but no argv — agents
+		// still see the lever instead of an empty next + noActionAvailable.
+	});
+
+	test("stale discovery with a subject emits concrete --fresh argv", () => {
+		const evidence = buildEvidence({
+			searchCoverageComplete: false,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [
+				{
+					alias: "payments",
+					conversationId: "channel-1",
+					kind: "channel",
+					observedAt: 1_000,
+					lastSuccessAt: 1,
+					ageSeconds: 999,
+					stale: true,
+					coverageComplete: true,
+					oldestCoveredAt: null,
+				},
+			],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				{
+					threadId: "t1",
+					selectionStrategy: ["full_thread"],
+					totalPosts: 1,
+					returnedPosts: 1,
+					omittedPosts: 0,
+					returnedAttachments: 0,
+					totalOmittedAttachments: 0,
+					omittedAttachments: [],
+					unreportedOmittedAttachments: 0,
+					budget: {
+						measurement: "unicode_code_points_in_rendered_post",
+						limit: 6_000,
+						used: 10,
+					},
+					posts: [],
+					timeline: [],
+					conversationId: "channel-1",
+					conversationAlias: "payments",
+					conversationKind: "channel",
+					reasons: ["ticket_in_root"],
+					matchingPostIds: ["t1"],
+					latestActivityAt: 1,
+					link: "https://example.test/t1",
+				},
+			],
+			remoteSearch: {
+				requested: false,
+				performed: false,
+				reason: null,
+				queries: [],
+				candidateThreads: 0,
+				failures: 0,
+			},
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+			selectedEvidenceCurrent: true,
+			subject: "BTB-1",
+		});
+		expect(evidence.verdict.mayHaveMissedReason).toBe("stale_discovery");
+		expect(evidence.verdict.noActionAvailable).toBeUndefined();
+		expect(evidence.next).toEqual([
+			{
+				action: "fresh_or_remote",
+				reason: "stale_discovery",
+				priority: "optional",
+				impact: "may_refresh_selected_or_discovery",
+				command: ["mm", "context", "BTB-1", "--fresh", "--agent"],
+			},
+		]);
 	});
 
 	test("emits orthogonal next actions for packing and incomplete history", () => {

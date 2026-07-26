@@ -96,20 +96,21 @@ export async function executeCommand(
 					fullPosts: commandOptions.fullPosts,
 				});
 				const contextConfig = applyBudgetOverrides(config, commandOptions);
+				const contextInput = {
+					...retrievalInput(commandOptions),
+					fresh: commandOptions.fresh,
+					remoteSearch: commandOptions.remoteSearch,
+					short: commandOptions.short,
+					navigate: commandOptions.navigate,
+					...(brief ? { brief: true } : {}),
+					...(commandOptions.fullPosts ? { fullPosts: true } : {}),
+					timeline: commandOptions.timeline,
+					signals: commandOptions.signals,
+					permalinks: commandOptions.permalink,
+				};
 				const result = await contextCommand(
 					contextConfig,
-					{
-						...retrievalInput(commandOptions),
-						fresh: commandOptions.fresh,
-						remoteSearch: commandOptions.remoteSearch,
-						short: commandOptions.short,
-						navigate: commandOptions.navigate,
-						...(brief ? { brief: true } : {}),
-						...(commandOptions.fullPosts ? { fullPosts: true } : {}),
-						timeline: commandOptions.timeline,
-						signals: commandOptions.signals,
-						permalinks: commandOptions.permalink,
-					},
+					contextInput,
 					dependencies,
 				);
 				if (
@@ -126,6 +127,23 @@ export async function executeCommand(
 					client: commandOptions.local
 						? undefined
 						: createFollowClient(contextConfig, dependencies),
+					rerunContext: async (maxThreads) => {
+						const bumpedConfig = applyBudgetOverrides(config, {
+							maxThreads,
+						});
+						const rerun = await contextCommand(
+							bumpedConfig,
+							contextInput,
+							dependencies,
+						);
+						if (!rerun.success || !isContextData(rerun.data)) {
+							throw new ConfigError(
+								"--follow-recommended could not re-run context for review_candidates.",
+								"follow_review_candidates_failed",
+							);
+						}
+						return rerun.data;
+					},
 				});
 				return commandSuccess(
 					"context",
@@ -383,6 +401,65 @@ export function emitResult(
 ): void {
 	const { text, stream } = renderResult(result, json, pretty, agent);
 	(stream === "stdout" ? stdout : stderr).write(text);
+	if (agent && result.success) {
+		const hint = agentStderrSummary(result);
+		if (hint) stderr.write(`${styles.hint(hint)}\n`);
+	}
+}
+
+/**
+ * One-line stderr orientation for `--agent` so mayMiss / noAction / recommended
+ * are visible without parsing the JSON packet.
+ */
+export function agentStderrSummary(
+	result: CommandResult<unknown>,
+): string | undefined {
+	if (!result.success || typeof result.data !== "object" || !result.data) {
+		return undefined;
+	}
+	const data = result.data as Record<string, unknown>;
+	const evidence =
+		typeof data.evidence === "object" && data.evidence !== null
+			? (data.evidence as Record<string, unknown>)
+			: undefined;
+	if (!evidence) return undefined;
+	const verdict =
+		typeof evidence.verdict === "object" && evidence.verdict !== null
+			? (evidence.verdict as Record<string, unknown>)
+			: undefined;
+	if (!verdict) return undefined;
+	const next = Array.isArray(evidence.next) ? evidence.next : [];
+	const recommended = next.filter(
+		(step) =>
+			typeof step === "object" &&
+			step !== null &&
+			(step as { priority?: string }).priority === "recommended",
+	).length;
+	const parts = [
+		verdict.canAnswerFromSelectedEvidence === true
+			? "canAnswer"
+			: "cannotAnswer",
+		typeof verdict.mayHaveMissedReason === "string"
+			? `mayMiss=${verdict.mayHaveMissedReason}`
+			: verdict.mayHaveMissedOtherThreads === true
+				? "mayMiss"
+				: undefined,
+		verdict.selectedEvidenceMayBeStale === true ? "staleSelected" : undefined,
+		verdict.noActionAvailable === true
+			? typeof verdict.noActionReason === "string"
+				? `noActionAvailable (${verdict.noActionReason})`
+				: "noActionAvailable"
+			: undefined,
+		recommended > 0
+			? `recommended=${recommended}`
+			: verdict.recommendedActionRequired === true
+				? "recommendedActionRequired"
+				: undefined,
+		Array.isArray(data.followLog)
+			? `followLog=${data.followLog.length}`
+			: undefined,
+	].filter((part): part is string => Boolean(part));
+	return parts.length ? `agent: ${parts.join(" · ")}` : undefined;
 }
 
 export function inferCommand(args: string[]): string {

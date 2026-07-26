@@ -51,8 +51,6 @@ describe("agent projection", () => {
 					mayHaveMissedReason: "local_discovery",
 					selectedEvidenceMayBeStale: true,
 					recommendedActionRequired: false,
-					noActionAvailable: true,
-					noActionReason: expect.stringMatching(/local index|refresh/i),
 				},
 				completeness: {
 					selectedThreads: "complete",
@@ -60,6 +58,13 @@ describe("agent projection", () => {
 					indexHistory: "full",
 					discovery: "local_only",
 				},
+				next: [
+					expect.objectContaining({
+						action: "fresh_or_remote",
+						reason: "local_discovery",
+						priority: "optional",
+					}),
+				],
 				packing: expect.objectContaining({
 					omittedPosts: 0,
 					recommendFullThreadIds: [],

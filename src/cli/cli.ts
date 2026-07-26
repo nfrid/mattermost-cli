@@ -1,11 +1,14 @@
 import chalk from "chalk";
 import { CommanderError } from "commander";
+import { styles } from "../output/styles.ts";
 import {
 	type CommandResult,
 	commandFailure,
 	resultExitCode,
 } from "../shared/command-result.ts";
+import { ConfigError } from "../shared/errors.ts";
 import {
+	agentStderrSummary,
 	emitResult,
 	executeCommand,
 	inferCommand,
@@ -55,6 +58,10 @@ async function emitOrWrite(
 			? `${JSON.stringify({ out, bytes, ...receipt })}\n`
 			: `Wrote ${bytes} bytes to ${out}${receiptSuffix(receipt)}\n`,
 	);
+	if (options.agent) {
+		const hint = agentStderrSummary(result);
+		if (hint) stderr.write(`${styles.hint(hint)}\n`);
+	}
 }
 
 /**
@@ -71,6 +78,8 @@ interface OutReceipt {
 	recommendedNext?: number;
 	canAnswer?: boolean;
 	recommendedActionRequired?: boolean;
+	mayMissReason?: string;
+	noActionAvailable?: true;
 	blockedPermalinks?: number;
 	subjectMatchedThreadsDropped?: number;
 }
@@ -126,6 +135,12 @@ function outReceipt(result: CommandResult<unknown>): OutReceipt {
 		...(typeof verdict?.recommendedActionRequired === "boolean"
 			? { recommendedActionRequired: verdict.recommendedActionRequired }
 			: {}),
+		...(typeof verdict?.mayHaveMissedReason === "string"
+			? { mayMissReason: verdict.mayHaveMissedReason }
+			: {}),
+		...(verdict?.noActionAvailable === true
+			? { noActionAvailable: true as const }
+			: {}),
 		...(blockedPermalinks > 0 ? { blockedPermalinks } : {}),
 		...(typeof selection?.droppedByBudgetSubjectMatched === "number"
 			? {
@@ -151,6 +166,8 @@ function receiptSuffix(receipt: OutReceipt): string {
 		receipt.recommendedActionRequired
 			? "recommended action required"
 			: undefined,
+		receipt.mayMissReason ? `may miss (${receipt.mayMissReason})` : undefined,
+		receipt.noActionAvailable ? "no action available" : undefined,
 		receipt.blockedPermalinks
 			? `${receipt.blockedPermalinks} blocked permalink(s)`
 			: undefined,
@@ -217,7 +234,11 @@ export async function runCli(
 		}
 
 		if (!emitted) {
-			const result = commandFailure(activeCommand, error, [
+			const enriched =
+				error instanceof CommanderError
+					? enrichCommanderError(error, args)
+					: error;
+			const result = commandFailure(activeCommand, enriched, [
 				context.env?.MATTERMOST_TOKEN,
 			]);
 			emitResult(result, json, pretty, agent, stdout, stderr);
@@ -226,6 +247,25 @@ export async function runCli(
 
 		return 1;
 	}
+}
+
+/**
+ * Agents often invent `mm thread --around <postId>` from a next-step flag name.
+ * `--around` is a neighborhood modifier and still needs `<target>`.
+ */
+function enrichCommanderError(error: CommanderError, args: string[]): Error {
+	if (
+		error.code === "commander.missingArgument" &&
+		/target/i.test(error.message) &&
+		args.includes("thread") &&
+		args.includes("--around")
+	) {
+		return new ConfigError(
+			"Thread target is required. Use `mm thread <thread-or-post-id> --around <post-id>` — `--around` alone is not a target.",
+			"invalid_around_options",
+		);
+	}
+	return error;
 }
 
 if (import.meta.main) {

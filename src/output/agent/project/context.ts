@@ -359,7 +359,9 @@ export function projectThread(
 	const deltaNext = data.retrieval
 		? evidence.next.filter(
 				(step) =>
-					step.action !== "thread_around" && step.action !== "thread_full",
+					// Gap deltas only keep attachment follow-ups; discovery/budget/hydration
+					// levers belong on a full context/thread packet, not a window recovery.
+					step.action === "read_attachments",
 			)
 		: [];
 	const incompleteGapPage =

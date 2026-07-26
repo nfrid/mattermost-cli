@@ -42,7 +42,6 @@ export interface FollowRecommendedResult {
 const DISALLOWED_ACTIONS = new Set<EvidenceNextStep["action"]>([
 	"sync",
 	"fresh_or_remote",
-	"review_candidates",
 ]);
 
 /**
@@ -51,6 +50,10 @@ const DISALLOWED_ACTIONS = new Set<EvidenceNextStep["action"]>([
  * no persistent session. External-reader / OCR steps are logged and skipped so
  * later recommended steps (gap recovery, etc.) still run. Always sets
  * `followLog` (possibly empty) so agents can see the flag took effect.
+ *
+ * `review_candidates` with a `--max-threads` bump re-runs context once via
+ * `rerunContext` when provided; without a rerun hook it stays
+ * `skipped_disallowed` (CLI always supplies the hook).
  */
 export async function followRecommendedSteps(input: {
 	context: ContextResult;
@@ -60,6 +63,11 @@ export async function followRecommendedSteps(input: {
 	dependencies?: ContextDependencies;
 	/** Test/injection hook; defaults to {@link downloadMattermostFile}. */
 	downloadAttachment?: typeof downloadMattermostFile;
+	/**
+	 * Re-run context with a bumped `--max-threads` for `review_candidates`.
+	 * Required for that action to succeed under `--follow-recommended`.
+	 */
+	rerunContext?: (maxThreads: number) => Promise<ContextResult>;
 }): Promise<FollowRecommendedResult> {
 	const followLog: FollowLogEntry[] = [];
 	let context = input.context;
@@ -83,7 +91,14 @@ export async function followRecommendedSteps(input: {
 		}));
 	const ownsStore = !input.dependencies?.store;
 	try {
-		for (const step of recommended) {
+		// Budget bumps first: a later re-run would wipe thread/attachment merges
+		// from earlier steps in the same follow pass.
+		const ordered = [
+			...recommended.filter(({ action }) => action === "review_candidates"),
+			...recommended.filter(({ action }) => action !== "review_candidates"),
+		];
+		let ranReviewCandidates = false;
+		for (const step of ordered) {
 			if (DISALLOWED_ACTIONS.has(step.action)) {
 				followLog.push({
 					command: step.command ?? [],
@@ -102,6 +117,40 @@ export async function followRecommendedSteps(input: {
 			}
 
 			try {
+				if (step.action === "review_candidates") {
+					if (ranReviewCandidates) {
+						followLog.push({
+							command: step.command,
+							action: step.action,
+							status: "skipped_disallowed",
+						});
+						continue;
+					}
+					const maxThreads = parseMaxThreadsArgv(step.command);
+					if (maxThreads === undefined || !input.rerunContext) {
+						followLog.push({
+							command: step.command,
+							action: step.action,
+							status: "skipped_disallowed",
+						});
+						continue;
+					}
+					const priorArtifacts = context.followedAttachments;
+					context = await input.rerunContext(maxThreads);
+					if (priorArtifacts?.length) {
+						context = {
+							...context,
+							followedAttachments: priorArtifacts,
+						};
+					}
+					ranReviewCandidates = true;
+					followLog.push({
+						command: step.command,
+						action: step.action,
+						status: "ok",
+					});
+					continue;
+				}
 				if (
 					step.action === "thread_around" ||
 					step.action === "thread_full" ||
@@ -414,6 +463,20 @@ function parseThreadArgv(
 		}
 	}
 	return { target, around, beforePosts, afterPosts, full };
+}
+
+/** Parse `--max-threads N` from a `review_candidates` context argv. */
+function parseMaxThreadsArgv(command: readonly string[]): number | undefined {
+	// ["mm", "context", "<subject>", "--max-threads", "N", "--agent", ...]
+	if (command[0] !== "mm" || command[1] !== "context") return undefined;
+	for (let index = 2; index < command.length; index += 1) {
+		if (command[index] === "--max-threads") {
+			const value = Number(command[index + 1]);
+			if (Number.isInteger(value) && value >= 1 && value <= 20) return value;
+			return undefined;
+		}
+	}
+	return undefined;
 }
 
 function rebuildEvidence(

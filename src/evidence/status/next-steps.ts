@@ -15,6 +15,7 @@ import type {
 	DroppedCandidate,
 	EvidenceAdequacy,
 	EvidenceCurrency,
+	EvidenceDiscoveryCurrency,
 	EvidenceNextStep,
 	EvidenceSelectionCompleteness,
 	FreshnessEvidence,
@@ -229,6 +230,8 @@ export function collectNextActions(input: {
 	remoteFailures: number;
 	remoteSearchSuccessful: boolean;
 	selectedEvidenceCurrent: boolean;
+	/** Discovery currency from {@link buildEvidence}; drives stale/local refresh next. */
+	discovery: EvidenceDiscoveryCurrency;
 	adequacy: EvidenceAdequacy;
 	currency: EvidenceCurrency;
 	selectedThreadsComplete: boolean;
@@ -395,9 +398,15 @@ export function collectNextActions(input: {
 				: {}),
 		});
 	}
+	// Always offer `--fresh` when discovery is stale/local-only — even if selected
+	// threads look current — so agents never hit stale_discovery + empty next +
+	// noActionAvailable. Follow leaves this optional step alone; agents run it.
+	const discoveryNeedsRefresh =
+		input.discovery === "possibly_stale" || input.discovery === "local_only";
 	if (
 		input.localFallback ||
 		input.remoteFailures > 0 ||
+		discoveryNeedsRefresh ||
 		(input.staleRouted > 0 &&
 			(input.localMode ||
 				(!input.remoteSearchSuccessful &&
@@ -409,7 +418,11 @@ export function collectNextActions(input: {
 				? "local_index_fallback"
 				: input.remoteFailures > 0
 					? "remote_search_failed"
-					: "stale_local_index",
+					: input.discovery === "local_only"
+						? "local_discovery"
+						: input.discovery === "possibly_stale"
+							? "stale_discovery"
+							: "stale_local_index",
 			priority: "optional",
 			impact: "may_refresh_selected_or_discovery",
 			...(input.subject

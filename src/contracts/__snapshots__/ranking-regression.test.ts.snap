@@ -305,7 +305,21 @@ exports[`ranking regression snapshots locks populated deterministic search and c
         "selection": "complete",
       },
       "currency": "local_only",
-      "next": [],
+      "next": [
+        {
+          "action": "fresh_or_remote",
+          "command": [
+            "mm",
+            "context",
+            "payment evidence",
+            "--fresh",
+            "--agent",
+          ],
+          "impact": "may_refresh_selected_or_discovery",
+          "priority": "optional",
+          "reason": "local_discovery",
+        },
+      ],
       "packing": {
         "largestSkip": 0,
         "omittedPosts": 0,
@@ -325,8 +339,6 @@ exports[`ranking regression snapshots locks populated deterministic search and c
         "canAnswerFromSelectedEvidence": true,
         "mayHaveMissedOtherThreads": true,
         "mayHaveMissedReason": "local_discovery",
-        "noActionAvailable": true,
-        "noActionReason": "discovery used the local index only; no refresh step is available for this packet",
         "recommendedActionRequired": false,
         "selectedEvidenceMayBeStale": true,
       },

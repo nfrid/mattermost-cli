@@ -112,6 +112,15 @@ export async function getMattermostThread(
 			full: input.full,
 			windowOnly: input.windowOnly,
 		});
+		if (input.around) {
+			const aroundFound = hydrated.posts.some(({ id }) => id === input.around);
+			if (!aroundFound) {
+				throw new ConfigError(
+					`--around post ${input.around} was not found in thread ${rootPostId}. Use the thread root (or any post in it) as <target>, and a post id from that same thread for --around.`,
+					"around_post_not_found",
+				);
+			}
+		}
 		const retrieval = input.windowOnly
 			? gapWindowRetrieval(
 					rootPostId,

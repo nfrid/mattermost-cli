@@ -191,6 +191,7 @@ export function buildEvidence(input: {
 		remoteSearchSuccessful:
 			input.remoteSearch.performed && input.remoteSearch.failures === 0,
 		selectedEvidenceCurrent,
+		discovery,
 		adequacy,
 		currency,
 		selectedThreadsComplete: selectedThreads === "complete",

@@ -179,7 +179,11 @@ always adds `followLog[]` (argv + status; empty when nothing ran) plus optional
 `followedAttachments[]` (inspect text also merges onto matching thread
 attachments) and `followExhausted: true` when no further recommended next
 remains. External-reader / failed-OCR inspects are skipped and
-remaining recommended steps continue; never runs broad `sync`. Skip markers
+remaining recommended steps continue; never runs broad `sync` or optional
+`fresh_or_remote` (agents should run `--fresh` when `stale_discovery` is lit).
+Subject-matched `review_candidates` with a higher `--max-threads` **is**
+executed once under follow. `--agent` writes a one-line stderr verdict summary
+including `mayMissReason` / `noActionAvailable` when set. Skip markers
 may additively carry `authors` / `fromAt` / `toAt`. Brief decisions may carry
 `supportingPostIds` / `supportingExcerpt` and soft `offlineOrVoiceApproval`.
 Brief may also carry `lateAcknowledgement` (explicit late-thread ack, not
@@ -192,6 +196,10 @@ them as no_match. Request-scoped `--max-threads` / `--max-characters` /
 `--per-thread-characters` override config budgets without changing defaults
 when omitted. Subject-matched budget drops always recommend a `review_candidates` re-run with
 a higher `--max-threads`; a non-thin drop also recommends `inspect_dropped`.
+When discovery is `possibly_stale` or `local_only`, `evidence.next` always
+includes an optional `fresh_or_remote` step (with `--fresh` argv when a subject
+is known) so `stale_discovery` never dead-ends as empty `next` +
+`noActionAvailable`.
 
 ## Schemas and fixtures
 

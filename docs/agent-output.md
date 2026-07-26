@@ -49,15 +49,20 @@ rather than one repeated entry per role. `--short` conflicts with `--navigate`.
 
 **`--follow-recommended`** (requires `--agent`) executes each
 `evidence.next` step with `priority: "recommended"` once — thread gap recovery,
-inspect_dropped, and `read_attachments` (including media-only images that may
-need OCR). Broad `sync` is skipped. Steps that still need an external reader
-after inspect are logged as `skipped_external_reader` and the chain
-**continues** with remaining recommended steps. Results merge into the same
-context packet with `followLog[]` (always present when the flag ran — empty when
-there was nothing to do), optional `followExhausted: true` when no further
-recommended next remains, and optional `followedAttachments[]` (inspect/OCR text
-is merged onto matching `threads[].attachments[].inspection` when present).
-There is no persistent session store.
+inspect_dropped, `read_attachments` (including media-only images that may need
+OCR), and a subject-matched `review_candidates` re-run that bumps
+`--max-threads`. Broad `sync` and optional `fresh_or_remote` are skipped (run
+`--fresh` yourself when `stale_discovery` / `local_discovery` is the remaining
+lever). Steps that still need an external reader after inspect are logged as
+`skipped_external_reader` and the chain **continues** with remaining recommended
+steps. Results merge into the same context packet with `followLog[]` (always
+present when the flag ran — empty when there was nothing to do), optional
+`followExhausted: true` when no further recommended next remains, and optional
+`followedAttachments[]` (inspect/OCR text is merged onto matching
+`threads[].attachments[].inspection` when present). There is no persistent
+session store. `--agent` also prints a one-line stderr summary of the verdict
+(`canAnswer` / `mayMiss=…` / `noActionAvailable` / `recommended=N`) so those
+axes are visible without parsing the JSON.
 
 Context agent packets also emit `hints.readOrder` — a stable list of fields to
 read first. Orient on `researchSummary.primaryThreadId`; agent `threads[].role`

@@ -92,7 +92,11 @@ export function formatContext(data: ContextResult): string {
 						formatField(
 							"other threads",
 							data.evidence.verdict.mayHaveMissedOtherThreads
-								? styles.warning("may have been missed")
+								? styles.warning(
+										data.evidence.verdict.mayHaveMissedReason
+											? `may have been missed (${data.evidence.verdict.mayHaveMissedReason})`
+											: "may have been missed",
+									)
 								: styles.hint("fully examined"),
 						),
 						formatField(
@@ -105,7 +109,13 @@ export function formatContext(data: ContextResult): string {
 							"recommended action",
 							data.evidence.verdict.recommendedActionRequired
 								? styles.warning("required")
-								: styles.hint("none"),
+								: data.evidence.verdict.noActionAvailable
+									? styles.warning(
+											data.evidence.verdict.noActionReason
+												? `no action (${data.evidence.verdict.noActionReason})`
+												: "no action available",
+										)
+									: styles.hint("none"),
 						),
 					]),
 				]

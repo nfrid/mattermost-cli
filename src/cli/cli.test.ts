@@ -274,7 +274,8 @@ describe("CLI output", () => {
 			command: "context",
 			success: true,
 		});
-		expect(stderr.text).toBe("");
+		// One-line orientation; the packet itself stays on disk / stdout receipt.
+		expect(stderr.text).toMatch(/agent:.*(canAnswer|cannotAnswer)/);
 	});
 
 	test("keeps a failed retrieval on the stream instead of writing --out", async () => {
@@ -587,6 +588,24 @@ describe("CLI output", () => {
 		expect(await plain.exited).toBe(1);
 		expect(plainError).not.toContain("\u001b[");
 		expect(plainError).toContain("Error [cli/commander.unknownCommand]");
+	});
+
+	test("rejects mm thread --around <id> without a target", async () => {
+		const projectRoot = await projectWithConfig();
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await runCli(
+			["thread", "--around", "bbbbbbbbbbbbbbbbbbbbbbbbbb", "--agent"],
+			{ projectRoot, env: {}, stdout, stderr },
+		);
+		expect(exitCode).toBe(1);
+		const document = JSON.parse(stdout.text);
+		expect(document).toMatchObject({
+			success: false,
+			error: { kind: "invalid_around_options" },
+		});
+		expect(String(document.command)).toMatch(/^thread/);
+		expect(document.error.message).toMatch(/--around.*not a target/i);
 	});
 });
 
