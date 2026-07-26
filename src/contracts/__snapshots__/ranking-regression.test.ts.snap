@@ -311,10 +311,17 @@ exports[`ranking regression snapshots locks populated deterministic search and c
       "selection": {
         "candidateThreads": 1,
         "droppedByBudget": 0,
+        "droppedByBudgetSubjectMatched": 0,
         "droppedCandidates": [],
         "droppedNoMatch": 0,
         "droppedThin": 0,
         "returnedThreads": 1,
+      },
+      "verdict": {
+        "canAnswerFromSelectedEvidence": true,
+        "mayHaveMissedOtherThreads": true,
+        "recommendedActionRequired": false,
+        "selectedEvidenceMayBeStale": true,
       },
     },
     "explicitChannelPolicy": "restrict",
@@ -376,6 +383,7 @@ exports[`ranking regression snapshots locks populated deterministic search and c
     "selection": {
       "candidateThreads": 1,
       "droppedByBudget": 0,
+      "droppedByBudgetSubjectMatched": 0,
       "droppedCandidates": [],
       "droppedNoMatch": 0,
       "droppedThin": 0,

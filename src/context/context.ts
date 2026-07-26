@@ -34,6 +34,7 @@ import { searchRemoteCandidates } from "./remote-search.ts";
 import { withResources } from "./resources.ts";
 import {
 	buildDroppedCandidates,
+	countSubjectMatchedBudgetDrops,
 	orderCandidatesForThinReserve,
 } from "./selection.ts";
 import { createThreadSearcher } from "./thread-search.ts";
@@ -456,6 +457,10 @@ export async function getMattermostContext(
 				!selectedIds.has(candidate.threadId) &&
 				candidate.reasons.includes("thin_thread"),
 		).length;
+		selection.droppedByBudgetSubjectMatched = countSubjectMatchedBudgetDrops({
+			candidates: seenList,
+			budgetDroppedIds: packer.budgetDroppedIds,
+		});
 		selection.droppedCandidates = buildDroppedCandidates({
 			candidates: seenList,
 			selectedIds,

@@ -265,11 +265,19 @@ export interface AgentThread {
 	url: string;
 	omitted: AgentOmission;
 	/**
-	 * Packed messages in this thread. `posts[]` entries are author blocks, not
-	 * messages, so `posts.length` is always smaller — compare truncation against
-	 * this number.
+	 * Packed messages in this thread — what this packet actually returned, after
+	 * the ticket window and the packing budget. `posts[]` entries are author
+	 * blocks, not messages, so `posts.length` is always smaller.
 	 */
 	messageCount: number;
+	/**
+	 * Messages this packet's view of the thread holds, which is what
+	 * `mm thread --full` would return — though on a local-only or cutoff-bounded
+	 * run the index may itself be short of the server. `totalPosts > messageCount`
+	 * is expected packing, not a discrepancy: the difference is exactly
+	 * `omitted.posts`.
+	 */
+	totalPosts: number;
 	/**
 	 * 1-based retrieval rank. Threads keep ranking order, so `rank: 1` is not
 	 * necessarily `role: "primary"` — `role` is picked for substance.

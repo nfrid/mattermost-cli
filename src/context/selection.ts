@@ -161,6 +161,54 @@ export function buildDroppedCandidates(input: {
 	return dropped.slice(0, limit);
 }
 
+/**
+ * Reasons that make an unexamined candidate a *plausible* missing answer rather
+ * than ranking tail: it names the subject ticket, or it carries the query as a
+ * phrase or structured entity. Morphology, concepts, transliteration and typo
+ * rescue are all absent — those routinely surface a thread that merely shares
+ * vocabulary, and counting them made every probed packet look as though real
+ * evidence had been left unexamined.
+ */
+const SUBJECT_EVIDENCE_REASONS: ReadonlySet<RankingReason> =
+	new Set<RankingReason>([
+		"direct_post",
+		"explicit_ticket_relationship",
+		"ticket_in_root",
+		"ticket_in_reply",
+		"structured_entity_match",
+		"subject_in_root",
+		"exact_phrase",
+		"exact_phrase_in_root",
+		"exact_phrase_in_reply",
+		"all_terms_in_thread",
+		// `remote_search` is deliberately absent: a remote candidate carries no
+		// local lexical reason of its own, so counting it would mark every
+		// stale-index request as having missed something regardless of content.
+	]);
+
+/**
+ * Candidates the budget stopped the packer from examining that nonetheless
+ * carried subject-level evidence. `droppedByBudget` alone conflates these with
+ * the long weak tail, which is why a packet with 173 unexamined candidates
+ * could not say whether any of them mattered.
+ */
+export function countSubjectMatchedBudgetDrops(input: {
+	candidates: readonly ThreadCandidate[];
+	/** Ids the packer actually dropped for lack of room — never re-derived. */
+	budgetDroppedIds: ReadonlySet<string>;
+}): number {
+	let count = 0;
+	for (const candidate of input.candidates) {
+		if (!input.budgetDroppedIds.has(candidate.threadId)) continue;
+		if (
+			candidate.reasons.some((reason) => SUBJECT_EVIDENCE_REASONS.has(reason))
+		) {
+			count += 1;
+		}
+	}
+	return count;
+}
+
 /** Thin or ticket-related drops worth an `inspect_dropped` next action. */
 export function isActionableDroppedCandidate(
 	candidate: Pick<DroppedCandidate, "dropReason" | "reasons">,

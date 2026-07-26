@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { MattermostApiError } from "../mattermost/client.ts";
+import { projectAgentResult } from "../output/agent-view.ts";
 import { formatHumanResult } from "../output/format.ts";
 import { commandSuccess } from "../shared/command-result.ts";
 import { MattermostStore } from "../store/index.ts";
@@ -1258,6 +1259,53 @@ describe("context pipeline", () => {
 		).toBe(
 			"At least one searched conversation has cutoff-bounded history: alpha, beta, gamma +1 more.",
 		);
+		store.close();
+	});
+});
+
+describe("selection counting invariants", () => {
+	test("subject-matched budget drops stay a subset of budget drops", async () => {
+		const store = await seededStore({ fresh: true });
+		for (const filters of [{}, { from: "nobody" }, { hasFile: true }]) {
+			const context = await getMattermostContext(
+				{ subject: "payment timeout", local: true, ...filters },
+				{ config: configFixture(), store, now: () => 100 },
+			);
+			const selection = context.selection;
+
+			expect(selection.droppedByBudgetSubjectMatched).toBeLessThanOrEqual(
+				selection.droppedByBudget,
+			);
+			// A complete candidate set can never claim unexamined evidence.
+			if (context.evidence.completeness.selection === "complete") {
+				expect(selection.droppedByBudgetSubjectMatched).toBe(0);
+			}
+		}
+		store.close();
+	});
+
+	test("totalPosts minus messageCount is exactly the omitted count", async () => {
+		const store = await seededStore({ fresh: true });
+		const context = await getMattermostContext(
+			{ subject: "payment timeout", local: true },
+			{ config: configFixture(), store, now: () => 100 },
+		);
+		const projected = projectAgentResult(
+			commandSuccess("context", context, context.warnings),
+		) as unknown as {
+			threads: Array<{
+				messageCount: number;
+				totalPosts: number;
+				omitted: { posts: number };
+			}>;
+		};
+
+		expect(projected.threads.length).toBeGreaterThan(0);
+		for (const thread of projected.threads) {
+			expect(thread.totalPosts - thread.messageCount).toBe(
+				thread.omitted.posts,
+			);
+		}
 		store.close();
 	});
 });

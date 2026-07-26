@@ -172,6 +172,13 @@ export interface SelectionEvidence {
 	returnedThreads: number;
 	droppedThin: number;
 	droppedByBudget: number;
+	/**
+	 * The subset of {@link droppedByBudget} that named the subject ticket or
+	 * matched it as a phrase / structured entity. Zero means the unexamined
+	 * candidates were the weak lexical tail, so `budget_bounded` is bookkeeping
+	 * rather than a visible gap.
+	 */
+	droppedByBudgetSubjectMatched: number;
 	droppedNoMatch: number;
 	droppedCandidates: DroppedCandidate[];
 }

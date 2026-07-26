@@ -44,6 +44,13 @@ describe("agent projection", () => {
 			evidence: expect.objectContaining({
 				adequacy: "usable",
 				currency: "local_only",
+				verdict: {
+					canAnswerFromSelectedEvidence: true,
+					// `local_only` discovery cannot claim it saw everything.
+					mayHaveMissedOtherThreads: true,
+					selectedEvidenceMayBeStale: true,
+					recommendedActionRequired: false,
+				},
 				completeness: {
 					selectedThreads: "complete",
 					selection: "complete",
@@ -66,6 +73,7 @@ describe("agent projection", () => {
 					filesPresent: true,
 					omitted: { posts: 0, attachments: 0 },
 					messageCount: 2,
+					totalPosts: 2,
 					latestAt: "1970-01-01T00:00:00.020Z",
 					attachments: [
 						{

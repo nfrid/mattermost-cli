@@ -97,6 +97,13 @@ export class ThreadPacker {
 	readonly selection: SelectionEvidence;
 	readonly matchedProbeValues = new Set<string>();
 	readonly noMatchIds = new Set<string>();
+	/**
+	 * Candidates the budget stopped before they were examined at all. Recorded
+	 * here rather than re-derived from ranking reasons later: `budget` is the
+	 * fallback drop reason, so re-deriving also swept up filter rejections and
+	 * mislabeled unexamined thin stubs.
+	 */
+	readonly budgetDroppedIds = new Set<string>();
 	readonly seenCandidates = new Map<string, ThreadCandidate>();
 	readonly hydrationFailures: string[] = [];
 	readonly networkHydratedThreadIds = new Set<string>();
@@ -141,6 +148,7 @@ export class ThreadPacker {
 			returnedThreads: 0,
 			droppedThin: 0,
 			droppedByBudget: 0,
+			droppedByBudgetSubjectMatched: 0,
 			droppedNoMatch: 0,
 			droppedCandidates: [],
 		};
@@ -169,6 +177,7 @@ export class ThreadPacker {
 		this.seenCandidates.set(candidate.threadId, candidate);
 		if (!this.hasRoom) {
 			this.selection.droppedByBudget += 1;
+			this.budgetDroppedIds.add(candidate.threadId);
 			return;
 		}
 		const conversation = this.input.conversations.find(

@@ -3,6 +3,7 @@ import type { ThreadCandidate } from "../search/index.ts";
 import { configFixture } from "../test-fixtures.ts";
 import {
 	buildDroppedCandidates,
+	countSubjectMatchedBudgetDrops,
 	isActionableDroppedCandidate,
 	orderCandidatesForThinReserve,
 	shouldRecommendInspectDropped,
@@ -235,5 +236,47 @@ describe("selection helpers", () => {
 				["BTB-1 ping only"],
 			),
 		).toBe(true);
+	});
+});
+
+describe("countSubjectMatchedBudgetDrops", () => {
+	test("counts only candidates the budget actually dropped", () => {
+		// `budget` is the fallback drop reason, so re-deriving it from ranking
+		// reasons also swept in filter rejections that were examined and excluded.
+		const candidates = [
+			candidate("unexamined", ["ticket_in_root"]),
+			candidate("filtered", ["ticket_in_root"]),
+		];
+
+		expect(
+			countSubjectMatchedBudgetDrops({
+				candidates,
+				budgetDroppedIds: new Set(["unexamined"]),
+			}),
+		).toBe(1);
+	});
+
+	test("an unexamined thin ticket stub still counts", () => {
+		// The thin reserve pushes thin candidates behind substantive ones, so an
+		// unexamined thin ticket DM is the common case, not the exotic one.
+		expect(
+			countSubjectMatchedBudgetDrops({
+				candidates: [candidate("thin", ["ticket_in_root", "thin_thread"])],
+				budgetDroppedIds: new Set(["thin"]),
+			}),
+		).toBe(1);
+	});
+
+	test("ignores the weak lexical tail", () => {
+		expect(
+			countSubjectMatchedBudgetDrops({
+				candidates: [
+					candidate("weak", ["morphology_match", "rank_fusion"]),
+					candidate("routed", ["routing_all_configured", "latest_activity"]),
+					candidate("typo", ["typo_match", "prefix_match"]),
+				],
+				budgetDroppedIds: new Set(["weak", "routed", "typo"]),
+			}),
+		).toBe(0);
 	});
 });

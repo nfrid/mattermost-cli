@@ -228,6 +228,34 @@ function formatContext(data: ContextResult): string {
 								: styles.hint("none"),
 						),
 					]),
+					// The roll-up in one line, so the detailed axes above do not have to
+					// be re-derived on every read.
+					joinParts([
+						formatField(
+							"Verdict",
+							data.evidence.verdict.canAnswerFromSelectedEvidence
+								? styles.accent("answerable from selected evidence")
+								: styles.warning("not answerable from selected evidence"),
+						),
+						formatField(
+							"other threads",
+							data.evidence.verdict.mayHaveMissedOtherThreads
+								? styles.warning("may have been missed")
+								: styles.hint("fully examined"),
+						),
+						formatField(
+							"selected evidence",
+							data.evidence.verdict.selectedEvidenceMayBeStale
+								? styles.warning("may be stale")
+								: styles.hint("current"),
+						),
+						formatField(
+							"recommended action",
+							data.evidence.verdict.recommendedActionRequired
+								? styles.warning("required")
+								: styles.hint("none"),
+						),
+					]),
 				]
 			: []),
 		joinParts([

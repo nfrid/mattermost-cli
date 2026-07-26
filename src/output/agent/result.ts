@@ -47,6 +47,7 @@ const SINGLE_THREAD_SELECTION: SelectionEvidence = {
 	returnedThreads: 1,
 	droppedThin: 0,
 	droppedByBudget: 0,
+	droppedByBudgetSubjectMatched: 0,
 	droppedNoMatch: 0,
 	droppedCandidates: [],
 };

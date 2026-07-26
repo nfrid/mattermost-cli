@@ -12,6 +12,7 @@ const emptySelection = (): SelectionEvidence => ({
 	returnedThreads: 0,
 	droppedThin: 0,
 	droppedByBudget: 0,
+	droppedByBudgetSubjectMatched: 0,
 	droppedNoMatch: 0,
 	droppedCandidates: [],
 });
@@ -1614,5 +1615,201 @@ describe("buildEvidence", () => {
 			warnings: [],
 		});
 		expect(evidence.selection.droppedNoMatch).toBe(2);
+	});
+});
+
+describe("evidence verdict", () => {
+	const baseInput = () => ({
+		searchCoverageComplete: true,
+		selectedThreadsComplete: true,
+		freshnessMode: "network" as const,
+		freshness: [freshChannel],
+		searchedConversations: [{ id: "channel-1" }],
+		threads: [
+			packedThread({ threadId: "t1", totalPosts: 3, omittedPosts: 0, skip: 0 }),
+		],
+		remoteSearch: noRemoteSearch,
+		selection: { ...emptySelection(), candidateThreads: 1, returnedThreads: 1 },
+		warnings: [],
+	});
+
+	test("rolls a clean packet up to an answerable verdict", () => {
+		expect(buildEvidence(baseInput()).verdict).toEqual({
+			canAnswerFromSelectedEvidence: true,
+			mayHaveMissedOtherThreads: false,
+			selectedEvidenceMayBeStale: false,
+			recommendedActionRequired: false,
+		});
+	});
+
+	test("a weak budget-bounded tail alone does not claim missed threads", () => {
+		// The field report's BTB-2113: 173 unexamined candidates, none of which
+		// carried subject-level evidence. `budget_bounded` still holds.
+		const evidence = buildEvidence({
+			...baseInput(),
+			selection: {
+				...emptySelection(),
+				candidateThreads: 176,
+				returnedThreads: 3,
+				droppedByBudget: 173,
+				droppedByBudgetSubjectMatched: 0,
+			},
+		});
+
+		expect(evidence.completeness.selection).toBe("budget_bounded");
+		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(false);
+	});
+
+	test("one unexamined subject-matched candidate does claim missed threads", () => {
+		const evidence = buildEvidence({
+			...baseInput(),
+			selection: {
+				...emptySelection(),
+				candidateThreads: 176,
+				returnedThreads: 3,
+				droppedByBudget: 173,
+				droppedByBudgetSubjectMatched: 1,
+			},
+		});
+
+		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(true);
+	});
+
+	test("never contradicts the axes it is derived from", () => {
+		const evidence = buildEvidence({
+			...baseInput(),
+			selectedThreadsComplete: false,
+			threads: [
+				packedThread({
+					threadId: "t1",
+					totalPosts: 40,
+					omittedPosts: 30,
+					skip: 12,
+				}),
+			],
+		});
+
+		expect(evidence.completeness.selectedThreads).toBe("truncated");
+		expect(evidence.verdict.canAnswerFromSelectedEvidence).toBe(false);
+		expect(evidence.verdict.recommendedActionRequired).toBe(
+			evidence.next.some(({ priority }) => priority === "recommended"),
+		);
+	});
+});
+
+describe("evidence verdict and bounded history", () => {
+	const boundedChannel: FreshnessEvidence = {
+		...freshChannel,
+		coverageComplete: false,
+		oldestCoveredAt: 500,
+	};
+
+	test("a trusted packet is not flagged merely for bounded history", () => {
+		// Almost every conversation is cutoff-bounded by `historyDays`; letting that
+		// alone set the flag would pin it to `true` on every packet.
+		const evidence = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [boundedChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				packedThread({
+					threadId: "t1",
+					totalPosts: 3,
+					omittedPosts: 0,
+					skip: 0,
+				}),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+		});
+
+		expect(evidence.completeness.indexHistory).toBe("cutoff_bounded");
+		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(false);
+	});
+
+	test("bounded history does flag a packet that is not otherwise trusted", () => {
+		const evidence = buildEvidence({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: false,
+			freshnessMode: "network",
+			freshness: [boundedChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				packedThread({
+					threadId: "t1",
+					totalPosts: 40,
+					omittedPosts: 30,
+					skip: 12,
+				}),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+		});
+
+		expect(evidence.verdict.mayHaveMissedOtherThreads).toBe(true);
+	});
+});
+
+describe("verdict states the axes must agree with", () => {
+	const build = (overrides: Parameters<typeof buildEvidence>[0]) =>
+		buildEvidence(overrides);
+
+	test("an empty packet is never answerable", () => {
+		const evidence = build({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: false,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [],
+			remoteSearch: noRemoteSearch,
+			selection: emptySelection(),
+			warnings: [],
+		});
+
+		expect(evidence.adequacy).toBe("insufficient");
+		expect(evidence.completeness.selectedThreads).toBe("not_applicable");
+		expect(evidence.verdict.canAnswerFromSelectedEvidence).toBe(false);
+	});
+
+	test("a thin-only packet is never answerable", () => {
+		const evidence = build({
+			searchCoverageComplete: true,
+			selectedThreadsComplete: true,
+			freshnessMode: "network",
+			freshness: [freshChannel],
+			searchedConversations: [{ id: "channel-1" }],
+			threads: [
+				packedThread({
+					threadId: "t1",
+					totalPosts: 1,
+					omittedPosts: 0,
+					skip: 0,
+					reasons: ["thin_thread"],
+				}),
+			],
+			remoteSearch: noRemoteSearch,
+			selection: {
+				...emptySelection(),
+				candidateThreads: 1,
+				returnedThreads: 1,
+			},
+			warnings: [],
+		});
+
+		expect(evidence.adequacy).toBe("thin");
+		expect(evidence.verdict.canAnswerFromSelectedEvidence).toBe(false);
 	});
 });

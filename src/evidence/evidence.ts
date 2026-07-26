@@ -69,9 +69,48 @@ export interface EvidenceNextStep {
 	postId?: string;
 }
 
+/**
+ * Machine-readable roll-up of the detailed axes below it.
+ *
+ * The axes are all independently true and all worth auditing, but reading five
+ * of them correctly on every packet — `selectedThreads: complete` alongside
+ * `selection: budget_bounded`, `currency: current` alongside a stale discovery —
+ * is a standing invitation to draw the wrong conclusion. This says the four
+ * things a reader actually decides on. Every field is derived from the axes and
+ * adds no new knowledge — with one deliberate softening, documented on
+ * {@link EvidenceVerdict.mayHaveMissedOtherThreads}.
+ */
+export interface EvidenceVerdict {
+	/**
+	 * The returned threads are usable and nothing was cut inside them. It does
+	 * not promise the answer is *in* them: a `recommended` `read_attachments`
+	 * step can still point at a file that contradicts the visible text.
+	 */
+	canAnswerFromSelectedEvidence: boolean;
+	/**
+	 * Discovery could not see everything: search reach was stale, or candidates
+	 * carrying subject-level evidence went unexamined. A merely budget-bounded
+	 * weak tail does **not** set this — that was the point of splitting
+	 * `droppedByBudgetSubjectMatched` out.
+	 *
+	 * The one place this is softer than the axes: cutoff-bounded history sets it
+	 * only on a packet that is not otherwise trusted. Nearly every conversation
+	 * is bounded by `historyDays`, so counting it unconditionally would pin the
+	 * flag to `true` forever. `completeness.indexHistory` and
+	 * {@link EvidenceHistory} always report the bound in full.
+	 */
+	mayHaveMissedOtherThreads: boolean;
+	/** The returned threads themselves may be behind the server. */
+	selectedEvidenceMayBeStale: boolean;
+	/** At least one `next` step is `recommended`. */
+	recommendedActionRequired: boolean;
+}
+
 export interface EvidenceStatus {
 	adequacy: EvidenceAdequacy;
 	currency: EvidenceCurrency;
+	/** Roll-up of the axes below; always consistent with them. */
+	verdict: EvidenceVerdict;
 	completeness: {
 		selectedThreads: EvidenceThreadCompleteness;
 		/** Additive since schema version 3; absent in older packets. */
@@ -86,6 +125,8 @@ export interface EvidenceStatus {
 		returnedThreads: number;
 		droppedThin: number;
 		droppedByBudget: number;
+		/** Unexamined candidates that still carried subject-level evidence. */
+		droppedByBudgetSubjectMatched: number;
 		/**
 		 * Candidates that survived ranking but carried no current content match
 		 * once hydrated. A non-zero count with an empty `droppedCandidates` means
@@ -221,7 +262,13 @@ export function buildEvidence(input: {
 	const selectedMessages = input.threads.flatMap((thread) =>
 		thread.posts.map(({ message }) => message),
 	);
+	const canAnswerFromSelectedEvidence =
+		adequacy === "usable" && selectedThreads === "complete";
+	// One rule, one place: `next` and `verdict` both ask whether the packet is
+	// trustworthy on its own, and two spellings of that would drift apart.
+	const packetTrusted = canAnswerFromSelectedEvidence && currency === "current";
 	const next = collectNextActions({
+		packetTrusted,
 		rankedFullThreadIds,
 		cutoffBoundedConversations,
 		staleRouted,
@@ -250,6 +297,22 @@ export function buildEvidence(input: {
 	return {
 		adequacy,
 		currency,
+		verdict: {
+			canAnswerFromSelectedEvidence,
+			mayHaveMissedOtherThreads:
+				discovery !== "current" ||
+				// Bounded history counts only when the packet is not otherwise
+				// trustworthy — the same judgment the `sync` step already makes.
+				// Nearly every conversation is cutoff-bounded by `historyDays`, so
+				// counting it unconditionally would pin this flag to `true` forever
+				// and make the roll-up worthless.
+				(indexHistory === "cutoff_bounded" && !packetTrusted) ||
+				input.selection.droppedByBudgetSubjectMatched > 0,
+			selectedEvidenceMayBeStale: currency !== "current",
+			recommendedActionRequired: next.some(
+				({ priority }) => priority === "recommended",
+			),
+		},
 		completeness: {
 			selectedThreads,
 			selection: selectionCompleteness,
@@ -262,6 +325,8 @@ export function buildEvidence(input: {
 			returnedThreads: input.selection.returnedThreads,
 			droppedThin: input.selection.droppedThin,
 			droppedByBudget: input.selection.droppedByBudget,
+			droppedByBudgetSubjectMatched:
+				input.selection.droppedByBudgetSubjectMatched,
 			droppedNoMatch: input.selection.droppedNoMatch,
 			droppedCandidates: input.selection.droppedCandidates,
 		},
@@ -423,6 +488,8 @@ function rankTruncatedThreads(
 function collectNextActions(input: {
 	/** Truncated threads, best first; only the first is `recommended`. */
 	rankedFullThreadIds: readonly string[];
+	/** Usable, complete inside the selected threads, and current. */
+	packetTrusted: boolean;
 	cutoffBoundedConversations: number;
 	staleRouted: number;
 	localFallback: boolean;
@@ -471,11 +538,7 @@ function collectNextActions(input: {
 	const historyIncomplete =
 		input.cutoffBoundedConversations > 0 ||
 		input.warningKinds.has("incomplete_history");
-	const packetTrusted =
-		input.adequacy === "usable" &&
-		input.currency === "current" &&
-		input.selectedThreadsComplete;
-	if (historyIncomplete && !packetTrusted) {
+	if (historyIncomplete && !input.packetTrusted) {
 		const incomplete = input.freshness.filter(
 			({ coverageComplete }) => !coverageComplete,
 		);

@@ -205,6 +205,7 @@ export function projectPackedThread(
 				: {}),
 		},
 		messageCount: thread.posts.length,
+		totalPosts: thread.totalPosts,
 		...(latest ? { latestAt: isoTimestamp(latest.createAt) } : {}),
 		...(tail ? { tail } : {}),
 		...(attachmentIndex.attachments.length

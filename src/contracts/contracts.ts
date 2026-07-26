@@ -529,6 +529,7 @@ const selectionEvidenceSchema = z.object({
 	returnedThreads: z.number().int().nonnegative(),
 	droppedThin: z.number().int().nonnegative(),
 	droppedByBudget: z.number().int().nonnegative(),
+	droppedByBudgetSubjectMatched: z.number().int().nonnegative().optional(),
 	droppedNoMatch: z.number().int().nonnegative(),
 	droppedCandidates: z.array(
 		z.object({
@@ -558,6 +559,15 @@ const relatedTicketPointerSchema = z.object({
 const evidenceStatusSchema = z.object({
 	adequacy: z.enum(["usable", "thin", "insufficient"]),
 	currency: z.enum(["current", "possibly_stale", "local_only"]),
+	/** Additive since schema version 4; absent in older packets. */
+	verdict: z
+		.object({
+			canAnswerFromSelectedEvidence: z.boolean(),
+			mayHaveMissedOtherThreads: z.boolean(),
+			selectedEvidenceMayBeStale: z.boolean(),
+			recommendedActionRequired: z.boolean(),
+		})
+		.optional(),
 	completeness: z.object({
 		selectedThreads: z.enum(["complete", "truncated", "not_applicable"]),
 		selection: z.enum(["complete", "budget_bounded"]).optional(),
@@ -596,6 +606,7 @@ const evidenceStatusSchema = z.object({
 		returnedThreads: z.number().int().nonnegative(),
 		droppedThin: z.number().int().nonnegative(),
 		droppedByBudget: z.number().int().nonnegative(),
+		droppedByBudgetSubjectMatched: z.number().int().nonnegative().optional(),
 		droppedNoMatch: z.number().int().nonnegative(),
 		droppedCandidates: selectionEvidenceSchema.shape.droppedCandidates,
 	}),
