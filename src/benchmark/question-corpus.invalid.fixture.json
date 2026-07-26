@@ -1,0 +1,14 @@
+{
+	"schemaVersion": 1,
+	"name": "invalid-open-question-fixture",
+	"description": "Fixture used by tests to check that expectations naming an unknown post id are rejected at load time.",
+	"cases": [
+		{
+			"id": "unknown-expectation",
+			"note": "Expects a post id that the case does not define.",
+			"posts": [{ "id": "p1", "author": "alice", "message": "не решили" }],
+			"expectedOpenQuestions": ["p9"],
+			"expectPurposeHint": true
+		}
+	]
+}

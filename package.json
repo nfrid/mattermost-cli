@@ -24,6 +24,7 @@
 		"benchmark": "bun run src/benchmark/benchmark-cli.ts benchmarks/retrieval.v1.json",
 		"benchmark:compare": "bun run src/benchmark/benchmark-compare-cli.ts",
 		"cues": "bun run src/benchmark/cue-report-cli.ts",
+		"questions": "bun run src/benchmark/question-corpus-cli.ts",
 		"smoke": "MATTERMOST_INTEGRATION=1 bun test src/mattermost/integration.test.ts",
 		"check": "bun run typecheck && biome check . && bun test",
 		"check:release": "bun run check && bun run smoke",

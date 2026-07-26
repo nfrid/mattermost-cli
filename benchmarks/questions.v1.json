@@ -1,0 +1,490 @@
+{
+	"schemaVersion": 1,
+	"name": "open-question-calibration-v1",
+	"description": "Labelled cases for the open_question signal. Text is synthetic, written to mirror the shapes measured in a real index: the dominant population is ordinary conversational questions carrying nothing but a bare `?`, which should not be reported as open questions. Labels are editorial judgements about what an agent should be told is unresolved, not ground truth harvested from real threads.",
+	"cases": [
+		{
+			"id": "chatter-answered",
+			"note": "Ordinary question, answered in thread. Not open.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "заведёшь баг?" },
+				{ "id": "p2", "author": "bob", "message": "да, уже завёл" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-tail-unanswered",
+			"note": "The dominant real shape: a throwaway question that simply ended the conversation. `unanswered` here means nobody spoke after, not that anything is pending.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "деплой прошёл?" },
+				{ "id": "p2", "author": "bob", "message": "ага" },
+				{ "id": "p3", "author": "alice", "message": "получилось черкануть ?" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-social",
+			"note": "Social small talk. Not open.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "как выходные?" },
+				{ "id": "p2", "author": "bob", "message": "отлично)" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-rhetorical",
+			"note": "Rhetorical. Not a request for information.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "ну а что ещё ожидать?" },
+				{ "id": "p2", "author": "bob", "message": "да уж" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-status-ping",
+			"note": "Status ping, answered. Not open.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "что там по задаче?" },
+				{ "id": "p2", "author": "bob", "message": "в ревью висит" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-three-bare-questions",
+			"note": "Three bare `?` posts trip OPEN_QUESTION_MIN_POSTS even though every one of them was answered.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "тесты зелёные?" },
+				{ "id": "p2", "author": "bob", "message": "да" },
+				{ "id": "p3", "author": "alice", "message": "смержил?" },
+				{ "id": "p4", "author": "bob", "message": "да" },
+				{ "id": "p5", "author": "alice", "message": "выкатили?" },
+				{ "id": "p6", "author": "bob", "message": "да, всё в проде" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-url-with-query-string",
+			"note": "The `?` lives inside a link, not in prose.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "смотри https://grafana.internal/d/abc?from=now-6h&to=now"
+				},
+				{ "id": "p2", "author": "bob", "message": "ок, вижу" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-confirmation-emoji",
+			"note": "Short confirmation question with an emoticon; answered.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "это точно нужно?)" },
+				{ "id": "p2", "author": "bob", "message": "точно" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-addressed-answered",
+			"note": "Directed at a person and answered by them.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "@bob ты сегодня катишь или завтра?"
+				},
+				{ "id": "p2", "author": "bob", "message": "сегодня вечером" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-clarify-answered",
+			"note": "Clarification inside a working exchange, resolved immediately.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "а какой енв?" },
+				{ "id": "p2", "author": "bob", "message": "staging" },
+				{ "id": "p3", "author": "alice", "message": "понял" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-tail-thanks",
+			"note": "Thread ends on a courtesy question. Not open.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "спасибо, помогло" },
+				{ "id": "p2", "author": "bob", "message": "ещё что-то нужно?" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-single-question-mark",
+			"note": "A bare `?` as an entire message: confusion marker, not a question.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "деплой упал" },
+				{ "id": "p2", "author": "bob", "message": "?" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-offtopic-tail",
+			"note": "Off-topic tail question in a ticket thread.",
+			"subjectTicket": "BTB-1000",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "BTB-1000 выкатили в прод, всё ок"
+				},
+				{ "id": "p2", "author": "bob", "message": "кофе кто-нибудь будет?" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-repeated-ack-questions",
+			"note": "Acknowledgement questions in a coordination thread.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "созвон в 15?" },
+				{ "id": "p2", "author": "bob", "message": "да" },
+				{ "id": "p3", "author": "carol", "message": "буду" },
+				{ "id": "p4", "author": "alice", "message": "все зайдут?" },
+				{ "id": "p5", "author": "bob", "message": "все" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "open-explicit-unresolved-cue",
+			"note": "Explicit unresolved marker.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "по лимитам не решили" },
+				{
+					"id": "p2",
+					"author": "bob",
+					"message": "да, вопрос открытый, надо ещё подумать"
+				}
+			],
+			"expectedOpenQuestions": ["p1"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "open-design-fork",
+			"note": "A real architectural fork stated as a choice between named options.",
+			"subjectTicket": "BTB-2113",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "BTB-2113 обсуждаем доступы для партнёров"
+				},
+				{
+					"id": "p2",
+					"author": "bob",
+					"message": "какой вариант берём: capabilities или отдельный роут?"
+				}
+			],
+			"expectedOpenQuestions": ["p2"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "open-needs-decision",
+			"note": "Explicitly needs a decision.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "нужно решить, кто владеет ретраями"
+				},
+				{ "id": "p2", "author": "bob", "message": "согласен, давай на дейли" }
+			],
+			"expectedOpenQuestions": ["p1"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "open-unclear-behaviour",
+			"note": "Unclear semantics blocking work.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "непонятно, что должно происходить при частичной отмене"
+				},
+				{ "id": "p2", "author": "bob", "message": "надо уточнить у продакта" }
+			],
+			"expectedOpenQuestions": ["p1"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "open-pending-followup",
+			"note": "Deferred work reads as a follow-up, still worth surfacing.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "надо будет обсудить миграцию с Аней"
+				},
+				{ "id": "p2", "author": "bob", "message": "ок, поставлю в план" }
+			],
+			"expectedOpenQuestions": ["p1"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "open-no-agreement",
+			"note": "Explicit non-agreement.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "по формату ответа не договорились"
+				},
+				{ "id": "p2", "author": "bob", "message": "давай вернёмся к этому" }
+			],
+			"expectedOpenQuestions": ["p1"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "open-subject-question-at-tail",
+			"note": "Bare `?`, but it names the subject ticket and nobody answered.",
+			"subjectTicket": "BTB-2113",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "начал смотреть BTB-2113" },
+				{ "id": "p2", "author": "bob", "message": "ага" },
+				{
+					"id": "p3",
+					"author": "alice",
+					"message": "по BTB-2113 кто принимает решение по схеме доступов?"
+				}
+			],
+			"expectedOpenQuestions": ["p3"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "open-english-still-open",
+			"note": "English explicit marker.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "the retry budget is still open, we need to decide"
+				},
+				{ "id": "p2", "author": "bob", "message": "agreed" }
+			],
+			"expectedOpenQuestions": ["p1"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "open-worth-it",
+			"note": "Cost/benefit question left hanging.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "стоит ли вообще тащить это в текущий релиз?"
+				},
+				{ "id": "p2", "author": "bob", "message": "хм" }
+			],
+			"expectedOpenQuestions": ["p1"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "open-blocked-waiting",
+			"note": "Explicitly waiting on someone.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "ждём ответа от платежей" },
+				{ "id": "p2", "author": "bob", "message": "ок" }
+			],
+			"expectedOpenQuestions": ["p1"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "mixed-decision-then-chatter-question",
+			"note": "A settled decision plus a throwaway question. The decision is the purpose; the question is not open.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "решили делать через capabilities"
+				},
+				{ "id": "p2", "author": "bob", "message": "ок" },
+				{
+					"id": "p3",
+					"author": "alice",
+					"message": "я пошёл обедать, кто со мной?"
+				}
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "mixed-decision-and-real-open-question",
+			"note": "Both a decision and a genuine unresolved item.",
+			"subjectTicket": "BTB-2113",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "BTB-2113 договорились по схеме доступов"
+				},
+				{ "id": "p2", "author": "bob", "message": "ок" },
+				{
+					"id": "p3",
+					"author": "carol",
+					"message": "по срокам не определились, нужно решить на груминге"
+				}
+			],
+			"expectedOpenQuestions": ["p3"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "chatter-long-technical-no-questions",
+			"note": "Long technical thread with no questions at all; must not acquire one.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "профилировал ретраи, узкое место в пуле коннектов"
+				},
+				{
+					"id": "p2",
+					"author": "bob",
+					"message": "логично, там лимит 20 по умолчанию"
+				},
+				{
+					"id": "p3",
+					"author": "alice",
+					"message": "поднял до 60, латенси упала вдвое"
+				},
+				{ "id": "p4", "author": "bob", "message": "красиво" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-quoted-question",
+			"note": "A quoted earlier question that was already answered below it.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "> а какой таймаут?\n\n30 секунд, зашито в конфиге"
+				},
+				{ "id": "p2", "author": "bob", "message": "спасибо" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "open-two-real-questions",
+			"note": "Two genuinely unresolved items in one thread.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "не ясно, кто отвечает за миграцию данных"
+				},
+				{ "id": "p2", "author": "bob", "message": "и по срокам не решили" }
+			],
+			"expectedOpenQuestions": ["p1", "p2"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "chatter-yes-no-with-mention",
+			"note": "Mention plus bare question, answered by a third party.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "@bob глянешь мр?" },
+				{ "id": "p2", "author": "carol", "message": "я уже глянул, всё ок" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-typo-question",
+			"note": "Typo correction question.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "там опечатка не?" },
+				{ "id": "p2", "author": "bob", "message": "да, поправлю" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "open-tbd-marker",
+			"note": "Explicit TBD.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "формат вебхука — tbd, зависит от партнёра"
+				},
+				{ "id": "p2", "author": "bob", "message": "принял" }
+			],
+			"expectedOpenQuestions": ["p1"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "chatter-availability",
+			"note": "Scheduling question, answered.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "ты на месте?" },
+				{ "id": "p2", "author": "bob", "message": "да" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "open-how-better",
+			"note": "Genuine design deliberation left hanging at the tail.",
+			"subjectTicket": "BTB-2200",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "BTB-2200 переносим валидацию на бэк"
+				},
+				{ "id": "p2", "author": "bob", "message": "ок" },
+				{
+					"id": "p3",
+					"author": "carol",
+					"message": "а как лучше версионировать это, чтобы не сломать старых клиентов?"
+				}
+			],
+			"expectedOpenQuestions": ["p3"],
+			"expectPurposeHint": true
+		},
+		{
+			"id": "chatter-single-post-question",
+			"note": "One-post thread that is only a question; too thin to call open.",
+			"posts": [
+				{
+					"id": "p1",
+					"author": "alice",
+					"message": "кто-нибудь трогал этот конфиг?"
+				}
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		},
+		{
+			"id": "chatter-emoji-only-reply-question",
+			"note": "Question answered with a reaction-style reply.",
+			"posts": [
+				{ "id": "p1", "author": "alice", "message": "можно мержить?" },
+				{ "id": "p2", "author": "bob", "message": "+" }
+			],
+			"expectedOpenQuestions": [],
+			"expectPurposeHint": false
+		}
+	]
+}
