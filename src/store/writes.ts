@@ -4,15 +4,13 @@ import type {
 	MattermostUser,
 } from "../mattermost/schemas.ts";
 import {
-	extractEngineeringEntities,
-	extractTicketKeys,
-} from "../search/extract.ts";
-import {
 	conceptIndexFingerprint,
 	conceptTokensForText,
-} from "../search/search-concepts.ts";
-import { normalizeMorphText } from "../search/search-token-normalization.ts";
-import { normalizeSearchText } from "../search/text.ts";
+	extractEngineeringEntities,
+	extractTicketKeys,
+	normalizeMorphText,
+	normalizeSearchText,
+} from "../text/index.ts";
 import type { StoreHandle } from "./handle.ts";
 import { rowToPost } from "./mappers.ts";
 import { getPost, migrationVersions } from "./reads.ts";

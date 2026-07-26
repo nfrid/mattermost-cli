@@ -7,8 +7,8 @@ import {
 	searchThreads,
 	widenedRouting,
 } from "../search/index.ts";
-import { normalizeSearchText, STOP_WORDS } from "../search/text.ts";
 import type { MattermostStore, ThreadSearchFilters } from "../store/index.ts";
+import { normalizeSearchText, STOP_WORDS } from "../text/index.ts";
 import { localEvidence, matchingProbeValues, postLink } from "./helpers.ts";
 import type { BackgroundThread } from "./types.ts";
 

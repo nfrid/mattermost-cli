@@ -1,4 +1,4 @@
-import { normalizeSearchText } from "../search/text.ts";
+import { normalizeSearchText } from "../text/index.ts";
 import type { ThreadSearchFilters } from "./types.ts";
 
 /** Normalized thread-filter predicate shared by SQL and in-memory backends. */

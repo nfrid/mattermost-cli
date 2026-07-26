@@ -3,7 +3,7 @@ import type {
 	MattermostPost,
 	MattermostUser,
 } from "../mattermost/schemas.ts";
-import type { EngineeringEntity } from "../search/extract.ts";
+import type { EngineeringEntity } from "../text/index.ts";
 
 export type ConversationKind = "channel" | "direct_message";
 

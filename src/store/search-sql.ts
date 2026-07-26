@@ -1,4 +1,4 @@
-import { normalizeSearchText } from "../search/text.ts";
+import { normalizeSearchText } from "../text/index.ts";
 import {
 	describeThreadFilters,
 	threadFilterIsEmpty,

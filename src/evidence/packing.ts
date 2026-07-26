@@ -1,5 +1,5 @@
-import { extractTicketKeys } from "../search/extract.ts";
 import { ConfigError } from "../shared/errors.ts";
+import { extractTicketKeys } from "../text/index.ts";
 import {
 	DEFAULT_CLUSTER_MERGE_GAP,
 	DEFAULT_MATCH_RADIUS,

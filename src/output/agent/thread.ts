@@ -18,18 +18,14 @@ import {
 	type TicketSegment,
 } from "../../evidence/ticket-segments.ts";
 import {
+	containsNormalizedText,
 	extractEngineeringEntities,
 	extractTicketKeys,
 	MULTI_TICKET_BULLETIN_MIN_KEYS,
-} from "../../search/extract.ts";
-import {
+	normalizeSearchText,
 	POINTER_EXCERPT_LIMIT,
 	truncateExcerpt,
-} from "../../search/match-utils.ts";
-import {
-	containsNormalizedText,
-	normalizeSearchText,
-} from "../../search/text.ts";
+} from "../../text/index.ts";
 import { isoTimestamp } from "../shared.ts";
 import {
 	fileDownloadCommand,

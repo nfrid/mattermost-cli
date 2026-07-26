@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { normalizeSearchText } from "../search/text.ts";
 import { ConfigError } from "../shared/errors.ts";
 import { resolveLocalPaths } from "../shared/paths.ts";
+import { normalizeSearchText } from "../text/index.ts";
 
 const stringListSchema = z.array(z.string().trim().min(1)).default([]);
 const searchSynonymsSchema = z

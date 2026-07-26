@@ -1,10 +1,13 @@
 import type { SearchConcepts } from "../config/config.ts";
 import { ConfigError } from "../shared/errors.ts";
-import { extractPermalinkId } from "./extract.ts";
+import {
+	conceptQueryMatches,
+	extractPermalinkId,
+	morphSearchTerms,
+	normalizeSearchText,
+	STOP_WORDS,
+} from "../text/index.ts";
 import { expandQueryTerms } from "./query-expansion.ts";
-import { conceptQueryMatches } from "./search-concepts.ts";
-import { morphSearchTerms } from "./search-token-normalization.ts";
-import { normalizeSearchText, STOP_WORDS } from "./text.ts";
 import type {
 	AgentProbeInput,
 	AgentProbeKind,

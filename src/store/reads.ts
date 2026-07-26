@@ -1,7 +1,9 @@
-import type { EngineeringEntityKind } from "../search/extract.ts";
-import { extractEngineeringEntities } from "../search/extract.ts";
-import { normalizeSearchText } from "../search/text.ts";
 import { DatabaseError } from "../shared/errors.ts";
+import type { EngineeringEntityKind } from "../text/index.ts";
+import {
+	extractEngineeringEntities,
+	normalizeSearchText,
+} from "../text/index.ts";
 import type { StoreHandle } from "./handle.ts";
 import { rowToPost, rowToUser } from "./mappers.ts";
 import {

@@ -1,7 +1,18 @@
 import { createHash } from "node:crypto";
-import type { SearchConcepts } from "../config/config.ts";
-import { normalizeMorphText } from "./search-token-normalization.ts";
-import { containsNormalizedExactText, normalizeSearchText } from "./text.ts";
+import { normalizeMorphText } from "./morphology.ts";
+import {
+	containsNormalizedExactText,
+	normalizeSearchText,
+} from "./normalize.ts";
+
+/**
+ * Concept id → configured alias phrases.
+ *
+ * Structural on purpose. `config`'s `SearchConcepts` (a Zod output type) is
+ * assignable to this, so the tokenizer stays in the text layer instead of
+ * importing configuration upward.
+ */
+export type ConceptAliases = Readonly<Record<string, readonly string[]>>;
 
 export interface ConceptQueryMatch {
 	conceptId: string;
@@ -21,7 +32,7 @@ interface NormalizedConcept {
 
 export function conceptQueryMatches(
 	text: string,
-	concepts: Readonly<SearchConcepts> = {},
+	concepts: ConceptAliases = {},
 ): ConceptQueryMatch[] {
 	const normalizedText = normalizeSearchText(text);
 	const morphText = normalizeMorphText(text);
@@ -46,7 +57,7 @@ export function conceptQueryMatches(
 
 export function conceptTokensForText(
 	text: string,
-	concepts: Readonly<SearchConcepts> = {},
+	concepts: ConceptAliases = {},
 ): string[] {
 	const normalizedText = normalizeSearchText(text);
 	const morphText = normalizeMorphText(text);
@@ -61,9 +72,7 @@ export function conceptToken(conceptId: string): string {
 	return `zzconcept${Buffer.from(conceptId, "utf8").toString("hex")}`;
 }
 
-export function conceptIndexFingerprint(
-	concepts: Readonly<SearchConcepts> = {},
-): string {
+export function conceptIndexFingerprint(concepts: ConceptAliases = {}): string {
 	const normalized = normalizeConcepts(concepts).map(({ id, aliases }) => ({
 		id,
 		aliases: aliases.map(({ exact }) => exact),
@@ -71,9 +80,7 @@ export function conceptIndexFingerprint(
 	return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
-function normalizeConcepts(
-	concepts: Readonly<SearchConcepts>,
-): NormalizedConcept[] {
+function normalizeConcepts(concepts: ConceptAliases): NormalizedConcept[] {
 	return Object.entries(concepts)
 		.map(([id, aliases]) => ({
 			id,

@@ -6,28 +6,10 @@ export {
 	scoreVector,
 } from "./candidates.ts";
 export {
-	type EngineeringEntity,
-	type EngineeringEntityKind,
-	extractEngineeringEntities,
-	extractTicketKeys,
-	isTrackerIssueHost,
-	MULTI_TICKET_BULLETIN_MIN_KEYS,
-	PERMALINK_PATH_PATTERN,
-	TICKET_PATTERN,
-	textForTicketKeyExtraction,
-} from "./extract.ts";
-export {
 	reciprocalRankFusionScore,
 	weightedReciprocalRankFusionScore,
 } from "./fusion.ts";
 export { searchThreads } from "./lexical.ts";
-export {
-	DECISION_EXCERPT_LIMIT,
-	excerptWithTruncation,
-	POINTER_EXCERPT_LIMIT,
-	SEARCH_EXCERPT_LIMIT,
-	truncateExcerpt,
-} from "./match-utils.ts";
 export {
 	expandQueryTerms,
 	matchesQueryExpansion,
@@ -43,25 +25,7 @@ export {
 	routeConversations,
 	widenedRouting,
 } from "./routing.ts";
-export {
-	type ConceptQueryMatch,
-	conceptIndexFingerprint,
-	conceptQueryMatches,
-	conceptToken,
-	conceptTokensForText,
-} from "./search-concepts.ts";
-export {
-	analyzeSearchToken,
-	morphSearchTerms,
-	normalizeMorphText,
-} from "./search-token-normalization.ts";
 export { classifySubject, resolveProbes } from "./subject.ts";
-export {
-	containsNormalizedExactText,
-	containsNormalizedText,
-	normalizeSearchText,
-	STOP_WORDS,
-} from "./text.ts";
 export {
 	type AgentProbeInput,
 	type AgentProbeKind,

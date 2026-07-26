@@ -3,8 +3,8 @@ import type {
 	LexicalRetrievalSource,
 	StructuredEntityHit,
 } from "../store/index.ts";
+import type { ConceptQueryMatch } from "../text/index.ts";
 import type { QueryExpansion } from "./query-expansion.ts";
-import type { ConceptQueryMatch } from "./search-concepts.ts";
 
 export const RRF_RANK_CONSTANT = 60;
 

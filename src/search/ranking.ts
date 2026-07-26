@@ -4,20 +4,19 @@ import type {
 	MattermostStore,
 	TicketThreadRelationship,
 } from "../store/index.ts";
-import { scoreVector } from "./candidates.ts";
 import {
+	analyzeSearchToken,
+	containsNormalizedExactText,
 	extractTicketKeys,
 	MULTI_TICKET_BULLETIN_MIN_KEYS,
-} from "./extract.ts";
+	morphSearchTerms,
+	normalizeMorphText,
+	normalizeSearchText,
+} from "../text/index.ts";
+import { scoreVector } from "./candidates.ts";
 import { deduplicateMatches } from "./match-utils.ts";
 import { matchesQueryExpansion } from "./query-expansion.ts";
 import { routeReason, routeWeight } from "./routing.ts";
-import {
-	analyzeSearchToken,
-	morphSearchTerms,
-	normalizeMorphText,
-} from "./search-token-normalization.ts";
-import { containsNormalizedExactText, normalizeSearchText } from "./text.ts";
 import type {
 	CandidateGroup,
 	MattermostSubject,

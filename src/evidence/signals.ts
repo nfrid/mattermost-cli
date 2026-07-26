@@ -1,15 +1,13 @@
-import { extractTicketKeys } from "../search/extract.ts";
-import {
-	DECISION_EXCERPT_LIMIT,
-	excerptWithTruncation,
-	POINTER_EXCERPT_LIMIT,
-	truncateExcerpt,
-} from "../search/match-utils.ts";
 import {
 	containsNormalizedExactText,
 	containsNormalizedText,
+	DECISION_EXCERPT_LIMIT,
+	excerptWithTruncation,
+	extractTicketKeys,
 	normalizeSearchText,
-} from "../search/text.ts";
+	POINTER_EXCERPT_LIMIT,
+	truncateExcerpt,
+} from "../text/index.ts";
 import type { CueDescriptor, CueRecorder, CueStage } from "./cue-telemetry.ts";
 import type { EvidencePost } from "./packing.ts";
 

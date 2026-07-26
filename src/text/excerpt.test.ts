@@ -3,7 +3,7 @@ import {
 	excerpt,
 	redactCredentialExcerpts,
 	truncateExcerpt,
-} from "./match-utils.ts";
+} from "./excerpt.ts";
 
 describe("credential excerpt redaction", () => {
 	test("redacts login, password, and token phrases", () => {

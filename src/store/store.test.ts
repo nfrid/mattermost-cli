@@ -7,7 +7,7 @@ import type {
 	MattermostPost,
 	MattermostUser,
 } from "../mattermost/schemas.ts";
-import { conceptToken } from "../search/search-concepts.ts";
+import { conceptToken } from "../text/index.ts";
 import {
 	databaseFilePaths,
 	MattermostStore,

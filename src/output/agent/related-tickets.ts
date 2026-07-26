@@ -1,6 +1,6 @@
 import type { RelatedTicketPointer } from "../../context/types.ts";
 import type { EvidencePost } from "../../evidence/packing.ts";
-import { extractTicketKeys } from "../../search/extract.ts";
+import { extractTicketKeys } from "../../text/index.ts";
 import { isoTimestamp } from "../shared.ts";
 import type { AgentRelatedTicket } from "./types.ts";
 

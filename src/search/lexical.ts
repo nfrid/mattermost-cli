@@ -7,19 +7,20 @@ import type {
 	ThreadSearchFilters,
 } from "../store/index.ts";
 import { trigramSearchPolicy } from "../store/index.ts";
+import {
+	conceptToken,
+	containsNormalizedExactText,
+	excerpt,
+	morphSearchTerms,
+	normalizeMorphText,
+	normalizeSearchText,
+} from "../text/index.ts";
 import { compareCandidates, createCandidateGroup } from "./candidates.ts";
 import {
 	isStrongerFusionContribution,
 	weightedReciprocalRankFusionScore,
 } from "./fusion.ts";
-import { excerpt } from "./match-utils.ts";
 import { candidateFromGroup } from "./ranking.ts";
-import { conceptToken } from "./search-concepts.ts";
-import {
-	morphSearchTerms,
-	normalizeMorphText,
-} from "./search-token-normalization.ts";
-import { containsNormalizedExactText, normalizeSearchText } from "./text.ts";
 import type {
 	CandidateGroup,
 	MattermostSubject,

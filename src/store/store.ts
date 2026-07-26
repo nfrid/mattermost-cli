@@ -8,12 +8,12 @@ import type {
 	MattermostPost,
 	MattermostUser,
 } from "../mattermost/schemas.ts";
-import type { EngineeringEntityKind } from "../search/extract.ts";
 import { DatabaseError, isSqliteBusyError } from "../shared/errors.ts";
 import {
 	SQLITE_BUSY_TIMEOUT_MS,
 	SQLITE_OPEN_WAIT_MS,
 } from "../shared/limits.ts";
+import type { EngineeringEntityKind } from "../text/index.ts";
 import type { StoreHandle } from "./handle.ts";
 import { databaseFilePaths } from "./paths.ts";
 import * as reads from "./reads.ts";

@@ -2,7 +2,6 @@ import type { MattermostConfig } from "../config/config.ts";
 import type { EvidencePost } from "../evidence/packing.ts";
 import { MattermostApiError } from "../mattermost/client.ts";
 import type { MattermostPost } from "../mattermost/schemas.ts";
-import { extractTicketKeys } from "../search/extract.ts";
 import {
 	buildRankingReasons,
 	evaluateThreadEvidence,
@@ -15,14 +14,6 @@ import {
 	type ThreadCandidate,
 } from "../search/index.ts";
 import { matchesQueryExpansion } from "../search/query-expansion.ts";
-import { analyzeSearchToken } from "../search/search-token-normalization.ts";
-import {
-	containsNormalizedExactText,
-	containsNormalizedText,
-	normalizeSearchText,
-	STOP_WORDS,
-} from "../search/text.ts";
-import { stemRussianSnowball } from "../search/vendor/snowball/russian.ts";
 import type { Warning } from "../shared/command-result.ts";
 import { AppError, MattermostDataError } from "../shared/errors.ts";
 import type {
@@ -33,6 +24,15 @@ import type {
 	MattermostStore,
 } from "../store/index.ts";
 import { inspectFreshness, ReconciliationError } from "../sync/sync.ts";
+import {
+	analyzeSearchToken,
+	containsNormalizedExactText,
+	containsNormalizedText,
+	extractTicketKeys,
+	normalizeSearchText,
+	STOP_WORDS,
+} from "../text/index.ts";
+import { stemRussianSnowball } from "../text/vendor/snowball/russian.ts";
 import type {
 	FreshnessEvidence,
 	ProbeCoverage,

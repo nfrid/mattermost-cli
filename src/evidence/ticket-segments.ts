@@ -1,7 +1,7 @@
 import {
 	extractTicketKeys,
 	MULTI_TICKET_BULLETIN_MIN_KEYS,
-} from "../search/extract.ts";
+} from "../text/index.ts";
 
 export type TicketSegmentReason =
 	| "ticket_window"

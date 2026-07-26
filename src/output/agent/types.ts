@@ -1,12 +1,12 @@
 import type { SurroundRelevance } from "../../context/types.ts";
 import type { ThreadBrief, ThreadSignals } from "../../evidence/signals.ts";
 import type { TicketSegment } from "../../evidence/ticket-segments.ts";
-import type { EngineeringEntityKind } from "../../search/extract.ts";
 import type {
 	CommandResult,
 	SCHEMA_VERSION,
 	Warning,
 } from "../../shared/command-result.ts";
+import type { EngineeringEntityKind } from "../../text/index.ts";
 
 /** Fixed head of every agent projection; each command adds its own fields. */
 export interface AgentEnvelope {

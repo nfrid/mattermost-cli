@@ -1,4 +1,4 @@
-import { normalizeSearchText } from "./text.ts";
+import { normalizeSearchText } from "./normalize.ts";
 
 export type EngineeringEntityKind =
 	| "ticket"

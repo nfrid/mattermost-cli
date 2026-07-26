@@ -4,7 +4,7 @@ import {
 	conceptQueryMatches,
 	conceptToken,
 	conceptTokensForText,
-} from "./search-concepts.ts";
+} from "./concepts.ts";
 
 const concepts = {
 	"duplicate-charge": [

@@ -1,5 +1,8 @@
-import { normalizeMorphText } from "./search-token-normalization.ts";
-import { containsNormalizedExactText, normalizeSearchText } from "./text.ts";
+import {
+	containsNormalizedExactText,
+	normalizeMorphText,
+	normalizeSearchText,
+} from "../text/index.ts";
 
 export type QueryExpansionKind =
 	| "synonym"

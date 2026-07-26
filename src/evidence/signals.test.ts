@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	DECISION_EXCERPT_LIMIT,
 	POINTER_EXCERPT_LIMIT,
-} from "../search/match-utils.ts";
+} from "../text/index.ts";
 import type { EvidencePost } from "./packing.ts";
 import {
 	buildThreadBrief,

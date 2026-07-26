@@ -12,7 +12,7 @@ import type {
 	RemoteSearchEvidence,
 	SelectionEvidence,
 } from "../context/types.ts";
-import { extractTicketKeys } from "../search/extract.ts";
+import { extractTicketKeys } from "../text/index.ts";
 import {
 	budgetAwareAroundSidePosts,
 	estimateAveragePostUnits,

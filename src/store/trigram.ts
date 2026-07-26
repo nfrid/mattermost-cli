@@ -1,5 +1,4 @@
-import { normalizeMorphText } from "../search/search-token-normalization.ts";
-import { normalizeSearchText } from "../search/text.ts";
+import { normalizeMorphText, normalizeSearchText } from "../text/index.ts";
 import type { TrigramSearchPolicy } from "./types.ts";
 
 export function stringTrigrams(value: string): string[] {

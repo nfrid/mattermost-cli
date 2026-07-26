@@ -1,14 +1,12 @@
 import type { MattermostConfig } from "../config/config.ts";
+import type { MattermostStore } from "../store/index.ts";
 import {
 	extractTicketKeys,
 	isTrackerIssueHost,
 	MULTI_TICKET_BULLETIN_MIN_KEYS,
-} from "../search/extract.ts";
-import {
 	POINTER_EXCERPT_LIMIT,
 	truncateExcerpt,
-} from "../search/match-utils.ts";
-import type { MattermostStore } from "../store/index.ts";
+} from "../text/index.ts";
 import { postLink } from "./helpers.ts";
 import type { ContextThread, RelatedTicketPointer } from "./types.ts";
 

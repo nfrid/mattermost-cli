@@ -4,7 +4,7 @@ import {
 	analyzeSearchToken,
 	morphSearchTerms,
 	normalizeMorphText,
-} from "./search-token-normalization.ts";
+} from "./morphology.ts";
 import { stemRussianSnowball } from "./vendor/snowball/russian.ts";
 
 const vectorsPath = join(

@@ -1,11 +1,10 @@
 import type { MattermostConfig } from "../config/config.ts";
-import { TICKET_PATTERN } from "../search/extract.ts";
 import type {
 	MattermostSubject,
 	RankingReason,
 	ThreadCandidate,
 } from "../search/index.ts";
-import { redactCredentialExcerpts } from "../search/match-utils.ts";
+import { redactCredentialExcerpts, TICKET_PATTERN } from "../text/index.ts";
 import { postLink } from "./helpers.ts";
 import type { DroppedCandidate, DroppedCandidateReason } from "./types.ts";
 
