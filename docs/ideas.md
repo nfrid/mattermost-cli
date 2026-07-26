@@ -173,25 +173,75 @@ invariant — it needs a deliberate decision, not a quiet tweak.
 
 ## `purposeHints` miss long technical threads
 
-**Status:** open (found while validating the Phase 6 field report against the
-live index)
+**Status:** resolved — reverified against the live index on 2026-07-26
 
-**Problem.** Reproducible on BTB-2113: the primary `backend-zone` thread — 25
-packed messages arguing `capabilities` vs `skipValidations` — gets
-`purposeHints: []`, while a one-line DM in the same packet gets `noise@0.6`.
-The cues appear to fire on short conversational threads and miss long technical
-ones, which inverts the ordering value the hints are supposed to provide.
-`brief.decisions[]` still worked on that packet, so the miss is in the hint
-classifier, not in decision detection.
+**What it claimed.** On BTB-2113 the `backend-zone` thread — 25 packed messages
+arguing `capabilities` vs `skipValidations` — got `purposeHints: []` while a
+one-line DM in the same packet got `noise@0.6`, suggesting the cues fire on
+short conversational threads and miss long technical ones.
 
-**Direction to explore later.** Treat this as signal calibration, not a
-projection fix: it is guarded by `ranking-regression` snapshots and the
-retrieval benchmark, so any change needs a before/after benchmark run and a
-concrete cue hypothesis (message length, code-fence density, and
-question/commitment ratio are the obvious candidates). Do not hand-tune
-thresholds against this one packet.
+**What re-running it shows.** The packet no longer behaves that way.
+`backend-zone` yields `decision@0.55` + `open_question@0.6`, the `b2b-team`
+thread is primary with `decision@0.78`, and the DM keeps `noise@0.6` at rank 3
+— the ordering the item asked for. The Phase 5 first-person commitment cues and
+the tail-question gate closed it; nobody updated this entry.
+
+**The general claim is also false.** Measured over 14,806 indexed threads,
+`purposeHints` coverage *improves* with length rather than degrading: 76% of
+one-post threads get no hint at all, against 19% at 9–20 posts and 1% at 21+.
+Long threads carrying a code fence are empty 1% of the time. The 55 long
+threads that do come back empty are uniformly low-density chatter (30–100
+characters per post), not technical argument.
+
+**What to take from it.** Nothing needs fixing here. The real calibration
+problem in this layer is the one below, which the original item was close to
+but described backwards.
 
 ---
+
+## `open_question` rests almost entirely on the bare `?`
+
+**Status:** open (found by the cue firing report, `bun run cues`)
+
+**Problem.** The bare `?` is not one cue among many — it is the layer. Over the
+local index it accounts for 5,647 of roughly 7,900 total cue matches, and it is
+the *only* reported cue on 94% of `open_question_candidate` spans and 95% of
+inlined `brief.openQuestions`. Among questions reported
+`resolution: "unanswered"` — the ones an agent is most likely to act on — 98%
+rest on `?` alone. Every other entry in `OPEN_QUESTION_CUES` combined decides
+about one question in twenty.
+
+The gates make this structural rather than incidental. A bare `?` scores exactly
+`OPEN_QUESTION_INLINE_FLOOR` (0.4), so it always inlines, while never reaching
+`OPEN_QUESTION_CONFIDENCE_FLOOR` (0.5) on its own. The hint therefore fires
+through `OPEN_QUESTION_MIN_POSTS` (three posts containing `?`) or the tail
+gate — and three posts containing a question mark is near-certain in any thread
+of nine or more posts. 77% of threads that size get an `open_question` hint,
+and only 20% of those would still get one without `?`.
+
+**Why this matters.** `?` is precise as a *question detector* and carries almost
+no information as an *open question* detector. Sampling bare-`?` unanswered
+questions returns «заведёшь баг?», «что за задача?», «получилось черкануть ?» —
+real questions, but ordinary conversational ones, mostly answered offline or
+rhetorical. `resolution: "unanswered"` compounds it: it means only that no other
+author posted afterwards *inside the packet*, which for a tail question usually
+just means the conversation ended.
+
+**Direction to explore later.** This is signal calibration guarded by
+`ranking-regression` and the retrieval benchmark, so it needs a before/after
+benchmark run and a labeled question corpus — the counts here say `?` dominates,
+not that it is wrong. Hypotheses worth testing in that order:
+
+- Require `?` to co-occur with something (subject mention, a real cue, a
+  question word, a named addressee) before it can inline, rather than lowering
+  its weight, which would only shift the same population below a floor.
+- Separate "a question was asked" from "a question is open": the first is
+  cheap and reliable, the second currently borrows the first's evidence.
+- Reconsider `OPEN_QUESTION_MIN_POSTS` as a count of *distinct question-bearing
+  authors*, or of questions inside the ticket window, rather than raw posts.
+
+Do not treat the low `soleRate` of the other cues as evidence they should be
+removed: they are what makes the remaining 5% specific.
 
 ## Candidate pools with their own budgets
 
