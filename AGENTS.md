@@ -5,6 +5,7 @@
 - Never print, log, snapshot, or commit a Mattermost personal access token.
 - Keep runtime configuration and database files under the Git-ignored `.mattermost/` directory.
 - Prefer `bun --bun run check` on Apple Silicon when Rosetta breaks Biome under plain `bun run check`.
+- Reference documentation lives in `docs/` (see `docs/README.md`); `README.md` is the entry point only. Contract changes belong in `docs/json-contract.md` and `docs/agent-output.md`.
 
 ## Source map
 

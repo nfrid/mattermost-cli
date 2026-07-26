@@ -58,4 +58,4 @@ A ticket subject routes **only** to conversations already linked to that ticket.
 
 Report routing restrictions, the verdict and the axes behind it, recommended steps taken, packing omissions, material related or background pointers, and anything unavailable or contradictory. Summarize with permalinks instead of pasting transcripts, and reconcile chat against Tracker, code, docs, and newer sources.
 
-Mechanics and the full projection reference: [`README.md`](../../../README.md).
+Mechanics and the full projection reference: [`docs/agent-output.md`](../../../docs/agent-output.md), with retrieval behavior in [`docs/retrieval.md`](../../../docs/retrieval.md) and the envelope in [`docs/json-contract.md`](../../../docs/json-contract.md).
