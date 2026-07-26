@@ -445,6 +445,13 @@ const searchDataSchema = z.object({
 	excerptLimit: z.number().int().positive(),
 	warnings: z.array(warningSchema),
 });
+const probeCoverageSchema = z.object({
+	probe: z.string(),
+	kind: agentProbeKindSchema.optional(),
+	matchedSelectedEvidence: z.boolean(),
+	backgroundThreads: z.number().int().nonnegative(),
+	status: z.enum(["matched_selected", "background_only", "no_match"]),
+});
 const backgroundThreadSchema = z.object({
 	threadId: z.string(),
 	conversationId: z.string(),
@@ -642,6 +649,7 @@ const contextDataSchema = z.object({
 	evidence: evidenceStatusSchema.optional(),
 	threads: z.array(contextThreadSchema),
 	background: z.array(backgroundThreadSchema).optional(),
+	probeCoverage: z.array(probeCoverageSchema).optional(),
 	budget: budgetSchema.extend({ maxThreads: z.number().int().positive() }),
 	warnings: z.array(warningSchema),
 	short: z.boolean().optional(),

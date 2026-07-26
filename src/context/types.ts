@@ -5,6 +5,7 @@ import type { TicketSegment } from "../evidence/ticket-segments.ts";
 import type { MattermostClient } from "../mattermost/client.ts";
 import type {
 	AgentProbeInput,
+	AgentProbeKind,
 	MattermostSubject,
 	RankingReason,
 	RetrievalProbe,
@@ -217,6 +218,26 @@ export interface RelatedTicketPointer {
 }
 
 /**
+ * What one explicit `--query` probe actually retrieved.
+ *
+ * `background_only` is the common and previously confusing case: the probe
+ * found nothing inside the selected threads but is exactly why a `background[]`
+ * pointer exists. Reporting it as unmatched made a working probe look broken.
+ */
+export interface ProbeCoverage {
+	probe: string;
+	kind?: AgentProbeKind;
+	/**
+	 * The probe text-matched at least one post inside a *returned* thread —
+	 * candidates the packer examined and then dropped do not count.
+	 */
+	matchedSelectedEvidence: boolean;
+	/** Background pointers this probe matched; 0 when none or none were built. */
+	backgroundThreads: number;
+	status: "matched_selected" | "background_only" | "no_match";
+}
+
+/**
  * Pointer to a thematically close thread outside ticket routing. Never
  * hydrated, never packed, never part of thread selection — it exists so the
  * agent can decide whether a pre-ticket design discussion is worth a call.
@@ -267,6 +288,8 @@ export interface ContextResult {
 	threads: ContextThread[];
 	/** Pointers outside ticket routing; only with explicit `--query` probes. */
 	background?: BackgroundThread[];
+	/** Per-probe retrieval outcome; only with explicit `--query` probes. */
+	probeCoverage?: ProbeCoverage[];
 	budget: {
 		measurement: "unicode_code_points_in_rendered_post";
 		limit: number;

@@ -15,6 +15,15 @@ import type { BackgroundThread } from "./types.ts";
 const BACKGROUND_LIMIT = 5;
 /** Distinct excerpts kept per background pointer. */
 const BACKGROUND_EXCERPTS = 2;
+/**
+ * Fallback retrieval sources too loose to attribute a pointer to a probe: they
+ * exist to rescue typos and truncations inside an already-relevant candidate
+ * set, not to justify surfacing an unrelated thread as background.
+ */
+const WEAK_LEXICAL_SOURCES: ReadonlySet<string> = new Set([
+	"trigram",
+	"prefix_fts",
+]);
 
 /**
  * Thematically close threads *outside* ticket routing.
@@ -73,9 +82,18 @@ export function findBackgroundThreads(input: {
 	for (const candidate of candidates) {
 		if (background.length >= BACKGROUND_LIMIT) break;
 		if (input.selectedThreadIds.has(candidate.threadId)) continue;
+		// Attribution is only worth anything when the match is one a reader would
+		// recognize. A trigram or prefix hit surfaces "rotating ssh keys" for the
+		// probe «idempotency keys» — which reads as evidence the probe worked and
+		// crowds out the pointers that earned their place.
+		const strongMatches = candidate.matches.filter(
+			(match) =>
+				!match.lexicalSource || !WEAK_LEXICAL_SOURCES.has(match.lexicalSource),
+		);
+		if (!strongMatches.length) continue;
 		const excerpts = [
 			...new Set(
-				candidate.matches
+				strongMatches
 					.map(({ excerpt }) => excerpt)
 					.filter((excerpt) => excerpt.length > 0),
 			),
@@ -90,7 +108,7 @@ export function findBackgroundThreads(input: {
 			latestActivityAt: candidate.latestActivityAt,
 			reasons: [...candidate.reasons],
 			matchedProbes: [
-				...new Set(candidate.matches.map(({ probe }) => probe)),
+				...new Set(strongMatches.map(({ probe }) => probe)),
 			].sort(),
 			excerpts,
 		});

@@ -189,6 +189,9 @@ function projectContext(
 		...(data.background?.length
 			? { background: data.background.map(projectBackgroundThread) }
 			: {}),
+		...(data.probeCoverage?.length
+			? { probeCoverage: data.probeCoverage }
+			: {}),
 		warnings,
 	};
 }

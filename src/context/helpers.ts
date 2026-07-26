@@ -31,7 +31,11 @@ import type {
 	MattermostStore,
 } from "../store/index.ts";
 import { inspectFreshness, ReconciliationError } from "../sync/sync.ts";
-import type { FreshnessEvidence, SurroundRelevance } from "./types.ts";
+import type {
+	FreshnessEvidence,
+	ProbeCoverage,
+	SurroundRelevance,
+} from "./types.ts";
 
 export function isRecoverableRemoteError(error: unknown): boolean {
 	if (error instanceof MattermostApiError) return true;
@@ -396,18 +400,50 @@ export function consolidateLocalFallbackWarnings(
 	];
 }
 
-export function probeWarnings(
+/**
+ * Per-probe retrieval outcome. A blanket "these probes did not match" warning
+ * fired on every request even when the same probes were the only reason
+ * `background[]` had entries at all, which left a reader reconciling a warning
+ * against pointers that visibly contradicted it.
+ */
+export function buildProbeCoverage(
 	probes: readonly RetrievalProbe[],
 	matchedValues: ReadonlySet<string>,
-): Warning[] {
-	const unmatched = probes
-		.map(({ value }) => value)
-		.filter((value) => !matchedValues.has(value));
+	background: readonly { matchedProbes: readonly string[] }[] = [],
+): ProbeCoverage[] {
+	return probes.map((probe) => {
+		const backgroundThreads = background.filter((thread) =>
+			thread.matchedProbes.includes(probe.value),
+		).length;
+		const selected = matchedValues.has(probe.value);
+		return {
+			probe: probe.value,
+			...(probe.kind ? { kind: probe.kind } : {}),
+			matchedSelectedEvidence: selected,
+			backgroundThreads,
+			status: selected
+				? "matched_selected"
+				: backgroundThreads > 0
+					? "background_only"
+					: "no_match",
+		};
+	});
+}
+
+/**
+ * Warn only for probes that matched *nothing* anywhere. `background_only` is a
+ * reportable outcome, not a defect: the probe did its job in the conversations
+ * ticket routing never reaches.
+ */
+export function probeWarnings(coverage: readonly ProbeCoverage[]): Warning[] {
+	const unmatched = coverage
+		.filter(({ status }) => status === "no_match")
+		.map(({ probe }) => probe);
 	return unmatched.length
 		? [
 				{
 					kind: "unmatched_retrieval_probe",
-					message: `Retrieval probe(s) did not text-match selected evidence and were not treated as required filters: ${unmatched.join(", ")}.`,
+					message: `Retrieval probe(s) matched no selected evidence and no background pointer, and were not treated as required filters: ${unmatched.join(", ")}.`,
 				},
 			]
 		: [];

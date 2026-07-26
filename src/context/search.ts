@@ -6,6 +6,7 @@ import {
 import type { Warning } from "../shared/command-result.ts";
 import { searchDeadlineAt } from "../shared/limits.ts";
 import {
+	buildProbeCoverage,
 	freshnessEvidence,
 	postLink,
 	probeWarnings,
@@ -127,12 +128,16 @@ export async function searchMattermost(
 		}
 		warnings.push(...routingHintWarnings(routing));
 		if (input.queries?.length || input.probes?.length) {
+			// `search` hydrates nothing, so it has no background pointers to
+			// distinguish: every unmatched probe here really did match nothing.
 			warnings.push(
 				...probeWarnings(
-					probes,
-					new Set(
-						candidates.flatMap(({ matches }) =>
-							matches.map(({ probe }) => probe),
+					buildProbeCoverage(
+						probes,
+						new Set(
+							candidates.flatMap(({ matches }) =>
+								matches.map(({ probe }) => probe),
+							),
 						),
 					),
 				),

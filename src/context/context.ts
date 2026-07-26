@@ -18,8 +18,10 @@ import { inspectFreshness } from "../sync/sync.ts";
 import { findBackgroundThreads } from "./background.ts";
 import { freshen, selectFreshenConversations } from "./freshen.ts";
 import {
+	buildProbeCoverage,
 	consolidateLocalFallbackWarnings,
 	freshnessEvidence,
+	matchingProbeValues,
 	probeWarnings,
 	routingHintWarnings,
 } from "./helpers.ts";
@@ -356,6 +358,36 @@ export async function getMattermostContext(
 			);
 		}
 
+		const selectedIds = new Set(threads.map(({ threadId }) => threadId));
+		const hasExplicitProbes = Boolean(
+			input.queries?.length || input.probes?.length,
+		);
+		// Built before the warnings: a probe that only reached the non-routed
+		// conversations must be reported as `background_only`, not as unmatched.
+		const background = findBackgroundThreads({
+			config,
+			store,
+			subject,
+			probes,
+			routing,
+			all,
+			filters: resolvedFilters.storage,
+			selectedThreadIds: selectedIds,
+			hasExplicitProbes,
+			deadlineAt,
+			includeAutomation: input.includeAutomation,
+		});
+		// Derived from the packed threads, never from `packer.matchedProbeValues`:
+		// that set records every candidate the packer examined, including ones a
+		// hard filter or a hydration failure removed afterwards, so an empty packet
+		// could otherwise report a probe as having matched selected evidence.
+		const selectedProbeValues = new Set(
+			threads.flatMap((thread) => matchingProbeValues(thread.posts, probes)),
+		);
+		const probeCoverage = hasExplicitProbes
+			? buildProbeCoverage(probes, selectedProbeValues, background)
+			: [];
+
 		const freshness = freshnessEvidence(
 			config,
 			store,
@@ -397,9 +429,7 @@ export async function getMattermostContext(
 			});
 		}
 		warnings.push(...routingHintWarnings(routing));
-		if (input.queries?.length || input.probes?.length) {
-			warnings.push(...probeWarnings(probes, packer.matchedProbeValues));
-		}
+		warnings.push(...probeWarnings(probeCoverage));
 
 		const searchCoverageComplete =
 			!searchIncomplete.value &&
@@ -414,7 +444,6 @@ export async function getMattermostContext(
 			);
 
 		const selection = packer.selection;
-		const selectedIds = new Set(threads.map(({ threadId }) => threadId));
 		const seenList = [...packer.seenCandidates.values()];
 		selection.candidateThreads = Math.max(
 			selection.candidateThreads,
@@ -453,19 +482,6 @@ export async function getMattermostContext(
 				? "forced"
 				: "network";
 		const people = peopleInThreads(config, store, threads);
-		const background = findBackgroundThreads({
-			config,
-			store,
-			subject,
-			probes,
-			routing,
-			all,
-			filters: resolvedFilters.storage,
-			selectedThreadIds: selectedIds,
-			hasExplicitProbes: Boolean(input.queries?.length || input.probes?.length),
-			deadlineAt,
-			includeAutomation: input.includeAutomation,
-		});
 		return {
 			subject,
 			probes,
@@ -517,6 +533,7 @@ export async function getMattermostContext(
 			}),
 			threads,
 			...(background.length ? { background } : {}),
+			...(probeCoverage.length ? { probeCoverage } : {}),
 			budget: {
 				measurement: "unicode_code_points_in_rendered_post",
 				limit: packer.budgets.maxCharacters,

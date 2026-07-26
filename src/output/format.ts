@@ -295,6 +295,23 @@ function formatContext(data: ContextResult): string {
 					),
 				]
 			: []),
+		...(data.probeCoverage?.length
+			? [
+					`\n${styles.label("Probe coverage:")}`,
+					...data.probeCoverage.map((coverage) =>
+						joinParts([
+							styles.identifier(coverage.probe),
+							coverage.status === "matched_selected"
+								? styles.hint("matched selected evidence")
+								: coverage.status === "background_only"
+									? styles.hint(
+											`background only (${coverage.backgroundThreads} pointer(s))`,
+										)
+									: styles.warning("no match anywhere"),
+						]),
+					),
+				]
+			: []),
 	].join("\n");
 }
 
