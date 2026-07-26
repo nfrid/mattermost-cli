@@ -135,6 +135,8 @@ describe("file command", () => {
 				"--out",
 				"/tmp/mm-file-1-trace.txt",
 				"--inspect",
+				"--preview-lines",
+				"5",
 				"--agent",
 			],
 			{ from: "user" },
@@ -144,6 +146,7 @@ describe("file command", () => {
 			fileId: "file-1",
 			out: "/tmp/mm-file-1-trace.txt",
 			inspect: true,
+			previewLines: 5,
 			agent: true,
 		});
 	});

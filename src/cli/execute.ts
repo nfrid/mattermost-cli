@@ -122,6 +122,7 @@ export async function executeCommand(
 						out: commandOptions.out,
 						outDir: commandOptions.outDir,
 						inspect: commandOptions.inspect,
+						previewLines: commandOptions.previewLines,
 					},
 					dependencies,
 				);

@@ -1,7 +1,7 @@
 import type { ContextThread } from "../context/index.ts";
 import { isMediaOnlyPost, type PackedPost } from "../evidence/packing.ts";
 import { briefRetainedPostIds, buildThreadBrief } from "../evidence/signals.ts";
-import { fileDownloadCommand } from "./agent/messages.ts";
+import { fileDownloadCommand, fileInspectCommand } from "./agent/messages.ts";
 import type { AgentFile } from "./agent/types.ts";
 import { isoTimestamp } from "./shared.ts";
 
@@ -150,6 +150,7 @@ function eventFromPost(
 							...(file.mimeType ? { mimeType: file.mimeType } : {}),
 							...(Number.isFinite(file.size) ? { size: file.size } : {}),
 							downloadCommand: fileDownloadCommand(file.id),
+							inspectCommand: fileInspectCommand(file.id),
 						}),
 					),
 				}

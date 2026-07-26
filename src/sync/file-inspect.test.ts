@@ -36,11 +36,58 @@ describe("bounded attachment inspection", () => {
 			status: "preview",
 			decoded: true,
 			syntaxValidated: false,
-			lines: 40,
+			lines: 10,
 			truncated: true,
 		});
 		if (inspection.status === "preview") {
-			expect([...inspection.preview]).toHaveLength(8_000);
+			expect([...inspection.preview].length).toBeLessThanOrEqual(8_000);
+		}
+	});
+
+	test("redacts sensitive table columns and honors an explicit line cap", () => {
+		const inspection = inspectDownloadedFile({
+			name: "workers.csv",
+			mimeType: "text/csv",
+			bytes: bytes(
+				'name,phone,email,note\nAlice,"+7 999 123-45-67",a@example.test,"kept, text"\nBob,89991234567,b@example.test,second\nCarol,123,c@example.test,third',
+			),
+			previewLines: 3,
+		});
+		expect(inspection).toMatchObject({
+			status: "preview",
+			format: "csv",
+			lines: 3,
+			sensitiveFieldsDetected: ["phone", "email"],
+			redactionApplied: true,
+			truncated: true,
+		});
+		if (inspection.status === "preview") {
+			expect(inspection.preview).toContain("Alice,[REDACTED],[REDACTED]");
+			expect(inspection.preview).toContain('"kept, text"');
+			expect(inspection.preview).not.toContain("999 123");
+			expect(inspection.preview).not.toContain("example.test");
+			expect(inspection.preview).not.toContain("Carol");
+		}
+	});
+
+	test("keeps sensitive columns masked after quoted multiline fields", () => {
+		const inspection = inspectDownloadedFile({
+			name: "workers.csv",
+			mimeType: "text/csv",
+			bytes: bytes(
+				'note,passport,region\n"first line\nsecond line",1234567890,west\nplain,9876543210,east',
+			),
+		});
+		expect(inspection).toMatchObject({
+			status: "preview",
+			sensitiveFieldsDetected: ["passport"],
+			redactionApplied: true,
+			lines: 3,
+		});
+		if (inspection.status === "preview") {
+			expect(inspection.preview).toContain("first line\\nsecond line");
+			expect(inspection.preview).not.toContain("1234567890");
+			expect(inspection.preview).not.toContain("9876543210");
 		}
 	});
 

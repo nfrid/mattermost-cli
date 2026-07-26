@@ -22,6 +22,8 @@ export interface FileDownloadInput {
 	local?: boolean;
 	/** Download, then emit a bounded preview or an explicit not-interpreted state. */
 	inspect?: boolean;
+	/** Preview line cap for inspection (1–40); requires inspect. */
+	previewLines?: number;
 }
 
 export interface FileDownloadResult {
@@ -61,6 +63,23 @@ export async function downloadMattermostFile(
 	const fileId = input.fileId.trim();
 	if (!fileId) {
 		throw new ConfigError("File id is required.", "invalid_file_target");
+	}
+	if (input.previewLines !== undefined && !input.inspect) {
+		throw new ConfigError(
+			"--preview-lines requires --inspect.",
+			"invalid_file_inspection_options",
+		);
+	}
+	if (
+		input.previewLines !== undefined &&
+		(!Number.isInteger(input.previewLines) ||
+			input.previewLines < 1 ||
+			input.previewLines > 40)
+	) {
+		throw new ConfigError(
+			"--preview-lines must be an integer from 1 to 40.",
+			"invalid_file_inspection_options",
+		);
 	}
 
 	const allowedConversationIds = new Set(
@@ -152,6 +171,7 @@ export async function downloadMattermostFile(
 						name: meta.name,
 						mimeType: meta.mimeType,
 						bytes,
+						previewLines: input.previewLines,
 					}),
 				}
 			: {}),

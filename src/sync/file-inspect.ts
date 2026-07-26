@@ -8,6 +8,9 @@ export type FileInspection =
 			preview: string;
 			bytesExamined: number;
 			lines: number;
+			/** Best-effort header-based detection; not an anonymization guarantee. */
+			sensitiveFieldsDetected?: string[];
+			redactionApplied?: true;
 			truncated?: true;
 	  }
 	| {
@@ -23,7 +26,8 @@ export type FileInspection =
 
 const MAX_INSPECT_BYTES = 64 * 1024;
 const MAX_PREVIEW_CHARACTERS = 8_000;
-const MAX_PREVIEW_LINES = 40;
+const DEFAULT_PREVIEW_LINES = 10;
+export const MAX_PREVIEW_LINES = 40;
 
 const TEXT_EXTENSIONS = new Set([
 	"csv",
@@ -58,6 +62,7 @@ export function inspectDownloadedFile(input: {
 	name: string;
 	mimeType: string;
 	bytes: Uint8Array;
+	previewLines?: number;
 }): FileInspection {
 	const extension = input.name.split(".").pop()?.toLowerCase() ?? "";
 	if (
@@ -131,13 +136,29 @@ export function inspectDownloadedFile(input: {
 				"the nominally textual file is not valid UTF-8; inspect the downloaded path with a format-specific parser",
 		};
 	}
+	const previewLineLimit = Math.max(
+		1,
+		Math.min(
+			MAX_PREVIEW_LINES,
+			Math.floor(input.previewLines ?? DEFAULT_PREVIEW_LINES),
+		),
+	);
 	const allLines = decoded.split(/\r\n|\r|\n/u);
-	const lineBounded = allLines.slice(0, MAX_PREVIEW_LINES).join("\n");
+	const selectedLines = allLines.slice(0, previewLineLimit);
+	const table =
+		extension === "csv" || extension === "tsv"
+			? redactSensitiveTable(
+					decoded,
+					extension === "tsv" ? "\t" : ",",
+					previewLineLimit,
+				)
+			: undefined;
+	const lineBounded = (table?.records ?? selectedLines).join("\n");
 	const characters = [...lineBounded];
 	const preview = characters.slice(0, MAX_PREVIEW_CHARACTERS).join("");
 	const truncated =
 		input.bytes.byteLength > examined.byteLength ||
-		allLines.length > MAX_PREVIEW_LINES ||
+		(table ? table.truncated : allLines.length > previewLineLimit) ||
 		characters.length > MAX_PREVIEW_CHARACTERS;
 	return {
 		status: "preview",
@@ -153,7 +174,101 @@ export function inspectDownloadedFile(input: {
 		syntaxValidated: false,
 		preview,
 		bytesExamined: examined.byteLength,
-		lines: Math.min(allLines.length, MAX_PREVIEW_LINES),
+		lines: table
+			? table.records.length
+			: Math.min(allLines.length, previewLineLimit),
+		...(table?.fields.length
+			? {
+					sensitiveFieldsDetected: table.fields,
+					redactionApplied: true as const,
+				}
+			: {}),
 		...(truncated ? { truncated: true as const } : {}),
 	};
+}
+
+const SENSITIVE_HEADER =
+	/(?:^|[_\s-])(phone|mobile|telephone|телефон|email|e-mail|почта|passport|паспорт|inn|инн|snils|снилс|card|карта|account|счет|счёт)(?:$|[_\s-])/iu;
+
+/** Best-effort table minimization. Parsing remains deliberately unvalidated. */
+function redactSensitiveTable(
+	text: string,
+	delimiter: "," | "\t",
+	limit: number,
+): { records: string[]; fields: string[]; truncated: boolean } {
+	const parsed = parseDelimitedRecords(text, delimiter);
+	const headers = parsed.records[0] ?? [];
+	const sensitiveIndexes = headers
+		.map((value, index) => ({ value: value.trim(), index }))
+		.filter(({ value }) => SENSITIVE_HEADER.test(value));
+	const indexes = new Set(sensitiveIndexes.map(({ index }) => index));
+	const records = parsed.records.slice(0, limit).map((source, recordIndex) => {
+		const fields = [...source];
+		if (recordIndex > 0) {
+			for (const index of indexes) {
+				if (index < fields.length && fields[index])
+					fields[index] = "[REDACTED]";
+			}
+		}
+		const serialized = fields
+			.map((field) =>
+				encodeDelimitedField(field.replace(/\r\n|\r|\n/gu, "\\n"), delimiter),
+			)
+			.join(delimiter);
+		return indexes.size ? redactObviousSensitiveValues(serialized) : serialized;
+	});
+	return {
+		records,
+		fields: sensitiveIndexes.map(({ value }) => value),
+		truncated: !parsed.complete || parsed.records.length > limit,
+	};
+}
+
+function redactObviousSensitiveValues(value: string): string {
+	return value
+		.replace(/[\w.+-]+@[\w.-]+\.[\p{L}]{2,}/giu, "[REDACTED]")
+		.replace(/(?:\+?\d[\d ()-]{8,}\d)/gu, "[REDACTED]");
+}
+
+function parseDelimitedRecords(
+	text: string,
+	delimiter: "," | "\t",
+): { records: string[][]; complete: boolean } {
+	const records: string[][] = [];
+	let record: string[] = [];
+	let field = "";
+	let quoted = false;
+	for (let index = 0; index < text.length; index += 1) {
+		const character = text[index];
+		if (character === '"') {
+			if (quoted && text[index + 1] === '"') {
+				field += '"';
+				index += 1;
+			} else {
+				quoted = !quoted;
+			}
+		} else if (character === delimiter && !quoted) {
+			record.push(field);
+			field = "";
+		} else if ((character === "\n" || character === "\r") && !quoted) {
+			record.push(field);
+			records.push(record);
+			record = [];
+			field = "";
+			if (character === "\r" && text[index + 1] === "\n") index += 1;
+		} else {
+			field += character;
+		}
+	}
+	if (!quoted && (field.length > 0 || record.length > 0)) {
+		record.push(field);
+		records.push(record);
+	}
+	return { records, complete: !quoted };
+}
+
+function encodeDelimitedField(field: string, delimiter: "," | "\t"): string {
+	return field.includes(delimiter) || /["\r\n]/u.test(field)
+		? `"${field.replaceAll('"', '""')}"`
+		: field;
 }

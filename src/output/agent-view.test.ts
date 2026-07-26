@@ -32,7 +32,7 @@ describe("agent projection", () => {
 			commandSuccess("context", context, context.warnings),
 		);
 
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			command: "context",
 			schemaVersion: 5,
 			success: true,

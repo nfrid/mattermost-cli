@@ -52,6 +52,24 @@ describe("file download", () => {
 		await rm(outDir, { recursive: true, force: true });
 	});
 
+	test("validates preview line bounds before downloading", async () => {
+		const store = await seededStore();
+		const dependencies = { config: configFixture(), store };
+		await expect(
+			downloadMattermostFile(
+				{ fileId: FILE_ID, previewLines: 5 },
+				dependencies,
+			),
+		).rejects.toMatchObject({ kind: "invalid_file_inspection_options" });
+		await expect(
+			downloadMattermostFile(
+				{ fileId: FILE_ID, inspect: true, previewLines: 41 },
+				dependencies,
+			),
+		).rejects.toMatchObject({ kind: "invalid_file_inspection_options" });
+		store.close();
+	});
+
 	test("overwrites an existing file at --out", async () => {
 		const store = await seededStore();
 		const outDir = await mkdtemp(join(tmpdir(), "mm-file-"));

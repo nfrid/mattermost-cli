@@ -34,6 +34,8 @@ export interface AgentFile {
 	size?: number;
 	/** Argv segments only — copy; never auto-exec or join into a shell string. */
 	downloadCommand: string[];
+	/** Bounded content inspection; use when the attachment itself is evidence. */
+	inspectCommand: string[];
 }
 
 /**
@@ -56,6 +58,8 @@ export interface AgentThreadAttachment {
 	mediaOnly?: true;
 	/** Argv segments only — copy; never auto-exec or join into a shell string. */
 	downloadCommand: string[];
+	/** Bounded content inspection; use when the attachment itself is evidence. */
+	inspectCommand: string[];
 }
 
 /**

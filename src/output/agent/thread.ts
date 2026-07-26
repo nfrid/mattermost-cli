@@ -33,6 +33,7 @@ import {
 import { isoTimestamp } from "../shared.ts";
 import {
 	fileDownloadCommand,
+	fileInspectCommand,
 	groupEvidencePosts,
 	projectFile,
 	projectMessage,
@@ -334,6 +335,7 @@ function collectThreadAttachments(thread: PackedThread): {
 			inPacket,
 			...(mediaOnly ? { mediaOnly: true as const } : {}),
 			downloadCommand: fileDownloadCommand(attachment.id),
+			inspectCommand: fileInspectCommand(attachment.id),
 		});
 	};
 	for (const post of thread.posts) {

@@ -135,7 +135,9 @@ adds `retrieval.mode: "gap_window"` and `evidence.scope: "gap_recovery"`, where
 the packet-local general answerability verdict. `file --inspect` additively
 attaches either a bounded textual
 `inspection` preview or an explicit `not_interpreted` state to the existing file
-result. Search-agent candidates may carry capped `contributingProbes[]` (match
+result. Preview inspection may add best-effort
+`sensitiveFieldsDetected` / `redactionApplied`; attachment projections add an
+`inspectCommand` alongside the download-only `downloadCommand`. Search-agent candidates may carry capped `contributingProbes[]` (match
 contributors, not full-probe claims); raw JSON now retains
 additional already-computed ranking evidence (`thinTicketStub`,
 `multiTicketRoot`, ticket distance/density, and root focus) instead of stripping

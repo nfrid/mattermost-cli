@@ -22,6 +22,10 @@ export function fileDownloadCommand(id: string): string[] {
 	return ["mm", "file", id, "--agent"];
 }
 
+export function fileInspectCommand(id: string): string[] {
+	return ["mm", "file", id, "--inspect", "--agent"];
+}
+
 export function shortMessagesFromThreads(
 	threads: readonly ShortMessageThread[],
 	primaryIndex: number,
@@ -164,6 +168,7 @@ export function projectFile(attachment: {
 		...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
 		...(Number.isFinite(attachment.size) ? { size: attachment.size } : {}),
 		downloadCommand: fileDownloadCommand(attachment.id),
+		inspectCommand: fileInspectCommand(attachment.id),
 	};
 }
 

@@ -172,25 +172,30 @@ not an omission count.
 
 Threads may set `filesPresent: true` when any packed post has attachments, and
 carry a flat `attachments[]` index (`id` / `name` / `postId` / `inPacket` /
-`mediaOnly?` / `downloadCommand`) covering both returned posts and posts hidden
+`mediaOnly?` / `downloadCommand` / `inspectCommand`) covering both returned
+posts and posts hidden
 inside skip spans, so downloading is an informed decision.
 `attachmentsTruncated: true` marks a capped index, and
 `omitted.unreportedAttachments` counts omitted attachments whose metadata did not
 fit the reporting budget.
 
 Message-level `files[]` carry `id` / `name` (plus `mimeType` / `size` when known)
-with a copy-ready `downloadCommand` argv (`["mm","file",id,"--agent"]`); add
-`--inspect` when a bounded textual preview is needed.
+with separate copy-ready commands: `downloadCommand` only downloads, while
+`inspectCommand` includes `--inspect` and is the command to use when the
+attachment itself is evidence.
 
 A post whose text is empty while carrying a live attachment is marked
 `mediaOnly: true` on both the message and its attachment entry.
 
 `mm file <id> --inspect --agent` downloads the file and, for bounded textual
 formats (CSV/TSV/TXT/LOG/JSON/NDJSON/XML/SQL), returns an `inspection` preview:
-at most 64 KiB decoded, 40 lines, and 8,000 characters. It explicitly reports
+at most 64 KiB decoded, 10 lines by default (override with bounded
+`--preview-lines 1..40`), and 8,000 characters. It explicitly reports
 `decoded: true` and `syntaxValidated: false`; format classification does not
-claim CSV rows or JSON/XML syntax were parsed. The preview carries `truncated`
-when any bound cut it.
+claim CSV rows or JSON/XML syntax were parsed. CSV/TSV columns with common
+sensitive headers are replaced with `[REDACTED]` and reported through
+`sensitiveFieldsDetected` / `redactionApplied`. Detection is best effort, not an
+anonymization guarantee. The preview carries `truncated` when any bound cut it.
 
 Images and binary spreadsheets are never presented as read: their inspection is
 `status: "not_interpreted"`, `interpreted: false`, with the external reader or

@@ -38,6 +38,7 @@ export interface CommandOptions {
 	out?: string;
 	outDir?: string;
 	inspect?: boolean;
+	previewLines?: number;
 	fresh?: boolean;
 	local?: boolean;
 	remoteSearch?: boolean;

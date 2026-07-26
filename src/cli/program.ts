@@ -265,6 +265,11 @@ export function createProgram(
 			"--inspect",
 			"include a bounded text preview or an explicit not-interpreted state",
 		)
+		.option(
+			"--preview-lines <n>",
+			"preview lines for --inspect (default 10; max 40)",
+			(value) => Number(value),
+		)
 		.addOption(
 			new Option(
 				"--out-dir <dir>",

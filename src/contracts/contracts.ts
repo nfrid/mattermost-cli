@@ -787,6 +787,8 @@ const fileInspectionSchema = z.discriminatedUnion("status", [
 		preview: z.string(),
 		bytesExamined: z.number().int().nonnegative(),
 		lines: z.number().int().nonnegative(),
+		sensitiveFieldsDetected: z.array(z.string()).optional(),
+		redactionApplied: z.literal(true).optional(),
 		truncated: z.literal(true).optional(),
 	}),
 	z.object({
