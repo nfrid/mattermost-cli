@@ -162,6 +162,12 @@ export function createProgram(
 			"include advisory signals and technicalEntities in --agent output",
 		)
 		.option(
+			"--permalink <url>",
+			"also fold this permalink or post id into the packet (repeatable)",
+			collect,
+			[],
+		)
+		.option(
 			"--out <path>",
 			"write the result document to this path and print only a receipt",
 		)

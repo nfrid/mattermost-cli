@@ -79,6 +79,7 @@ export async function executeCommand(
 						brief: commandOptions.brief,
 						timeline: commandOptions.timeline,
 						signals: commandOptions.signals,
+						permalinks: commandOptions.permalink,
 					},
 					dependencies,
 				);

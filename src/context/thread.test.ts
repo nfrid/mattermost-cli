@@ -277,8 +277,10 @@ describe("allowlist refusals", () => {
 		expect(error.details).toMatchObject({
 			reason: "not_configured",
 			postId: outsideRoot,
-			conversationId: "channel-secret",
 		});
+		// Naming the channel behind a refusal would make refusals an existence
+		// oracle over everything the token can read.
+		expect(error.details).not.toHaveProperty("conversationId");
 		// Never a way around the allowlist — only who can widen it.
 		expect(String(error.details?.recommendedAction)).toContain("config owner");
 		store.close();

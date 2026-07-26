@@ -35,6 +35,7 @@ import {
 import { resolveDirectTarget } from "./hydrate.ts";
 import { ThreadPacker } from "./pack-threads.ts";
 import { peopleInThreads } from "./people.ts";
+import { resolvePermalinkTargets } from "./permalinks.ts";
 import { assertRemoteSearchAllowed, prepareSearch } from "./prepare.ts";
 import { resolveRelatedTicketPointers } from "./related-tickets.ts";
 import { searchRemoteCandidates } from "./remote-search.ts";
@@ -102,6 +103,7 @@ export async function getMattermostContext(
 			: (providedClient ?? new MattermostClient(connectionFromConfig(config)));
 		const freshenWarnings: Warning[] = [];
 		const remoteSearchWarnings: Warning[] = [];
+		const packingWarnings: Warning[] = [];
 		const searchIncomplete = { value: false };
 		const deadlineAt = searchDeadlineAt();
 		const observedAt = dependencies.now?.() ?? Date.now();
@@ -269,6 +271,21 @@ export async function getMattermostContext(
 			});
 		}
 
+		const permalinkTargets = await resolvePermalinkTargets({
+			permalinks: input.permalinks ?? [],
+			store,
+			client,
+			conversations: all,
+			configured: resolveContextConversations(config, store),
+			...(input.channels?.length ? { restrictedTo: input.channels } : {}),
+			fresh: Boolean(input.fresh),
+			warnings: freshenWarnings,
+		});
+		const permalinkCandidates = permalinkTargets.candidates;
+		const permalinkThreadIds = new Set(
+			permalinkCandidates.map(({ threadId }) => threadId),
+		);
+
 		// `--navigate` changes only the projection: packing stays on the default
 		// budget so a lean packet does not immediately demand `thread --full`,
 		// which costs more than the navigation view saves. `--short` remains the
@@ -287,16 +304,44 @@ export async function getMattermostContext(
 			observedAt,
 			deadlineAt,
 			warnings: freshenWarnings,
-			candidateCount: candidates.length,
+			candidateCount: new Set([
+				...candidates.map((item) => item.threadId),
+				...permalinkThreadIds,
+			]).size,
 		});
 		const { threads } = packer;
+		// Explicitly requested links are packed before ranked candidates: the
+		// caller already decided these are evidence, so they must not lose the
+		// budget to threads retrieval merely guessed at.
+		await packer.pack(permalinkCandidates);
+		const rankedCandidates = candidates.filter(
+			({ threadId }) => !permalinkThreadIds.has(threadId),
+		);
 		await packer.pack(
 			orderCandidatesForThinReserve(
-				candidates,
+				rankedCandidates,
 				subject,
-				packer.budgets.maxThreads,
+				// The thin reserve must aim at a slot that still exists: permalink
+				// threads have already taken theirs.
+				Math.max(0, packer.budgets.maxThreads - threads.length),
 			),
 		);
+		// `maxThreads` is small (3 by default), so a ticket description with three
+		// links can fill the packet entirely. That is the caller's own instruction
+		// — but it must not look like the subject simply had no threads.
+		const rankedPacked = threads.filter(
+			({ threadId }) => !permalinkThreadIds.has(threadId),
+		).length;
+		if (
+			permalinkCandidates.length &&
+			rankedCandidates.length &&
+			!rankedPacked
+		) {
+			packingWarnings.push({
+				kind: "permalink_crowded_out_ranked",
+				message: `${permalinkCandidates.length} explicit permalink thread(s) filled the packet; ${rankedCandidates.length} ranked candidate(s) for the subject were never packed. Re-run without --permalink, or with fewer.`,
+			});
+		}
 
 		if (!threads.length && fallbackRouting && !performedWidening) {
 			const widened = widenedRouting(all, fallbackRouting);
@@ -416,6 +461,7 @@ export async function getMattermostContext(
 		const warnings: Warning[] = consolidateLocalFallbackWarnings([
 			...freshenWarnings,
 			...remoteSearchWarnings,
+			...packingWarnings,
 		]);
 		if (searchIncomplete.value) warnings.push(SEARCH_DEADLINE_WARNING);
 		if (packer.hydrationFailures.length) {
@@ -557,6 +603,18 @@ export async function getMattermostContext(
 			threads,
 			...(background.length ? { background } : {}),
 			...(probeCoverage.length ? { probeCoverage } : {}),
+			...(permalinkTargets.resolutions.length
+				? {
+						permalinks: permalinkTargets.resolutions.map((resolution) =>
+							resolution.threadId
+								? {
+										...resolution,
+										packed: selectedIds.has(resolution.threadId),
+									}
+								: resolution,
+						),
+					}
+				: {}),
 			budget: {
 				measurement: "unicode_code_points_in_rendered_post",
 				limit: packer.budgets.maxCharacters,

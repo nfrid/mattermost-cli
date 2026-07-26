@@ -65,6 +65,8 @@ export interface ContextInput extends SearchFilterInput {
 	timeline?: boolean;
 	/** Opt-in advisory `signals` / `technicalEntities` in `--agent` output. */
 	signals?: boolean;
+	/** Extra permalinks or post ids to fold into the same packet. */
+	permalinks?: readonly string[];
 }
 
 export interface SearchInput
@@ -225,6 +227,32 @@ export interface RelatedTicketPointer {
 }
 
 /**
+ * What one extra `--permalink` target resolved to.
+ *
+ * Reported per link instead of thrown: aggregating several links from a ticket
+ * description is the point, and one link outside the allowlist must not cost
+ * the caller the others. `not_allowed` still discloses nothing from inside the
+ * refused conversation.
+ */
+export interface PermalinkResolution {
+	/** The value as passed, so a caller can match this back to its argument. */
+	input: string;
+	status: "resolved" | "duplicate" | "not_allowed" | "unresolved" | "invalid";
+	/**
+	 * The resolved thread is in `threads[]`. `status: "resolved"` only says the
+	 * link pointed at an allowed conversation — packing can still drop it on
+	 * budget, a hard filter, or a retrieval failure, and a caller must not treat
+	 * a resolved-but-unpacked link as evidence it read.
+	 */
+	packed?: boolean;
+	postId?: string;
+	threadId?: string;
+	conversationId?: string;
+	reason?: string;
+	details?: Readonly<Record<string, unknown>>;
+}
+
+/**
  * What one explicit `--query` probe actually retrieved.
  *
  * `background_only` is the common and previously confusing case: the probe
@@ -297,6 +325,8 @@ export interface ContextResult {
 	background?: BackgroundThread[];
 	/** Per-probe retrieval outcome; only with explicit `--query` probes. */
 	probeCoverage?: ProbeCoverage[];
+	/** One entry per `--permalink` target, in the order they were passed. */
+	permalinks?: PermalinkResolution[];
 	budget: {
 		measurement: "unicode_code_points_in_rendered_post";
 		limit: number;

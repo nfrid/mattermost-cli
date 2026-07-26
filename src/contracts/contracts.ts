@@ -445,6 +445,31 @@ const searchDataSchema = z.object({
 	excerptLimit: z.number().int().positive(),
 	warnings: z.array(warningSchema),
 });
+const permalinkResolutionSchema = z.object({
+	input: z.string(),
+	status: z.enum([
+		"resolved",
+		"duplicate",
+		"not_allowed",
+		"unresolved",
+		"invalid",
+	]),
+	packed: z.boolean().optional(),
+	postId: z.string().optional(),
+	threadId: z.string().optional(),
+	conversationId: z.string().optional(),
+	reason: z.string().optional(),
+	// Closed on purpose: an open record here would carry whatever a future
+	// error attaches, past any review of what a refusal may disclose.
+	details: z
+		.object({
+			reason: z.enum(["not_configured", "channel_restriction"]),
+			conversationId: z.string().optional(),
+			restrictedTo: z.array(z.string()).optional(),
+			recommendedAction: z.string(),
+		})
+		.optional(),
+});
 const probeCoverageSchema = z.object({
 	probe: z.string(),
 	kind: agentProbeKindSchema.optional(),
@@ -662,6 +687,7 @@ const contextDataSchema = z.object({
 	threads: z.array(contextThreadSchema),
 	background: z.array(backgroundThreadSchema).optional(),
 	probeCoverage: z.array(probeCoverageSchema).optional(),
+	permalinks: z.array(permalinkResolutionSchema).optional(),
 	budget: budgetSchema.extend({ maxThreads: z.number().int().positive() }),
 	warnings: z.array(warningSchema),
 	short: z.boolean().optional(),

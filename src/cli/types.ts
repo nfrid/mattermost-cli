@@ -54,6 +54,8 @@ export interface CommandOptions {
 	timeline?: boolean;
 	/** Opt-in agent emission of advisory `signals` and `technicalEntities`. */
 	signals?: boolean;
+	/** Repeatable `--permalink`: extra links folded into one context packet. */
+	permalink?: string[];
 	limit?: number;
 	/** Excerpts per candidate in `search --agent`. */
 	excerpts?: number;

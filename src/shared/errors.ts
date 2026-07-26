@@ -78,8 +78,12 @@ export class ConfigError extends AppError {
  * The bare `conversation_not_allowed` was correct but unactionable: a caller
  * holding a permalink could not tell whether the conversation is simply absent
  * from the config or was excluded by their own `--channel`, and had nothing to
- * ask an operator for. Ids the caller already supplied or can read off the
- * permalink are safe to echo; nothing from inside the conversation is.
+ * ask an operator for. The post id is echoed because the caller supplied it or
+ * read it off the permalink; content never is. A `conversationId` travels only
+ * with `channel_restriction`, where the conversation is configured and the
+ * caller can already list it — naming the channel behind a *not configured*
+ * refusal would turn refusals into an existence oracle over everything the
+ * token can read.
  */
 export function conversationNotAllowedDetails(input: {
 	reason: "not_configured" | "channel_restriction";
@@ -91,7 +95,9 @@ export function conversationNotAllowedDetails(input: {
 	return {
 		reason: input.reason,
 		...(input.postId ? { postId: input.postId } : {}),
-		...(input.conversationId ? { conversationId: input.conversationId } : {}),
+		...(input.conversationId && input.reason === "channel_restriction"
+			? { conversationId: input.conversationId }
+			: {}),
 		...(input.restrictedTo?.length
 			? { restrictedTo: [...input.restrictedTo] }
 			: {}),

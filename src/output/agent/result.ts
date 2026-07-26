@@ -193,6 +193,7 @@ function projectContext(
 		...(data.probeCoverage?.length
 			? { probeCoverage: data.probeCoverage }
 			: {}),
+		...(data.permalinks?.length ? { permalinks: data.permalinks } : {}),
 		warnings,
 	};
 }

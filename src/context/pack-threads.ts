@@ -212,6 +212,14 @@ export class ThreadPacker {
 		if (wantsNetwork && !withinHydrationBudget)
 			this.hydrationBudgetSpent = true;
 
+		// The subject post is required only of the thread that is supposed to
+		// contain it. A `--permalink` candidate lives in a different thread, and
+		// demanding the subject post there fails the whole request over a link
+		// that was never claimed to be in that conversation.
+		const subjectPostRequired =
+			subject.kind === "post" &&
+			candidate.matchingPostIds.includes(subject.postId);
+
 		let hydrated: Awaited<ReturnType<typeof hydrateThread>>;
 		try {
 			hydrated = await hydrateThread(
@@ -219,7 +227,7 @@ export class ThreadPacker {
 				conversation,
 				store,
 				wantsNetwork && !withinHydrationBudget ? undefined : client,
-				subject.kind === "post" ? subject.postId : undefined,
+				subjectPostRequired ? subject.postId : undefined,
 				{
 					forceRemote,
 					freshnessSeconds: config.freshnessSeconds,
@@ -230,9 +238,9 @@ export class ThreadPacker {
 		} catch (error) {
 			// One inconsistent or unavailable candidate must not fail a
 			// multi-candidate request; it is dropped and reported instead.
-			// A direct post subject still fails loudly: it has no alternative.
-			if (subject.kind === "post" || !droppableCandidateError(error))
-				throw error;
+			// The subject's own thread still fails loudly: it has no alternative.
+			// An extra `--permalink` thread does have one — the rest of the packet.
+			if (subjectPostRequired || !droppableCandidateError(error)) throw error;
 			this.hydrationFailures.push(candidate.threadId);
 			return;
 		}
@@ -260,7 +268,8 @@ export class ThreadPacker {
 		if (
 			subject.kind !== "post" &&
 			!currentMatchingPostIds.length &&
-			!candidate.reasons.includes("explicit_ticket_relationship")
+			!candidate.reasons.includes("explicit_ticket_relationship") &&
+			!candidate.reasons.includes("direct_post")
 		) {
 			this.dropAsNoMatch(candidate.threadId);
 			return;
@@ -357,6 +366,10 @@ export class ThreadPacker {
 		if (subject.kind === "post") return undefined;
 		if (candidate.reasons.includes("explicit_ticket_relationship"))
 			return undefined;
+		// A `--permalink` target is evidence the caller already chose. Dropping it
+		// for not mentioning the subject would silently answer a different request
+		// than the one made.
+		if (candidate.reasons.includes("direct_post")) return undefined;
 		const indexed = store.getThread(candidate.rootPostId);
 		if (!indexed.length) return undefined;
 		const evidence = localEvidence(store, indexed);
