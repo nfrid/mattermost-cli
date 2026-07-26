@@ -1018,7 +1018,24 @@ describe("buildThreadBrief", () => {
 		expect(tail?.repliesAfter).toBe(0);
 		const first = questions.find((question) => question.postId === "q1");
 		expect(first?.repliesAfter).toBe(1);
+		expect(first?.resolution).toBe("possibly_answered");
+		expect(first?.responsePostIds).toEqual(["q2"]);
+		expect(tail?.resolution).toBe("unknown");
 		assertBriefCitationsWithin(brief, posts);
+	});
+
+	test("caps response pointers without undercounting later replies", () => {
+		const posts = [
+			post("q", "что делаем с ограничением?", 10),
+			...Array.from({ length: 5 }, (_, index) =>
+				post(`a${index}`, `ответ ${index}`, 20 + index, { author: "bob" }),
+			),
+		];
+		const question = buildThreadBrief(posts).openQuestions?.[0];
+
+		expect(question?.repliesAfter).toBe(5);
+		expect(question?.responsePostIds).toEqual(["a0", "a1", "a2"]);
+		expect(question?.resolution).toBe("possibly_answered");
 	});
 
 	test("reports open_question when the thread stops on a question", () => {
@@ -1033,6 +1050,7 @@ describe("buildThreadBrief", () => {
 		);
 		// A bare `?` scores 0.4 and used to leave the thread with no purpose at all.
 		expect(hint?.confidence).toBeGreaterThanOrEqual(0.55);
+		expect(brief.openQuestions?.[0]?.resolution).toBe("unanswered");
 	});
 
 	test("attaches scope refinements that narrow a decision", () => {
@@ -1050,6 +1068,22 @@ describe("buildThreadBrief", () => {
 		expect(decision?.refinements?.[0]?.excerpt).toContain(
 			"только про координацию",
 		);
+		expect(decision?.acknowledgement).toMatchObject({
+			postId: "d4",
+			author: "bob",
+			excerpt: "хорошо",
+		});
+	});
+
+	test("does not treat a scope question as the decision refinement", () => {
+		const posts = [
+			post("s1", "решили: разрешающие роли имеют приоритет", 10),
+			post("s2", "но это только про подтверждение?", 20, { author: "bob" }),
+			post("s3", "нет, это только про координацию", 30),
+		];
+		const decision = buildThreadBrief(posts).decisions?.[0];
+
+		expect(decision?.refinements?.map(({ postId }) => postId)).toEqual(["s3"]);
 	});
 
 	test("never frames the same post as both a decision and an open question", () => {
@@ -1109,6 +1143,28 @@ describe("buildThreadBrief", () => {
 		expect(brief.decisions?.[0]?.refinements).toBeUndefined();
 	});
 
+	test("stops refinements at decisions omitted by presentation caps", () => {
+		const posts = [
+			post("aaa-first", "согласовали и решили: делаем первое изменение", 10),
+			post("hidden", "я сделаю скрытое изменение", 20),
+			post("scope", "только для скрытого изменения", 30),
+			...Array.from({ length: 11 }, (_, index) =>
+				post(
+					`approved${index}`,
+					`решили: делаем подтверждённое изменение ${index}`,
+					40 + index,
+				),
+			),
+		];
+		const brief = buildThreadBrief(posts);
+
+		expect(brief.decisions).toHaveLength(5);
+		expect(brief.decisionPostIds).toContain("aaa-first");
+		expect(brief.decisionPostIds).not.toContain("hidden");
+		const first = brief.decisions?.find(({ postId }) => postId === "aaa-first");
+		expect(first?.refinements).toBeUndefined();
+	});
+
 	test("never attributes a refinement across two decisions", () => {
 		const posts = [
 			post("r1", "решили: выпилю старый роут", 10),
@@ -1141,6 +1197,22 @@ function assertBriefCitationsWithin(
 	const allowed = new Set(posts.map((item) => item.id));
 	for (const id of brief.decisionPostIds) {
 		expect(allowed.has(id)).toBe(true);
+	}
+	for (const decision of brief.decisions ?? []) {
+		expect(allowed.has(decision.postId)).toBe(true);
+		if (decision.ackPostId) expect(allowed.has(decision.ackPostId)).toBe(true);
+		if (decision.acknowledgement) {
+			expect(allowed.has(decision.acknowledgement.postId)).toBe(true);
+		}
+		for (const refinement of decision.refinements ?? []) {
+			expect(allowed.has(refinement.postId)).toBe(true);
+		}
+	}
+	for (const question of brief.openQuestions ?? []) {
+		expect(allowed.has(question.postId)).toBe(true);
+		for (const responsePostId of question.responsePostIds ?? []) {
+			expect(allowed.has(responsePostId)).toBe(true);
+		}
 	}
 	for (const hint of brief.purposeHints) {
 		for (const id of hint.evidencePostIds) {

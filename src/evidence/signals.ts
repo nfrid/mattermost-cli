@@ -156,12 +156,23 @@ export interface BriefDecision {
 	confidence: number;
 	/** Short acknowledgement from a different author, when paired. */
 	ackPostId?: string;
+	/** Inlined form of `ackPostId`, so the acknowledgement can be audited. */
+	acknowledgement?: BriefAcknowledgement;
 	/**
 	 * Later packed posts that narrow the decision's scope ("нет, это только про
 	 * координацию"). Mechanical cue matches, not a re-negotiated outcome — but a
 	 * decision read without them is routinely implemented wider than agreed.
 	 */
 	refinements?: BriefScopeRefinement[];
+}
+
+/** Verbatim short response mechanically paired with a decision candidate. */
+export interface BriefAcknowledgement {
+	postId: string;
+	author: string;
+	createAt: number;
+	excerpt: string;
+	excerptTruncated?: true;
 }
 
 /** One scope-narrowing follow-up to a decision candidate. */
@@ -197,6 +208,13 @@ export interface BriefOpenQuestion {
 	confidence: number;
 	/** Packed posts by other authors after it; 0 means nobody answered here. */
 	repliesAfter: number;
+	/**
+	 * Conservative packet-local state. `possibly_answered` only means another
+	 * author replied later; consumers must read `responsePostIds` to verify it.
+	 */
+	resolution?: "answered" | "possibly_answered" | "unanswered" | "unknown";
+	/** Capped later responses supporting `possibly_answered`. */
+	responsePostIds?: string[];
 	/** The question is the thread's last packed post. */
 	isThreadTail?: true;
 }
@@ -715,6 +733,7 @@ export function buildThreadBrief(
 	const decisions = buildBriefDecisions(
 		chronological,
 		cappedDecisionSpans,
+		collectDecisionBoundaryIds(chronological),
 		briefExcerptLimit,
 	);
 
@@ -768,11 +787,20 @@ function buildOpenQuestions(
 		if (!post) continue;
 		seen.add(span.postId);
 		const index = live.findIndex((candidate) => candidate.id === post.id);
-		const repliesAfter =
+		const responses =
 			index < 0
-				? 0
-				: live.slice(index + 1).filter((later) => later.userId !== post.userId)
-						.length;
+				? []
+				: live.slice(index + 1).filter((later) => later.userId !== post.userId);
+		const repliesAfter = responses.length;
+		const isThreadTail = post.id === lastId;
+		const resolution =
+			span.questionKind !== "question"
+				? "unknown"
+				: repliesAfter > 0
+					? "possibly_answered"
+					: isThreadTail
+						? "unanswered"
+						: "unknown";
 		const excerpt = excerptWithTruncation(
 			post.message,
 			options.briefExcerptLimit,
@@ -788,7 +816,11 @@ function buildOpenQuestions(
 			cues: [...span.cues],
 			confidence: span.confidence,
 			repliesAfter,
-			...(post.id === lastId ? { isThreadTail: true as const } : {}),
+			resolution,
+			...(responses.length
+				? { responsePostIds: responses.slice(0, 3).map(({ id }) => id) }
+				: {}),
+			...(isThreadTail ? { isThreadTail: true as const } : {}),
 		});
 	}
 	// Dangling questions first, then things actually being asked, then the
@@ -813,13 +845,39 @@ function buildOpenQuestions(
  * without scanning `posts`. `createAt` stays numeric — ISO formatting is the
  * output layer's concern.
  */
+/**
+ * Every packed post that mechanically looks like a decision, independent of
+ * candidate and brief presentation caps. A hidden decision must still stop a
+ * later scope cue from being attributed to an earlier displayed decision.
+ */
+function collectDecisionBoundaryIds(
+	chronological: readonly EvidencePost[],
+): Set<string> {
+	const ids = new Set<string>();
+	for (const post of chronological) {
+		if (
+			post.deleteAt ||
+			!post.message.trim() ||
+			isDecisionMetaNoise(post.message)
+		) {
+			continue;
+		}
+		const matched = matchCues(post.message, DECISION_CUES, {
+			rejectInterrogativeCueSentence: true,
+			rejectNegatedCue: true,
+		});
+		if (matched.cues.length) ids.add(post.id);
+	}
+	return ids;
+}
+
 function buildBriefDecisions(
 	chronological: readonly EvidencePost[],
 	cappedDecisionSpans: readonly CandidateSpan[],
+	decisionIds: ReadonlySet<string>,
 	excerptLimit: number,
 ): BriefDecision[] {
 	const byId = new Map(chronological.map((post) => [post.id, post]));
-	const decisionIds = new Set(cappedDecisionSpans.map(({ postId }) => postId));
 	const decisions: BriefDecision[] = [];
 	for (const span of cappedDecisionSpans) {
 		const post = byId.get(span.postId);
@@ -831,6 +889,10 @@ function buildBriefDecisions(
 			excerptLimit,
 		);
 		const excerpt = excerptWithTruncation(post.message, excerptLimit);
+		const ack = span.ackPostId ? byId.get(span.ackPostId) : undefined;
+		const ackExcerpt = ack
+			? excerptWithTruncation(ack.message, excerptLimit)
+			: undefined;
 		decisions.push({
 			postId: span.postId,
 			author: post.authorUsername,
@@ -842,6 +904,19 @@ function buildBriefDecisions(
 			cues: [...span.cues],
 			confidence: span.confidence,
 			...(span.ackPostId ? { ackPostId: span.ackPostId } : {}),
+			...(ack && ackExcerpt
+				? {
+						acknowledgement: {
+							postId: ack.id,
+							author: ack.authorUsername,
+							createAt: ack.createAt,
+							excerpt: ackExcerpt.text,
+							...(ackExcerpt.truncated
+								? { excerptTruncated: true as const }
+								: {}),
+						},
+					}
+				: {}),
 			...(refinements.length ? { refinements } : {}),
 		});
 	}
@@ -868,7 +943,9 @@ function collectScopeRefinements(
 		if (scanned > REFINEMENT_LOOKAHEAD) break;
 		if (post.deleteAt || !post.message.trim()) continue;
 		if (decisionIds.has(post.id)) break;
-		const matched = matchCues(post.message, SCOPE_REFINEMENT_CUES);
+		const matched = matchCues(post.message, SCOPE_REFINEMENT_CUES, {
+			rejectInterrogativeCueSentence: true,
+		});
 		if (!matched.cues.length) continue;
 		const excerpt = excerptWithTruncation(post.message, excerptLimit);
 		refinements.push({
@@ -914,8 +991,12 @@ export function briefRetainedPostIds(
 			retained.add(refinement.postId);
 		}
 	}
-	for (const question of brief.openQuestions ?? [])
+	for (const question of brief.openQuestions ?? []) {
 		retained.add(question.postId);
+		for (const responsePostId of question.responsePostIds ?? []) {
+			retained.add(responsePostId);
+		}
+	}
 	if (anchorPostId) retained.add(anchorPostId);
 	if (!retained.size) {
 		let latest: EvidencePost | undefined;

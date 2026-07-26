@@ -118,7 +118,9 @@ before confidence, alongside the additive `evidence.verdict`,
 `error.details`, and the `brief` decision-layer fields (`kind`,
 `textTruncated`). Permalink refusal details may additionally retain the safe,
 caller-supplied `postId`; `conversationId` remains restricted to a configured
-conversation excluded by the caller's own `--channel`.
+conversation excluded by the caller's own `--channel`. Brief entries may also
+carry additive `decisions[].acknowledgement` and packet-local
+`openQuestions[].resolution` / `responsePostIds`.
 
 ## Schemas and fixtures
 

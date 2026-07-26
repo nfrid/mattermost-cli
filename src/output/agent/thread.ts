@@ -396,6 +396,19 @@ function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 			text: decision.excerpt,
 			...(decision.excerptTruncated ? { textTruncated: true as const } : {}),
 			...(decision.ackPostId ? { ackPostId: decision.ackPostId } : {}),
+			...(decision.acknowledgement
+				? {
+						acknowledgement: {
+							id: decision.acknowledgement.postId,
+							author: decision.acknowledgement.author,
+							at: isoTimestamp(decision.acknowledgement.createAt),
+							text: decision.acknowledgement.excerpt,
+							...(decision.acknowledgement.excerptTruncated
+								? { textTruncated: true as const }
+								: {}),
+						},
+					}
+				: {}),
 			...(decision.refinements?.length
 				? {
 						refinements: decision.refinements.map((refinement) => ({
@@ -420,6 +433,10 @@ function projectThreadBrief(brief: ThreadBrief): AgentThreadBrief | undefined {
 			text: question.excerpt,
 			...(question.excerptTruncated ? { textTruncated: true as const } : {}),
 			repliesAfter: question.repliesAfter,
+			...(question.resolution ? { resolution: question.resolution } : {}),
+			...(question.responsePostIds?.length
+				? { responsePostIds: question.responsePostIds }
+				: {}),
 			...(question.isThreadTail ? { isThreadTail: true as const } : {}),
 		}),
 	);

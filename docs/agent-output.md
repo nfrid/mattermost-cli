@@ -32,8 +32,9 @@ changes only the projection, so a lean view no longer demands a follow-up
 `codeish` / `latest`) rather than one repeated entry per role. `--short`
 conflicts with `--navigate`.
 
-**`--brief`** returns `evidence`, per-thread `brief`, and only the
-outcome-window and decision posts. Every withheld packed post collapses into a
+**`--brief`** returns `evidence`, per-thread `brief`, and only the decision
+layer: outcome-window posts, decisions, acknowledgements, refinements, open
+questions, and their capped response pointers. Every other packed post collapses into a
 `{ "skip": { "reason": "brief_projection" } }` marker and the envelope is marked
 `projection: "brief"` — shown messages plus skip counts always equal
 `messageCount`.
@@ -104,9 +105,11 @@ question. It is suppressed on a truncated packet.
 
 ### `decisions[]`
 
-Each entry carries `id` / `author` / `at` / `text`, an optional `ackPostId`,
-optional `refinements[]` (later posts that narrow the decision's scope), and a
-`kind`:
+Each entry carries `id` / `author` / `at` / `text`, an optional `ackPostId`
+plus its inlined verbatim `acknowledgement`, optional `refinements[]` (later
+posts that narrow the decision's scope), and a `kind`. A question containing a
+scope word is not itself a refinement; only a non-interrogative follow-up is
+attached.
 
 | `kind` | Meaning |
 | --- | --- |
@@ -125,8 +128,10 @@ decision at all.
 
 ### `openQuestions[]`
 
-The symmetric counterpart of `decisions[]`. Each entry carries `repliesAfter`
-and an optional `isThreadTail`, plus a `kind`:
+The historically named counterpart of `decisions[]`. The name is not a verified
+claim that every item remains open. Each entry carries `repliesAfter`, an
+optional `isThreadTail`, a conservative packet-local `resolution`, and capped
+`responsePostIds` to inspect, plus a `kind`:
 
 - `question` — something is being asked or explicitly not settled;
 - `follow_up` — deferred work stated as a fact. «рано или поздно надо будет
@@ -135,8 +140,12 @@ and an optional `isThreadTail`, plus a `kind`:
 A `?` inside a URL does not make a follow-up into a question. A post inlined as a
 decision is never repeated as an open question.
 
-`repliesAfter: 0` means nobody spoke after it *inside this packet*, which is not
-proof the question is still open.
+`resolution` is `possibly_answered` when another author replied later,
+`unanswered` only when a complete packed thread ends on the question, and
+`unknown` otherwise. `answered` is reserved for future evidence stronger than
+mere chronology. `possibly_answered` is deliberately not a conclusion: read the
+cited `responsePostIds`. Likewise, `repliesAfter: 0` alone is not proof that the
+question is still open.
 
 ### Text budgets
 

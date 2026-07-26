@@ -101,12 +101,22 @@ export interface AgentBriefDecision {
 	textTruncated?: true;
 	/** Short acknowledgement from a different author, when paired. */
 	ackPostId?: string;
+	/** Verbatim acknowledgement with author and timestamp for audit. */
+	acknowledgement?: AgentBriefAcknowledgement;
 	/**
 	 * Later posts narrowing what the decision covers. Read them before sizing an
 	 * implementation: the decision text alone is routinely wider than the scope
 	 * that was settled a few messages later.
 	 */
 	refinements?: AgentBriefRefinement[];
+}
+
+export interface AgentBriefAcknowledgement {
+	id: string;
+	author: string;
+	at: string;
+	text: string;
+	textTruncated?: true;
 }
 
 export interface AgentBriefRefinement {
@@ -137,6 +147,10 @@ export interface AgentBriefOpenQuestion {
 	/** The post carries more text than `text` shows. */
 	textTruncated?: true;
 	repliesAfter: number;
+	/** Packet-local state; `possibly_answered` is not a verified answer. */
+	resolution?: "answered" | "possibly_answered" | "unanswered" | "unknown";
+	/** Later different-author posts to inspect before declaring it answered. */
+	responsePostIds?: string[];
 	isThreadTail?: true;
 }
 

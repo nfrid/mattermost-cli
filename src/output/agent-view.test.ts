@@ -530,6 +530,12 @@ describe("agent projection", () => {
 							at: string;
 							text: string;
 							ackPostId?: string;
+							acknowledgement?: {
+								id: string;
+								author: string;
+								at: string;
+								text: string;
+							};
 						}>;
 					};
 				}>;
@@ -544,6 +550,12 @@ describe("agent projection", () => {
 			kind: "approved_decision",
 			text: "просто выпилю нафиг эту логику двухсотки",
 			ackPostId: `c${"c".repeat(25)}`,
+			acknowledgement: {
+				id: `c${"c".repeat(25)}`,
+				author: "alice",
+				at: "1970-01-01T00:00:00.030Z",
+				text: "хорошо",
+			},
 		});
 		store.close();
 	});
