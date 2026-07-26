@@ -106,7 +106,9 @@ A refused conversation fails with `conversation_not_allowed` carrying
 - `conversationId` is present only for `channel_restriction`, where the
   conversation is configured and already visible through `mm channels`; an
   unconfigured refusal never reveals its conversation identity;
-- `restrictedTo` for a caller-supplied restriction;
+- `conversationAlias` and `restrictionSource: "cli"` for a configured
+  conversation excluded by the caller's explicit flag;
+- `restrictedTo` for that caller-supplied restriction;
 - `recommendedAction` naming what would change it. Advice to drop or widen
   `--channel` is emitted only when that flag actually caused the refusal.
 

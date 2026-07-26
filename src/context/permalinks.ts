@@ -101,6 +101,9 @@ export async function resolvePermalinkTargets(input: {
 			({ id }) => id === target.conversationId,
 		);
 		if (!conversation) {
+			const configuredConversation = input.configured.find(
+				({ id }) => id === target.conversationId,
+			);
 			// Configured, but outside this request's `--channel` restriction: the
 			// allowlist is never widened to serve an explicit link. The id is safe
 			// to name here — the caller can already see it in `mm channels`.
@@ -114,6 +117,10 @@ export async function resolvePermalinkTargets(input: {
 					reason: "channel_restriction",
 					postId: subject.postId,
 					conversationId: target.conversationId,
+					...(configuredConversation
+						? { conversationAlias: configuredConversation.alias }
+						: {}),
+					restrictionSource: "cli",
 					restrictedTo: input.restrictedTo ?? [],
 				}),
 			});

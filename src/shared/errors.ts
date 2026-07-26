@@ -89,6 +89,10 @@ export function conversationNotAllowedDetails(input: {
 	reason: "not_configured" | "channel_restriction";
 	postId?: string;
 	conversationId?: string;
+	/** Safe only for an already-configured conversation. */
+	conversationAlias?: string;
+	/** The only current narrow-request source; explicit for agent consumers. */
+	restrictionSource?: "cli";
 	/** Aliases the caller restricted to, when that is what excluded it. */
 	restrictedTo?: readonly string[];
 }): Readonly<Record<string, unknown>> {
@@ -97,6 +101,12 @@ export function conversationNotAllowedDetails(input: {
 		...(input.postId ? { postId: input.postId } : {}),
 		...(input.conversationId && input.reason === "channel_restriction"
 			? { conversationId: input.conversationId }
+			: {}),
+		...(input.conversationAlias && input.reason === "channel_restriction"
+			? { conversationAlias: input.conversationAlias }
+			: {}),
+		...(input.restrictionSource && input.reason === "channel_restriction"
+			? { restrictionSource: input.restrictionSource }
 			: {}),
 		...(input.restrictedTo?.length
 			? { restrictedTo: [...input.restrictedTo] }

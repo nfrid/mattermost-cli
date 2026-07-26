@@ -120,8 +120,9 @@ before confidence, alongside the additive `evidence.verdict`,
 `permalinks[]`, per-thread `totalPosts`, `conversation_not_allowed`
 `error.details`, and the `brief` decision-layer fields (`kind`,
 `textTruncated`). Permalink refusal details may additionally retain the safe,
-caller-supplied `postId`; `conversationId` remains restricted to a configured
-conversation excluded by the caller's own `--channel`. Brief entries may also
+caller-supplied `postId`; `conversationId` / `conversationAlias` remain
+restricted to a configured conversation excluded by the caller's own
+`--channel`, with `restrictionSource: "cli"` explicit. Brief entries may also
 carry additive `decisions[].acknowledgement` and packet-local
 `openQuestions[].resolution` / `responsePostIds`. Packing may expose
 `recommendedHydrationThreadIds`; the historical `recommendFullThreadIds` stays

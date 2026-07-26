@@ -265,6 +265,8 @@ describe("--permalink targets", () => {
 			reason: "channel_restriction",
 			postId: DESIGN_REPLY,
 			conversationId: "channel-platform",
+			conversationAlias: "platform",
+			restrictionSource: "cli",
 			restrictedTo: ["payments"],
 		});
 		expect(
