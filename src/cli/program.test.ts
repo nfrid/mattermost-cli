@@ -65,6 +65,47 @@ describe("context/thread --signals", () => {
 	});
 });
 
+describe("thread --window-only", () => {
+	test("accepts a bounded range and conflicts with --full", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		const program = createProgram(async (command, _global, commandOptions) => {
+			seen.push({ command, ...(commandOptions ?? {}) });
+			return {
+				command,
+				schemaVersion: SCHEMA_VERSION,
+				success: true,
+				data: {},
+				warnings: [],
+			};
+		});
+
+		await program.parseAsync(
+			[
+				"thread",
+				"aaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"--around",
+				"bbbbbbbbbbbbbbbbbbbbbbbbbb",
+				"--window-only",
+			],
+			{ from: "user" },
+		);
+		expect(seen.at(-1)).toMatchObject({ windowOnly: true });
+		await expect(
+			program.parseAsync(
+				[
+					"thread",
+					"aaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"--around",
+					"bbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"--window-only",
+					"--full",
+				],
+				{ from: "user" },
+			),
+		).rejects.toThrow(/cannot be used|conflict|full|window/i);
+	});
+});
+
 describe("file command", () => {
 	test("accepts file-id, --out, and bounded --inspect with --agent", async () => {
 		const seen: Array<Record<string, unknown>> = [];

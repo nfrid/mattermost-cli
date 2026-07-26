@@ -46,6 +46,7 @@ export interface CommandOptions {
 	around?: string;
 	beforePosts?: number;
 	afterPosts?: number;
+	windowOnly?: boolean;
 	includeAutomation?: boolean;
 	short?: boolean;
 	navigate?: boolean;

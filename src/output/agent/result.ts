@@ -318,15 +318,29 @@ function projectThread(
 	};
 	const selectedEvidenceCurrent =
 		data.freshnessMode !== "local" || !data.freshness.stale;
+	const evidenceThread = data.retrieval
+		? {
+				...contextThread,
+				totalPosts: data.retrieval.requestedPosts,
+				returnedPosts: data.retrieval.returnedPosts,
+				omittedPosts:
+					data.retrieval.requestedPosts - data.retrieval.returnedPosts,
+				totalOmittedAttachments: 0,
+				omittedAttachments: [],
+				unreportedOmittedAttachments: 0,
+				timeline: contextThread.timeline.filter((item) => item.kind === "post"),
+			}
+		: contextThread;
 	const evidence = buildEvidence({
 		searchCoverageComplete: data.complete,
-		selectedThreadsComplete:
-			data.thread.omittedPosts === 0 &&
-			data.thread.totalOmittedAttachments === 0,
+		selectedThreadsComplete: data.retrieval
+			? data.retrieval.requestedRangeComplete
+			: data.thread.omittedPosts === 0 &&
+				data.thread.totalOmittedAttachments === 0,
 		freshnessMode: data.freshnessMode,
 		freshness: [data.freshness],
 		searchedConversations: [{ id: data.conversation.id }],
-		threads: [contextThread],
+		threads: [evidenceThread],
 		remoteSearch: NO_REMOTE_SEARCH,
 		selection: SINGLE_THREAD_SELECTION,
 		warnings,
@@ -336,6 +350,43 @@ function projectThread(
 			? { subjectTicket: data.subject.ticketKey }
 			: {}),
 	});
+	const deltaNext = data.retrieval
+		? evidence.next.filter(
+				(step) =>
+					step.action !== "thread_around" && step.action !== "thread_full",
+			)
+		: [];
+	const scopedEvidence = data.retrieval
+		? {
+				...evidence,
+				scope: "gap_recovery" as const,
+				verdict: {
+					...evidence.verdict,
+					// A delta never recommends chasing intentionally out-of-range posts.
+					recommendedActionRequired: deltaNext.some(
+						({ priority }) => priority === "recommended",
+					),
+				},
+				packing: {
+					...evidence.packing,
+					recommendedHydrationThreadIds: [],
+					recommendFullThreadIds: [],
+				},
+				next: deltaNext,
+				gapRecovery: {
+					requestedRangeComplete: data.retrieval.requestedRangeComplete,
+					remainingPostsOutsideRange:
+						data.thread.totalPosts - data.retrieval.requestedPosts,
+					...(!data.retrieval.requestedRangeComplete
+						? {
+								noActionAvailable: true as const,
+								reason:
+									"requested posts exceeded the bounded character budget; retry with a narrower window",
+							}
+						: {}),
+				},
+			}
+		: evidence;
 	return {
 		...envelope,
 		subject: subjectValue(data.subject),
@@ -343,7 +394,8 @@ function projectThread(
 		status: status(data.freshnessMode),
 		...(data.brief ? { projection: "brief" as const } : {}),
 		...(relatedTickets.length ? { relatedTickets } : {}),
-		evidence,
+		evidence: scopedEvidence,
+		...(data.retrieval ? { retrieval: data.retrieval } : {}),
 		threads: [projected],
 		warnings,
 	};

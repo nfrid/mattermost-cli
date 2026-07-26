@@ -107,6 +107,8 @@ export interface ThreadInput {
 	beforePosts?: number;
 	/** Asymmetric `--around` window; requires {@link around}. */
 	afterPosts?: number;
+	/** Return only the explicit around range, not normal structural anchors. */
+	windowOnly?: boolean;
 	/** Decision-only projection: evidence, brief, and the outcome window. */
 	brief?: boolean;
 	/** Opt-in advisory `signals` / `technicalEntities` in `--agent` output. */
@@ -374,6 +376,17 @@ export interface ThreadResult {
 	conversation: { id: string; alias: string; kind: ConversationRecord["kind"] };
 	link: string;
 	thread: PackedThread;
+	/** Present for an explicitly bounded gap-recovery response. */
+	retrieval?: {
+		mode: "gap_window";
+		rootPostId: string;
+		anchorPostId: string;
+		requestedBefore: number;
+		requestedAfter: number;
+		requestedPosts: number;
+		returnedPosts: number;
+		requestedRangeComplete: boolean;
+	};
 	warnings: Warning[];
 	/** True when the thread used the decision-only brief projection. */
 	brief?: boolean;

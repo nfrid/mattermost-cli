@@ -106,6 +106,8 @@ export interface PackThreadOptions {
 	 * {@link MAX_AROUND_SIDE_POSTS}). Defaults to {@link neighborhoodRadius}.
 	 */
 	afterPosts?: number;
+	/** Select only the explicit around range; disables all normal packing anchors. */
+	windowOnly?: boolean;
 	/**
 	 * Inclusive neighbor distance around subject-ticket mentions. Defaults to a
 	 * larger radius than {@link neighborhoodRadius} (8).
@@ -227,12 +229,40 @@ export function packThread(
 	const useContiguousCore =
 		Boolean(options.contiguousTicketCore) &&
 		!options.full &&
+		!options.windowOnly &&
 		!shortMode &&
 		Boolean(subjectTicket) &&
 		Boolean(ticketMetrics?.ticketHitPostIds.length) &&
 		Boolean(inTicketWindow);
 
-	if (options.full) {
+	if (options.windowOnly) {
+		if (!options.aroundPostId) {
+			throw new ConfigError(
+				"Window-only packing requires an around post.",
+				"invalid_around_options",
+			);
+		}
+		const aroundIndex = chronological.findIndex(
+			({ id }) => id === options.aroundPostId,
+		);
+		if (aroundIndex < 0) {
+			throw new ConfigError(
+				`Around post ${options.aroundPostId} is not in this thread.`,
+				"around_post_not_in_thread",
+			);
+		}
+		const beforeCount = clampAroundSidePosts(options.beforePosts, matchRadius);
+		const afterCount = clampAroundSidePosts(options.afterPosts, matchRadius);
+		add(
+			chronological
+				.slice(
+					Math.max(0, aroundIndex - beforeCount),
+					aroundIndex + 1 + afterCount,
+				)
+				.map(({ id }) => id),
+			"around_window_only",
+		);
+	} else if (options.full) {
 		add(
 			chronological.map(({ id }) => id),
 			"full_thread",
@@ -401,7 +431,10 @@ export function packThread(
 		}
 
 		const gapFillEnabled =
-			options.gapFill !== false && !options.full && !shortMode;
+			options.gapFill !== false &&
+			!options.full &&
+			!options.windowOnly &&
+			!shortMode;
 		if (gapFillEnabled) {
 			const filled = fillLargestInternalGaps(
 				chronological,
@@ -415,7 +448,7 @@ export function packThread(
 			if (filled.added) strategies.push("gap_fill");
 		}
 
-		if (!options.full && !shortMode) {
+		if (!options.full && !options.windowOnly && !shortMode) {
 			let extended = false;
 			for (const post of chronological.slice().reverse()) {
 				if (selected.has(post.id)) continue;
@@ -434,9 +467,9 @@ export function packThread(
 		.filter(({ id }) => selected.has(id))
 		.map((post) => ({ ...post, renderedUnits: renderedPostUnits(post) }));
 	const omitted = chronological.filter(({ id }) => !selected.has(id));
-	const allOmittedAttachments = omitted.flatMap(
-		({ attachments }) => attachments,
-	);
+	const allOmittedAttachments = options.windowOnly
+		? []
+		: omitted.flatMap(({ attachments }) => attachments);
 	const reportedOmittedAttachments: EvidenceAttachment[] = [];
 	for (const attachment of allOmittedAttachments) {
 		const units = renderedAttachmentUnits(attachment);

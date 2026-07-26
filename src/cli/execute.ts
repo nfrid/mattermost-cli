@@ -107,6 +107,7 @@ export async function executeCommand(
 						around: commandOptions.around,
 						beforePosts: commandOptions.beforePosts,
 						afterPosts: commandOptions.afterPosts,
+						windowOnly: commandOptions.windowOnly,
 						brief: commandOptions.brief,
 						signals: commandOptions.signals,
 					},

@@ -129,7 +129,11 @@ carry additive `decisions[].acknowledgement` and packet-local
 as a V1 compatibility alias even when the recommended action is bounded
 `thread_around`. Version 5 already includes `thread_around` in the
 `evidence.next[].action` enum; this release begins emitting it for skips with a
-usable boundary. `file --inspect` additively attaches either a bounded textual
+usable boundary. Generated commands include `--window-only`; their response
+adds `retrieval.mode: "gap_window"` and `evidence.scope: "gap_recovery"`, where
+`gapRecovery.requestedRangeComplete` reports delta completion independently of
+the packet-local general answerability verdict. `file --inspect` additively
+attaches either a bounded textual
 `inspection` preview or an explicit `not_interpreted` state to the existing file
 result. Search-agent candidates may carry capped `contributingProbes[]` (match
 contributors, not full-probe claims); raw JSON now retains

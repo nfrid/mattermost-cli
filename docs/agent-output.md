@@ -223,10 +223,18 @@ thread it is most of the thread.
 
 Execute only `priority: "recommended"` entries. Packing omissions normally
 produce a `thread_around` command requesting at most 50 posts from the largest
-skipped range, rather than replaying the complete thread. The normal character
-budget and structural anchors still apply, so the result can contain fewer
-requested posts and some repeated context. At most one hydration step is
-`recommended`; further truncated threads appear as
+skipped range with `--window-only`, rather than replaying the complete thread.
+That mode disables normal structural/tail anchors and projects only the explicit
+range under the character budget. Mattermost's thread endpoint still supplies
+the thread to the local read-only hydration layer; the bound applies to emitted
+model context, not server transfer or the ignored local index. Its top-level
+`retrieval` reports requested
+and returned posts; `evidence.scope: "gap_recovery"` means
+`gapRecovery.requestedRangeComplete`, not general answerability, decides whether
+the requested delta succeeded. A delta that exceeds the character budget emits
+`noActionAvailable` and asks the caller to choose a narrower window; it never
+escalates itself to `thread_full`. At most one hydration step is `recommended`;
+further truncated threads appear as
 `optional`. `thread_full` remains only the fallback when a legacy timeline has
 no usable range boundary.
 

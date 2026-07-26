@@ -84,6 +84,30 @@ describe("thread command API", () => {
 		expect(selected.thread.posts.map(({ id }) => id)).toEqual([
 			...ids.slice(0, 7),
 		]);
+
+		const delta = await getMattermostThread(
+			{
+				target: root,
+				local: true,
+				around,
+				beforePosts: 1,
+				afterPosts: 3,
+				windowOnly: true,
+			},
+			{ config: configFixture(), store },
+		);
+		expect(delta.thread.selectionStrategy).toEqual(["around_window_only"]);
+		expect(delta.thread.posts.map(({ id }) => id)).toEqual(ids.slice(2, 7));
+		expect(delta.retrieval).toEqual({
+			mode: "gap_window",
+			rootPostId: root,
+			anchorPostId: around,
+			requestedBefore: 1,
+			requestedAfter: 3,
+			requestedPosts: 5,
+			returnedPosts: 5,
+			requestedRangeComplete: true,
+		});
 		store.close();
 	});
 

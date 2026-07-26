@@ -228,6 +228,12 @@ export function createProgram(
 			"posts after --around (default: match neighborhood radius; max 50)",
 			(value) => Number(value),
 		)
+		.addOption(
+			new Option(
+				"--window-only",
+				"return only the explicit --around range as a gap-recovery delta",
+			).conflicts("full"),
+		)
 		.option(
 			"--brief",
 			"decision-only projection: evidence, brief, and outcome-window posts",

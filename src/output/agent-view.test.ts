@@ -206,6 +206,120 @@ describe("agent projection", () => {
 		store.close();
 	});
 
+	test("marks a window-only thread as completed gap recovery", async () => {
+		const store = await seededStore();
+		const thread = await getMattermostThread(
+			{
+				target: ROOT,
+				local: true,
+				around: REPLY,
+				beforePosts: 0,
+				afterPosts: 0,
+				windowOnly: true,
+			},
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("thread", thread, thread.warnings),
+		);
+		expect(result).toMatchObject({
+			retrieval: {
+				mode: "gap_window",
+				requestedPosts: 1,
+				returnedPosts: 1,
+				requestedRangeComplete: true,
+			},
+			evidence: {
+				scope: "gap_recovery",
+				verdict: { recommendedActionRequired: false },
+				completeness: { selectedThreads: "complete" },
+				gapRecovery: {
+					requestedRangeComplete: true,
+					remainingPostsOutsideRange: 1,
+				},
+				next: [],
+			},
+			threads: [{ messageCount: 1, totalPosts: 2 }],
+		});
+		store.close();
+	});
+
+	test("does not turn an incomplete bounded delta into a full-thread retry", async () => {
+		const store = await seededStore();
+		const config = configFixture();
+		config.budgets.defaultPerThreadCharacters = 1;
+		const thread = await getMattermostThread(
+			{
+				target: ROOT,
+				local: true,
+				around: REPLY,
+				beforePosts: 0,
+				afterPosts: 0,
+				windowOnly: true,
+			},
+			{ config, store, now: () => 1_000 },
+		);
+		const result = projectAgentResult(
+			commandSuccess("thread", thread, thread.warnings),
+		);
+		expect(result).toMatchObject({
+			retrieval: { requestedRangeComplete: false, returnedPosts: 0 },
+			evidence: {
+				scope: "gap_recovery",
+				verdict: { recommendedActionRequired: false },
+				gapRecovery: {
+					requestedRangeComplete: false,
+					noActionAvailable: true,
+				},
+				next: [],
+			},
+		});
+		expect(JSON.stringify(result)).not.toContain("thread_full");
+		store.close();
+	});
+
+	test("keeps attachment inspection recommendations inside a recovered delta", async () => {
+		const store = await seededStore();
+		const thread = await getMattermostThread(
+			{
+				target: ROOT,
+				local: true,
+				around: REPLY,
+				beforePosts: 0,
+				afterPosts: 0,
+				windowOnly: true,
+			},
+			{ config: configFixture(), store, now: () => 1_000 },
+		);
+		const recovered = thread.thread.posts[0];
+		if (!recovered) throw new Error("Expected recovered post.");
+		recovered.message = "";
+		recovered.attachments = [
+			{
+				id: "file-delta",
+				postId: recovered.id,
+				name: "evidence.png",
+				extension: "png",
+				size: 128,
+				mimeType: "image/png",
+				deleteAt: 0,
+			},
+		];
+		const result = projectAgentResult(
+			commandSuccess("thread", thread, thread.warnings),
+		) as unknown as {
+			evidence: {
+				verdict: { recommendedActionRequired: boolean };
+				next: Array<{ action: string }>;
+			};
+		};
+		expect(result.evidence.verdict.recommendedActionRequired).toBe(true);
+		expect(result.evidence.next).toContainEqual(
+			expect.objectContaining({ action: "read_attachments" }),
+		);
+		store.close();
+	});
+
 	test("projects compact search candidates without why or detailed freshness evidence", async () => {
 		const store = await seededStore({ stale: true, complete: false });
 		const search = await searchMattermost(

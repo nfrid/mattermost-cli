@@ -721,6 +721,18 @@ const threadDataSchema = z.object({
 	conversation: searchedConversationSchema.omit({ evidence: true }),
 	link: z.string(),
 	thread: packedThreadSchema,
+	retrieval: z
+		.object({
+			mode: z.literal("gap_window"),
+			rootPostId: z.string(),
+			anchorPostId: z.string(),
+			requestedBefore: z.number().int().nonnegative(),
+			requestedAfter: z.number().int().nonnegative(),
+			requestedPosts: z.number().int().positive(),
+			returnedPosts: z.number().int().nonnegative(),
+			requestedRangeComplete: z.boolean(),
+		})
+		.optional(),
 	warnings: z.array(warningSchema),
 	brief: z.boolean().optional(),
 	signals: z.boolean().optional(),

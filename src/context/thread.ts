@@ -1,4 +1,9 @@
-import { packThread } from "../evidence/packing.ts";
+import {
+	clampAroundSidePosts,
+	type EvidencePost,
+	type PackedThread,
+	packThread,
+} from "../evidence/packing.ts";
 import {
 	connectionFromConfig,
 	MattermostClient,
@@ -38,7 +43,9 @@ export async function getMattermostThread(
 			);
 		}
 		if (
-			(input.beforePosts !== undefined || input.afterPosts !== undefined) &&
+			(input.beforePosts !== undefined ||
+				input.afterPosts !== undefined ||
+				input.windowOnly) &&
 			!input.around
 		) {
 			throw new ConfigError(
@@ -103,7 +110,19 @@ export async function getMattermostThread(
 			clusterMergeGap: config.budgets.clusterMergeGap,
 			limit: config.budgets.defaultPerThreadCharacters,
 			full: input.full,
+			windowOnly: input.windowOnly,
 		});
+		const retrieval = input.windowOnly
+			? gapWindowRetrieval(
+					rootPostId,
+					hydrated.posts,
+					packed,
+					input.around as string,
+					input.beforePosts,
+					input.afterPosts,
+					config.budgets.matchNeighborhoodRadius,
+				)
+			: undefined;
 
 		const localFreshness = freshnessEvidence(
 			config,
@@ -159,9 +178,45 @@ export async function getMattermostThread(
 			},
 			link: postLink(config, rootPostId),
 			thread: packed,
+			...(retrieval ? { retrieval } : {}),
 			warnings: consolidateLocalFallbackWarnings(warnings),
 			...(input.brief ? { brief: true } : {}),
 			...(input.signals ? { signals: true } : {}),
 		};
 	});
+}
+
+function gapWindowRetrieval(
+	rootPostId: string,
+	posts: readonly EvidencePost[],
+	packed: PackedThread,
+	anchorPostId: string,
+	beforePosts: number | undefined,
+	afterPosts: number | undefined,
+	fallbackRadius: number,
+): NonNullable<ThreadResult["retrieval"]> {
+	const chronological = [...posts].sort(
+		(left, right) =>
+			left.createAt - right.createAt || left.id.localeCompare(right.id),
+	);
+	const anchorIndex = chronological.findIndex(({ id }) => id === anchorPostId);
+	const requestedBefore = clampAroundSidePosts(beforePosts, fallbackRadius);
+	const requestedAfter = clampAroundSidePosts(afterPosts, fallbackRadius);
+	const requestedIds = chronological
+		.slice(
+			Math.max(0, anchorIndex - requestedBefore),
+			anchorIndex + 1 + requestedAfter,
+		)
+		.map(({ id }) => id);
+	const returnedIds = new Set(packed.posts.map(({ id }) => id));
+	return {
+		mode: "gap_window",
+		rootPostId,
+		anchorPostId,
+		requestedBefore,
+		requestedAfter,
+		requestedPosts: requestedIds.length,
+		returnedPosts: requestedIds.filter((id) => returnedIds.has(id)).length,
+		requestedRangeComplete: requestedIds.every((id) => returnedIds.has(id)),
+	};
 }
