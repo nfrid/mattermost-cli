@@ -46,6 +46,9 @@ describe("human formatting", () => {
 		);
 		expect(full).toContain("промежуточное сообщение");
 		expect(full.length).toBeGreaterThan(text.length);
+		// The decision block names how settled it is, not just that one exists.
+		expect(full).toContain("Decision candidates:");
+		expect(full).toContain("[approved decision]");
 		store.close();
 	});
 

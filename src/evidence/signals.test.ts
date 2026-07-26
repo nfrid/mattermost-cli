@@ -9,6 +9,7 @@ import {
 	buildThreadSignals,
 	citedSignalPostIds,
 	DECISION_CONFIDENCE_FLOOR,
+	type DecisionKind,
 	isCandidateSpanKind,
 	MAX_CANDIDATE_SPANS,
 	MAX_DECISION_POST_IDS,
@@ -536,6 +537,197 @@ describe("buildThreadBrief", () => {
 
 		expect([...(brief.decisions?.[0]?.excerpt ?? "")]).toHaveLength(20);
 		expect(brief.decisions?.[0]?.excerptTruncated).toBe(true);
+	});
+
+	test("separates approved decisions from summaries, intents, and proposals", () => {
+		// Verbatim shapes from the four-ticket field report: BTB-2113's product
+		// go-ahead is settled, BTB-2080's «просто выпилю» is one author's intent,
+		// and BTB-1281's «наверное» is an option floated, not a course taken.
+		const cases: Array<[string, string, DecisionKind]> = [
+			["approved", "обсудили, можно делать", "approved_decision"],
+			["intent", "просто выпилю нафиг это", "implementation_intent"],
+			["hedged", "наверное, так пока и сделаю", "proposal"],
+			["floated", "предлагаю выпилю этот кусок", "proposal"],
+			// «обсудили» alone reports that a discussion happened, nothing more.
+			[
+				"summary",
+				"обсудили с продактом, пока ничего не понятно",
+				"discussion_outcome",
+			],
+			["recap", "итого по багам: 3 открытых, 2 в работе", "discussion_outcome"],
+		];
+		for (const [id, message, expected] of cases) {
+			const brief = buildThreadBrief([post(id, message, 10)]);
+			expect(brief.decisions?.[0]?.kind).toBe(expected);
+		}
+	});
+
+	test("english negation voids a decision cue instead of approving it", () => {
+		for (const message of [
+			"we're not going with capabilities, too heavy",
+			"this was never approved by product",
+		]) {
+			const brief = buildThreadBrief([post("n1", message, 10)]);
+			expect(brief.decisions ?? []).toEqual([]);
+		}
+	});
+
+	test("ordinary agreement phrasing is not read as a hedge", () => {
+		// `давайте` opens agreement here far more often than it hedges.
+		const brief = buildThreadBrief([
+			post("d1", "как договорились, давайте фиксируем вариант B", 10),
+		]);
+		expect(brief.decisions?.[0]?.kind).toBe("approved_decision");
+	});
+
+	test("one plainly stated sentence survives a hedged musing after it", () => {
+		const brief = buildThreadBrief([
+			post("d1", "решили фиксируем вариант B. наверное, решили рано", 10),
+		]);
+		expect(brief.decisions?.[0]?.kind).toBe("approved_decision");
+	});
+
+	test("gratitude acknowledges without approving", () => {
+		const thanked = buildThreadBrief([
+			post("d1", "поправлю модуль 3", 10),
+			post("a1", "спасибо", 20, { author: "bob" }),
+		]).decisions?.[0];
+
+		expect(thanked?.kind).toBe("implementation_intent");
+		// Still an acknowledgement for pairing and confidence — just not approval.
+		expect(thanked?.ackPostId).toBe("a1");
+	});
+
+	test("an approved decision survives the candidate-span cap", () => {
+		// Twelve louder questions used to evict the one quiet go-ahead before the
+		// brief's own kind ordering ever saw it.
+		const posts = [
+			...Array.from({ length: MAX_CANDIDATE_SPANS }, (_, index) =>
+				post(
+					`q${index}`,
+					`непонятно, какой вариант выбрать для модуля ${index}? не решили`,
+					10 + index,
+					{ author: `dev${index}` },
+				),
+			),
+			post(
+				"go",
+				"обсудили с продактом, утвердили вариант B, можно делать",
+				100,
+				{
+					author: "pm",
+				},
+			),
+		];
+		const brief = buildThreadBrief(posts);
+
+		expect(brief.decisions?.[0]?.postId).toBe("go");
+		expect(brief.decisions?.[0]?.kind).toBe("approved_decision");
+	});
+
+	test("the classifying cue is never capped out of cues[]", () => {
+		const brief = buildThreadBrief([
+			post(
+				"d1",
+				"сделаю, поправлю, перепишу, переделаю, буду делать — и потом ship it",
+				10,
+			),
+		]);
+		const decision = brief.decisions?.[0];
+
+		expect(decision?.kind).toBe("approved_decision");
+		expect(decision?.cues).toContain("ship it");
+	});
+
+	test("an acknowledgement promotes a personal commitment to approved", () => {
+		const posts = [
+			post("d1", "просто выпилю нафиг это", 10),
+			post("a1", "ок", 20, { author: "bob" }),
+		];
+		const decision = buildThreadBrief(posts).decisions?.[0];
+
+		expect(decision?.kind).toBe("approved_decision");
+		expect(decision?.ackPostId).toBe("a1");
+		// Without the ack the very same message is only an intent.
+		expect(
+			buildThreadBrief([posts[0] as EvidencePost]).decisions?.[0]?.kind,
+		).toBe("implementation_intent");
+	});
+
+	test("a hedge outranks an acknowledgement", () => {
+		const posts = [
+			post("d1", "наверное, так пока и сделаю", 10),
+			post("a1", "ок", 20, { author: "bob" }),
+		];
+		expect(buildThreadBrief(posts).decisions?.[0]?.kind).toBe("proposal");
+	});
+
+	test("a hedge in another sentence leaves a plain decision settled", () => {
+		const posts = [
+			post("d1", "решили выпилить лишнее. думаю, релиз в четверг", 10),
+		];
+		expect(buildThreadBrief(posts).decisions?.[0]?.kind).toBe(
+			"approved_decision",
+		);
+	});
+
+	test("settled decisions outrank intents inside the cap", () => {
+		const posts = [
+			...Array.from({ length: MAX_DECISION_POST_IDS }, (_, index) =>
+				post(`i${index}`, `поправлю модуль ${index}`, 10 + index, {
+					author: `dev${index}`,
+				}),
+			),
+			post("settled", "итого: договорились фиксируем вариант B", 100),
+		];
+		const brief = buildThreadBrief(posts);
+
+		expect(brief.decisions?.[0]?.postId).toBe("settled");
+		expect(brief.decisions?.[0]?.kind).toBe("approved_decision");
+		expect(brief.decisionPostIds).toContain("settled");
+		expect(brief.decisionPostIds).toHaveLength(MAX_DECISION_POST_IDS);
+	});
+
+	test("deferred work is a follow_up, not a question being asked", () => {
+		// BTB-1281: grammatically a statement, previously reported as an open
+		// question, which invites answering something nobody asked.
+		const posts = [
+			post("f1", "рано или поздно надо будет привести модерацию в порядок", 10),
+		];
+		const question = buildThreadBrief(posts).openQuestions?.[0];
+
+		expect(question?.kind).toBe("follow_up");
+		// A question mark in the same post makes it a question again.
+		const asked = buildThreadBrief([
+			post("f2", "надо будет привести модерацию в порядок, когда?", 10),
+		]);
+		expect(asked.openQuestions?.[0]?.kind).toBe("question");
+	});
+
+	test("a `?` inside a link does not turn deferred work into a question", () => {
+		const brief = buildThreadBrief([
+			post(
+				"f1",
+				"надо будет посмотреть https://grafana.local/d/abc?from=now-6h",
+				10,
+			),
+		]);
+		expect(brief.openQuestions?.[0]?.kind).toBe("follow_up");
+	});
+
+	test("real questions outrank follow-ups inside the open-question cap", () => {
+		const posts = [
+			post("f1", "надо будет обсудить лимиты", 10),
+			post("f2", "нужно будет переделать отчёт", 20),
+			post("f3", "предстоит миграция индексов", 30),
+			post("q1", "какой вариант берём для координатора?", 40, {
+				author: "bob",
+			}),
+		];
+		const questions = buildThreadBrief(posts).openQuestions ?? [];
+
+		expect(questions[0]?.postId).toBe("q1");
+		expect(questions.some((item) => item.kind === "follow_up")).toBe(true);
 	});
 
 	test("катим surfaces as status not decision", () => {

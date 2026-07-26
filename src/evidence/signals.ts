@@ -18,6 +18,37 @@ export type CandidateSpanKind =
 	| "rejected_option_candidate"
 	| "open_question_candidate";
 
+/**
+ * How strong a `decision_candidate`'s claim to being *settled* is. All three
+ * are mechanical readings of the matched cue, never a verified outcome — but
+ * conflating them is how "просто выпилю нафиг это" gets implemented as if the
+ * team had agreed to it.
+ *
+ * - `approved_decision` — collective/approval phrasing («решили», «договорились»,
+ *   «можно делать»), or a personal commitment another author affirmed.
+ * - `discussion_outcome` — summary framing («обсудили…», «итого…») with no
+ *   approval or commitment of its own. Someone is reporting where a discussion
+ *   landed; «обсудили с продактом, пока ничего не понятно» is the same shape as
+ *   «обсудили и утвердили», so this class must never be read as a go-ahead.
+ * - `implementation_intent` — one author states what *they* will do, unhedged
+ *   and unaffirmed inside this packet.
+ * - `proposal` — the cue sentence hedges («наверное», «предлагаю», «может»), so
+ *   it reads as an option on the table rather than a course taken.
+ */
+export type DecisionKind =
+	| "approved_decision"
+	| "discussion_outcome"
+	| "implementation_intent"
+	| "proposal";
+
+/**
+ * Whether an `open_question_candidate` is actually being *asked*, or is
+ * deferred work stated as a fact («рано или поздно надо будет привести
+ * модерацию в порядок» is not a question, and reporting it as one invites an
+ * answer nobody was waiting for).
+ */
+export type QuestionKind = "question" | "follow_up";
+
 export interface CandidateSpan {
 	kind: CandidateSpanKind;
 	postId: string;
@@ -25,6 +56,10 @@ export interface CandidateSpan {
 	excerpt: string;
 	cues: string[];
 	confidence: number;
+	/** Present only on `decision_candidate` spans. */
+	decisionKind?: DecisionKind;
+	/** Present only on `open_question_candidate` spans. */
+	questionKind?: QuestionKind;
 	/**
 	 * Returned post that acknowledged this `decision_candidate` (short reply from
 	 * a different author within two posts). Advisory pairing, not a verification.
@@ -110,6 +145,13 @@ export interface BriefDecision {
 	excerpt: string;
 	/** The excerpt is shorter than the post; the tail is not shown here. */
 	excerptTruncated?: true;
+	/**
+	 * How settled this is. `decisions[]` is ordered strongest first, so an
+	 * `implementation_intent` or `proposal` never displaces an
+	 * `approved_decision` — but all three are cue readings, so weigh the author
+	 * (`people[]`) before treating even an `approved_decision` as authority.
+	 */
+	kind: DecisionKind;
 	cues: string[];
 	confidence: number;
 	/** Short acknowledgement from a different author, when paired. */
@@ -145,6 +187,12 @@ export interface BriefOpenQuestion {
 	excerpt: string;
 	/** The excerpt is shorter than the post; the tail is not shown here. */
 	excerptTruncated?: true;
+	/**
+	 * `question` is being asked; `follow_up` is deferred work stated as a fact
+	 * («надо будет привести модерацию в порядок»). Both are worth carrying, but
+	 * only the first is waiting on an answer.
+	 */
+	kind: QuestionKind;
 	cues: string[];
 	confidence: number;
 	/** Packed posts by other authors after it; 0 means nobody answered here. */
@@ -256,6 +304,14 @@ const DECISION_ACK_LOOKAHEAD = 2;
 /** Short-message ceiling (code points) for an acknowledgement reply. */
 const ACK_MAX_MESSAGE_CHARS = 30;
 
+/** Strongest first; drives both `decisions[]` order and which survive the cap. */
+const DECISION_KIND_PRIORITY: Readonly<Record<DecisionKind, number>> = {
+	approved_decision: 0,
+	discussion_outcome: 1,
+	implementation_intent: 2,
+	proposal: 3,
+};
+
 const PURPOSE_HINT_PRIORITY: Readonly<Record<PurposeHintLabel, number>> = {
 	decision: 0,
 	open_question: 1,
@@ -277,6 +333,22 @@ const ACK_TOKENS: readonly string[] = [
 	"sounds good",
 ];
 
+/**
+ * The subset of {@link ACK_TOKENS} that affirms the decision rather than merely
+ * registering it. «спасибо» thanks the author and `+` is a presence marker;
+ * neither is agreement, and promoting an intent to `approved_decision` on them
+ * manufactures approval nobody gave. Both still count as acknowledgement for
+ * `ackPostId` and the confidence bump.
+ */
+const AFFIRMING_ACK_TOKENS: ReadonlySet<string> = new Set([
+	"ок",
+	"окей",
+	"хорошо",
+	"да",
+	"ok",
+	"sounds good",
+]);
+
 const DEBUG_ROLE_LABELS = new Set<RoleHintLabel>([
 	"testing",
 	"regression",
@@ -289,49 +361,92 @@ interface CuePattern {
 	/** When true, require token boundaries (short tokens like `qa` / `mr`). */
 	exact?: boolean;
 	weight?: number;
+	/**
+	 * Decision cues only. `settled` phrasing reports approval or agreement;
+	 * `personal` reports what one author intends to do; `summary` only reports
+	 * that a discussion happened. The difference is what separates
+	 * {@link DecisionKind} values.
+	 */
+	commitment?: "settled" | "personal" | "summary";
+	/**
+	 * Open-question cues only. `unresolved` marks something actually being asked
+	 * or explicitly not settled; `pending` marks work deferred to later, which is
+	 * a follow-up, not a question; `punctuation` is the bare `?`, which matches
+	 * anywhere in a message (URLs included) and therefore cannot classify alone.
+	 */
+	shape?: "unresolved" | "pending" | "punctuation";
 }
 
 const DECISION_CUES: readonly CuePattern[] = [
-	{ cue: "решили", weight: 0.7 },
-	{ cue: "итого", weight: 0.6 },
-	{ cue: "фиксируем", weight: 0.65 },
-	{ cue: "утвердили", weight: 0.7 },
-	{ cue: "договорились", weight: 0.7 },
-	{ cue: "обсудили", weight: 0.65 },
-	{ cue: "можно делать", weight: 0.7 },
-	{ cue: "ок, делаем", weight: 0.65 },
-	{ cue: "ок делаем", weight: 0.65 },
-	{ cue: "делаем так", weight: 0.6 },
-	{ cue: "погнали делать", weight: 0.6 },
-	{ cue: "так и сделаем", weight: 0.65 },
-	{ cue: "approved", weight: 0.65 },
-	{ cue: "going with", weight: 0.6 },
-	{ cue: "we'll go with", weight: 0.65 },
-	{ cue: "ship it", weight: 0.55 },
-	{ cue: "final:", weight: 0.5 },
+	{ cue: "решили", weight: 0.7, commitment: "settled" },
+	// Summary framing, not approval: «обсудили» is "we talked", «итого» heads a
+	// recap that may well list open items. They stay decision candidates because
+	// a real outcome is usually stated exactly this way — but on their own they
+	// report a discussion, not a go-ahead.
+	{ cue: "итого", weight: 0.6, commitment: "summary" },
+	{ cue: "фиксируем", weight: 0.65, commitment: "settled" },
+	{ cue: "утвердили", weight: 0.7, commitment: "settled" },
+	{ cue: "договорились", weight: 0.7, commitment: "settled" },
+	{ cue: "обсудили", weight: 0.65, commitment: "summary" },
+	{ cue: "можно делать", weight: 0.7, commitment: "settled" },
+	{ cue: "ок, делаем", weight: 0.65, commitment: "settled" },
+	{ cue: "ок делаем", weight: 0.65, commitment: "settled" },
+	{ cue: "делаем так", weight: 0.6, commitment: "settled" },
+	{ cue: "погнали делать", weight: 0.6, commitment: "settled" },
+	{ cue: "так и сделаем", weight: 0.65, commitment: "settled" },
+	{ cue: "approved", weight: 0.65, commitment: "settled" },
+	{ cue: "going with", weight: 0.6, commitment: "settled" },
+	{ cue: "we'll go with", weight: 0.65, commitment: "settled" },
+	{ cue: "ship it", weight: 0.55, commitment: "settled" },
+	{ cue: "final:", weight: 0.5, commitment: "settled" },
 	// First-person forward commitments — the dominant decision shape in these
 	// conversations. Single verbs match on token boundaries so third-person
 	// inflections (`уберут`) do not read as a personal commitment.
-	{ cue: "сделаю", exact: true, weight: 0.6 },
-	{ cue: "так и сделаю", weight: 0.65 },
-	{ cue: "выпилю", exact: true, weight: 0.6 },
-	{ cue: "уберу", exact: true, weight: 0.55 },
-	{ cue: "удалю", exact: true, weight: 0.55 },
-	{ cue: "поправлю", exact: true, weight: 0.6 },
-	{ cue: "перепишу", exact: true, weight: 0.6 },
-	{ cue: "переделаю", exact: true, weight: 0.6 },
-	{ cue: "буду делать", weight: 0.6 },
-	{ cue: "будем делать", weight: 0.6 },
+	{ cue: "сделаю", exact: true, weight: 0.6, commitment: "personal" },
+	{ cue: "так и сделаю", weight: 0.65, commitment: "personal" },
+	{ cue: "выпилю", exact: true, weight: 0.6, commitment: "personal" },
+	{ cue: "уберу", exact: true, weight: 0.55, commitment: "personal" },
+	{ cue: "удалю", exact: true, weight: 0.55, commitment: "personal" },
+	{ cue: "поправлю", exact: true, weight: 0.6, commitment: "personal" },
+	{ cue: "перепишу", exact: true, weight: 0.6, commitment: "personal" },
+	{ cue: "переделаю", exact: true, weight: 0.6, commitment: "personal" },
+	{ cue: "буду делать", weight: 0.6, commitment: "personal" },
+	{ cue: "будем делать", weight: 0.6, commitment: "personal" },
 	// Bare future tense sits exactly at DECISION_CONFIDENCE_FLOOR: it is the shape
 	// real commitments take here ("будем не запрещать…"), and the interrogative
 	// guard already removes the common "что будем делать?" noise. Weaker than any
 	// explicit cue, so acknowledged or phrased decisions still outrank it, and
 	// `brief.decisions[]` inlines the text so a false positive is cheap to dismiss.
-	{ cue: "буду", exact: true, weight: 0.5 },
-	{ cue: "будем", exact: true, weight: 0.5 },
-	{ cue: "i'll go with", weight: 0.65 },
-	{ cue: "let's just", weight: 0.55 },
-	{ cue: "going to remove", weight: 0.6 },
+	{ cue: "буду", exact: true, weight: 0.5, commitment: "personal" },
+	{ cue: "будем", exact: true, weight: 0.5, commitment: "personal" },
+	{ cue: "i'll go with", weight: 0.65, commitment: "personal" },
+	{ cue: "let's just", weight: 0.55, commitment: "personal" },
+	{ cue: "going to remove", weight: 0.6, commitment: "personal" },
+];
+
+/**
+ * Hedges that turn a matched commitment into a {@link DecisionKind} `proposal`:
+ * the author is floating an option, not reporting a course taken. Matched in
+ * the cue's own sentence, so a hedge elsewhere in a long post does not soften a
+ * decision stated plainly.
+ */
+const DECISION_HEDGE_CUES: readonly CuePattern[] = [
+	{ cue: "наверное" },
+	{ cue: "наверно" },
+	{ cue: "может быть" },
+	{ cue: "возможно" },
+	{ cue: "думаю" },
+	{ cue: "предлагаю" },
+	{ cue: "предложение" },
+	// «давайте» is deliberately absent: «давайте фиксируем вариант B» is how
+	// agreement is ordinarily phrased here, not how it is hedged.
+	{ cue: "имхо", exact: true },
+	{ cue: "как вариант" },
+	{ cue: "maybe" },
+	{ cue: "i think" },
+	{ cue: "probably" },
+	{ cue: "wdyt", exact: true },
+	{ cue: "proposal" },
 ];
 
 /**
@@ -365,7 +480,7 @@ const REJECTED_CUES: readonly CuePattern[] = [
 ];
 
 const OPEN_QUESTION_CUES: readonly CuePattern[] = [
-	{ cue: "?", weight: 0.4 },
+	{ cue: "?", weight: 0.4, shape: "punctuation" },
 	{ cue: "не ясно", weight: 0.65 },
 	{ cue: "неясно", weight: 0.65 },
 	{ cue: "вопрос:", weight: 0.6 },
@@ -374,20 +489,22 @@ const OPEN_QUESTION_CUES: readonly CuePattern[] = [
 	{ cue: "ждём ответа", weight: 0.55 },
 	{ cue: "open question", weight: 0.7 },
 	{ cue: "unclear", weight: 0.55 },
-	{ cue: "tbd", exact: true, weight: 0.5 },
+	{ cue: "tbd", exact: true, weight: 0.5, shape: "pending" },
 	// Deferral and fork phrasing: the shape an unresolved architectural choice
 	// actually takes here ("надо будет с Аней обсудить", "capabilities или
 	// отдельный роут?"). Without these a design fork scores like a stray `?`.
 	// Pending-work phrasing. A bare infinitive (`обсудить`) is not enough: it
 	// fires on `успели всё обсудить`, which is the opposite of an open question.
-	{ cue: "надо будет", weight: 0.55 },
-	{ cue: "нужно будет", weight: 0.55 },
-	{ cue: "предстоит", weight: 0.55 },
-	{ cue: "надо обсудить", weight: 0.65 },
-	{ cue: "надо будет обсудить", weight: 0.65 },
-	{ cue: "нужно обсудить", weight: 0.65 },
-	{ cue: "надо решить", weight: 0.65 },
-	{ cue: "нужно решить", weight: 0.65 },
+	// These are `pending`, not `unresolved`: alone they describe deferred work,
+	// so they surface as a `follow_up` rather than as a question being asked.
+	{ cue: "надо будет", weight: 0.55, shape: "pending" },
+	{ cue: "нужно будет", weight: 0.55, shape: "pending" },
+	{ cue: "предстоит", weight: 0.55, shape: "pending" },
+	{ cue: "надо обсудить", weight: 0.65, shape: "pending" },
+	{ cue: "надо будет обсудить", weight: 0.65, shape: "pending" },
+	{ cue: "нужно обсудить", weight: 0.65, shape: "pending" },
+	{ cue: "надо решить", weight: 0.65, shape: "pending" },
+	{ cue: "нужно решить", weight: 0.65, shape: "pending" },
 	{ cue: "не решили", weight: 0.65 },
 	{ cue: "не определились", weight: 0.65 },
 	{ cue: "не договорились", weight: 0.6 },
@@ -543,8 +660,14 @@ export function buildThreadBrief(
 				span.kind === "decision_candidate" &&
 				span.confidence >= DECISION_CONFIDENCE_FLOOR,
 		)
+		// Settledness outranks confidence: the cap must never spend its five slots
+		// on loud personal intents while an acknowledged agreement falls off.
 		.sort(
 			(left, right) =>
+				DECISION_KIND_PRIORITY[left.decisionKind ?? "implementation_intent"] -
+					DECISION_KIND_PRIORITY[
+						right.decisionKind ?? "implementation_intent"
+					] ||
 				right.confidence - left.confidence ||
 				left.postId.localeCompare(right.postId),
 		);
@@ -660,19 +783,24 @@ function buildOpenQuestions(
 			createAt: post.createAt,
 			excerpt: excerpt.text,
 			...(excerpt.truncated ? { excerptTruncated: true as const } : {}),
+			// Unreachable in practice; `follow_up` is the under-claiming default.
+			kind: span.questionKind ?? "follow_up",
 			cues: [...span.cues],
 			confidence: span.confidence,
 			repliesAfter,
 			...(post.id === lastId ? { isThreadTail: true as const } : {}),
 		});
 	}
-	// Dangling questions first, then the strongest cue; a question nobody
-	// answered inside the packet is the one worth carrying.
+	// Dangling questions first, then things actually being asked, then the
+	// strongest cue; a question nobody answered inside the packet is the one
+	// worth carrying, and a deferred follow-up must not displace it.
 	return questions
 		.sort(
 			(left, right) =>
 				Number(right.isThreadTail ?? false) -
 					Number(left.isThreadTail ?? false) ||
+				Number(left.kind === "follow_up") -
+					Number(right.kind === "follow_up") ||
 				left.repliesAfter - right.repliesAfter ||
 				right.confidence - left.confidence ||
 				right.createAt - left.createAt,
@@ -709,6 +837,8 @@ function buildBriefDecisions(
 			createAt: post.createAt,
 			excerpt: excerpt.text,
 			...(excerpt.truncated ? { excerptTruncated: true as const } : {}),
+			// Unreachable in practice; the middle class under-claims safely.
+			kind: span.decisionKind ?? "implementation_intent",
 			cues: [...span.cues],
 			confidence: span.confidence,
 			...(span.ackPostId ? { ackPostId: span.ackPostId } : {}),
@@ -979,9 +1109,9 @@ function collectCandidateSpans(
 				rejectNegatedCue: isDecision,
 			});
 			if (!matched.cues.length) continue;
-			const ackPostId = isDecision ? findAckPostId(posts, index) : undefined;
+			const ack = isDecision ? findAckPostId(posts, index) : undefined;
 			// Ack pairing is a post-scoring bump — never a synthetic cue weight.
-			const confidence = ackPostId
+			const confidence = ack
 				? roundConfidence(
 						Math.min(0.95, matched.confidence + DECISION_ACK_BONUS),
 					)
@@ -992,13 +1122,30 @@ function collectCandidateSpans(
 				excerpt: truncateExcerpt(post.message, options.excerptLimit),
 				cues: matched.cues,
 				confidence,
-				...(ackPostId ? { ackPostId } : {}),
+				...(isDecision
+					? {
+							decisionKind: classifyDecision(
+								post.message,
+								matched.patterns,
+								Boolean(ack?.affirming),
+							),
+						}
+					: {}),
+				...(kind === "open_question_candidate"
+					? { questionKind: classifyQuestion(post.message, matched.patterns) }
+					: {}),
+				...(ack ? { ackPostId: ack.postId } : {}),
 			});
 		}
 	}
+	// An acknowledged agreement must survive the span cap. Sorting on confidence
+	// alone let a dozen loud 0.89 questions evict the one 0.86 «можно делать»
+	// before the brief — which orders by kind — ever saw it.
 	return spans
 		.sort(
 			(left, right) =>
+				Number(left.decisionKind !== "approved_decision") -
+					Number(right.decisionKind !== "approved_decision") ||
 				right.confidence - left.confidence ||
 				left.postId.localeCompare(right.postId) ||
 				left.kind.localeCompare(right.kind),
@@ -1092,6 +1239,94 @@ function collectRoleHints(posts: readonly EvidencePost[]): RoleHint[] {
 	);
 }
 
+/**
+ * Read a matched decision as settled, intended, or merely floated.
+ *
+ * Order matters: a hedge demotes anything, because "наверное, так и сделаю" is
+ * not a commitment however strong the verb; an acknowledgement from another
+ * author promotes a personal commitment, because someone else signing off is
+ * the closest mechanical evidence of agreement this layer can observe.
+ */
+function classifyDecision(
+	message: string,
+	patterns: readonly CuePattern[],
+	affirmed: boolean,
+): DecisionKind {
+	if (isFullyHedged(message, patterns)) return "proposal";
+	if (patterns.some((pattern) => pattern.commitment === "settled")) {
+		return "approved_decision";
+	}
+	if (patterns.some((pattern) => pattern.commitment === "personal")) {
+		return affirmed ? "approved_decision" : "implementation_intent";
+	}
+	// Summary framing alone. An affirmation does not upgrade it: agreeing with
+	// "we discussed it" agrees that a discussion happened.
+	return "discussion_outcome";
+}
+
+/**
+ * True when *every* sentence carrying a matched cue also carries a hedge. One
+ * plainly stated sentence is enough to keep a decision: "решили фиксируем B.
+ * наверное, поздновато" is a decision followed by a musing, and the same cue
+ * word recurring in the musing must not retroactively soften it.
+ */
+function isFullyHedged(
+	message: string,
+	patterns: readonly CuePattern[],
+): boolean {
+	const carrying = splitSentences(message).filter((sentence) =>
+		patterns.some((pattern) => cueMatches(sentence.text, pattern)),
+	);
+	if (!carrying.length) return false;
+	return carrying.every((sentence) =>
+		DECISION_HEDGE_CUES.some((hedge) => cueMatches(sentence.text, hedge)),
+	);
+}
+
+/**
+ * Deferred work stated as a fact is a `follow_up`; anything actually being asked
+ * — a question mark, or a cue that names something explicitly unsettled — stays
+ * a `question`.
+ */
+function classifyQuestion(
+	message: string,
+	patterns: readonly CuePattern[],
+): QuestionKind {
+	// Unannotated cues are unresolved by default; only `pending` and the bare `?`
+	// are excluded, so a new cue is never silently demoted to a follow-up.
+	if (
+		patterns.some(
+			(pattern) =>
+				pattern.shape !== "pending" && pattern.shape !== "punctuation",
+		)
+	) {
+		return "question";
+	}
+	// A bare `?` matches anywhere, including a Grafana link's query string, so it
+	// only counts when it actually terminates a sentence of prose.
+	return hasInterrogativeSentence(message) ? "question" : "follow_up";
+}
+
+/** URLs are addresses: a `?` inside one asks nobody anything. */
+const QUESTION_URL_PATTERN = /https?:\/\/\S+/giu;
+
+function hasInterrogativeSentence(message: string): boolean {
+	return splitSentences(message.replace(QUESTION_URL_PATTERN, " ")).some(
+		(sentence) => sentence.terminator === "?",
+	);
+}
+
+/**
+ * How much a cue determines the reported class. `settled` decides
+ * `approved_decision` outright and the bare `?` decides nothing, so they sit at
+ * the two ends; everything else keeps weight order.
+ */
+function cueClassificationRank(pattern: CuePattern): number {
+	if (pattern.commitment === "settled") return 0;
+	if (pattern.shape === "punctuation") return 2;
+	return 1;
+}
+
 function isDecisionMetaNoise(message: string): boolean {
 	const normalized = message.toLowerCase();
 	return DECISION_META_REJECT.some((phrase) =>
@@ -1106,22 +1341,34 @@ function matchCues(
 		rejectInterrogativeCueSentence?: boolean;
 		rejectNegatedCue?: boolean;
 	} = {},
-): { cues: string[]; weights: number[]; confidence: number } {
+): {
+	cues: string[];
+	weights: number[];
+	confidence: number;
+	patterns: CuePattern[];
+} {
 	const sentences =
 		options.rejectInterrogativeCueSentence || options.rejectNegatedCue
 			? splitSentences(message)
 			: undefined;
-	const matched: Array<{ cue: string; weight: number }> = [];
+	const matched: Array<{ cue: string; weight: number; pattern: CuePattern }> =
+		[];
 	for (const pattern of patterns) {
 		if (!cueMatches(message, pattern)) continue;
 		if (sentences && !cueSurvivesSentenceGuards(sentences, pattern, options)) {
 			continue;
 		}
-		matched.push({ cue: pattern.cue, weight: pattern.weight ?? 0.5 });
+		matched.push({ cue: pattern.cue, weight: pattern.weight ?? 0.5, pattern });
 	}
+	// Classifying cues first: `cues[]` is capped, and a reported
+	// `approved_decision` whose settled cue fell off the list is a verdict the
+	// reader cannot check against the text.
 	matched.sort(
 		(left, right) =>
-			right.weight - left.weight || left.cue.localeCompare(right.cue),
+			cueClassificationRank(left.pattern) -
+				cueClassificationRank(right.pattern) ||
+			right.weight - left.weight ||
+			left.cue.localeCompare(right.cue),
 	);
 	const limited = matched.slice(0, MAX_CUES_PER_SIGNAL);
 	const weights = limited.map((item) => item.weight);
@@ -1129,6 +1376,9 @@ function matchCues(
 		cues: limited.map((item) => item.cue),
 		weights,
 		confidence: scoreConfidence(weights),
+		// Every match, not just the reported top cues: classification must see a
+		// weak `settled` cue that the cue cap would otherwise hide.
+		patterns: matched.map((item) => item.pattern),
 	};
 }
 
@@ -1157,6 +1407,14 @@ function splitSentences(message: string): CueSentence[] {
 const SENTENCE_TERMINATORS = new Set([".", "!", "?", "\n"]);
 
 /**
+ * Negations that void a decision cue immediately following them. English is
+ * covered too: "we're not going with capabilities" and "this was never
+ * approved" are rejections, and reading either as an approval is worse than
+ * missing a decision outright.
+ */
+const NEGATIONS: readonly string[] = ["не", "not", "never", "no"];
+
+/**
  * Keep a cue only when at least one sentence carrying it is neither a question
  * nor a negation. A cue that spans a sentence boundary is kept (conservative).
  */
@@ -1177,7 +1435,9 @@ function cueSurvivesSentenceGuards(
 		}
 		if (
 			options.rejectNegatedCue &&
-			containsNormalizedText(sentence.text, `не ${pattern.cue}`)
+			NEGATIONS.some((negation) =>
+				containsNormalizedText(sentence.text, `${negation} ${pattern.cue}`),
+			)
 		) {
 			continue;
 		}
@@ -1196,7 +1456,7 @@ function cueSurvivesSentenceGuards(
 function findAckPostId(
 	posts: readonly EvidencePost[],
 	decisionIndex: number,
-): string | undefined {
+): { postId: string; affirming: boolean } | undefined {
 	const decision = posts[decisionIndex];
 	if (!decision) return undefined;
 	let scanned = 0;
@@ -1206,16 +1466,23 @@ function findAckPostId(
 		if (candidate.userId === decision.userId) continue;
 		scanned += 1;
 		if (scanned > DECISION_ACK_LOOKAHEAD) break;
-		if (isShortAcknowledgement(candidate.message)) return candidate.id;
+		const token = acknowledgementToken(candidate.message);
+		if (token !== undefined) {
+			return {
+				postId: candidate.id,
+				affirming: AFFIRMING_ACK_TOKENS.has(token),
+			};
+		}
 	}
 	return undefined;
 }
 
-function isShortAcknowledgement(message: string): boolean {
+/** The leading ack token, or undefined when the message is not an ack at all. */
+function acknowledgementToken(message: string): string | undefined {
 	const trimmed = message.trim();
-	if (!trimmed || [...trimmed].length > ACK_MAX_MESSAGE_CHARS) return false;
+	if (!trimmed || [...trimmed].length > ACK_MAX_MESSAGE_CHARS) return undefined;
 	const normalized = normalizeSearchText(trimmed);
-	return ACK_TOKENS.some((token) => {
+	return ACK_TOKENS.find((token) => {
 		if (!normalized.startsWith(token)) return false;
 		const next = [...normalized][[...token].length];
 		return next === undefined || !/[\p{L}\p{N}_]/u.test(next);

@@ -532,6 +532,8 @@ describe("agent projection", () => {
 			id: REPLY,
 			author: "bob",
 			at: "1970-01-01T00:00:00.020Z",
+			// «хорошо» from another author affirms the personal commitment.
+			kind: "approved_decision",
 			text: "просто выпилю нафиг эту логику двухсотки",
 			ackPostId: `c${"c".repeat(25)}`,
 		});

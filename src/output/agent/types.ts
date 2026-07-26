@@ -76,6 +76,20 @@ export interface AgentBriefDecision {
 	id: string;
 	author: string;
 	at: string;
+	/**
+	 * How settled this is: `approved_decision` (approval/agreement phrasing, or a
+	 * personal commitment another author affirmed), `discussion_outcome` (someone
+	 * reports where a discussion landed — «обсудили…», «итого…» — which is not a
+	 * go-ahead), `implementation_intent` (one author says what they will do),
+	 * `proposal` (hedged — an option, not a course). Entries are ordered
+	 * strongest first, and only `approved_decision` may be reported as something
+	 * the team settled.
+	 */
+	kind:
+		| "approved_decision"
+		| "discussion_outcome"
+		| "implementation_intent"
+		| "proposal";
 	/** Verbatim excerpt from the packed post; bounded, never a summary. */
 	text: string;
 	/**
@@ -114,6 +128,11 @@ export interface AgentBriefOpenQuestion {
 	id: string;
 	author: string;
 	at: string;
+	/**
+	 * `question` is being asked; `follow_up` is deferred work stated as a fact.
+	 * Both are unfinished business, but only a `question` is waiting on someone.
+	 */
+	kind: "question" | "follow_up";
 	text: string;
 	/** The post carries more text than `text` shows. */
 	textTruncated?: true;

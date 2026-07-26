@@ -793,6 +793,9 @@ function formatOpenQuestions(brief: ThreadBrief): string[] {
 		...questions.map((question) =>
 			joinParts([
 				styles.timestamp(`[${isoTimestamp(question.createAt)}]`),
+				styles.label(
+					question.kind === "follow_up" ? "[follow-up]" : "[question]",
+				),
 				styles.username(`@${question.author}`),
 				question.excerpt,
 				...(question.excerptTruncated ? [truncatedTextHint()] : []),
@@ -821,6 +824,7 @@ function formatDecisions(brief: ThreadBrief): string[] {
 		...decisions.flatMap((decision) => [
 			joinParts([
 				styles.timestamp(`[${isoTimestamp(decision.createAt)}]`),
+				styles.label(`[${decision.kind.replace(/_/gu, " ")}]`),
 				styles.username(`@${decision.author}`),
 				decision.excerpt,
 				...(decision.excerptTruncated ? [truncatedTextHint()] : []),
