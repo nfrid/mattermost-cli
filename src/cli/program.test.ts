@@ -66,7 +66,7 @@ describe("context/thread --signals", () => {
 });
 
 describe("file command", () => {
-	test("accepts file-id and optional --out with --agent", async () => {
+	test("accepts file-id, --out, and bounded --inspect with --agent", async () => {
 		const seen: Array<Record<string, unknown>> = [];
 		const program = createProgram(async (command, global, commandOptions) => {
 			seen.push({ command, ...global, ...(commandOptions ?? {}) });
@@ -88,13 +88,21 @@ describe("file command", () => {
 		});
 
 		await program.parseAsync(
-			["file", "file-1", "--out", "/tmp/mm-file-1-trace.txt", "--agent"],
+			[
+				"file",
+				"file-1",
+				"--out",
+				"/tmp/mm-file-1-trace.txt",
+				"--inspect",
+				"--agent",
+			],
 			{ from: "user" },
 		);
 		expect(seen.at(-1)).toMatchObject({
 			command: "file",
 			fileId: "file-1",
 			out: "/tmp/mm-file-1-trace.txt",
+			inspect: true,
 			agent: true,
 		});
 	});

@@ -17,13 +17,13 @@ const REPLY = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
 const FILE_ID = "file-1";
 
 describe("file download", () => {
-	test("downloads allowlisted file contents to the requested path", async () => {
+	test("downloads and inspects allowlisted file contents", async () => {
 		const store = await seededStore();
 		const outDir = await mkdtemp(join(tmpdir(), "mm-file-"));
 		const out = join(outDir, "trace.txt");
 		const bytes = new TextEncoder().encode("attachment-bytes");
 		const result = await downloadMattermostFile(
-			{ fileId: FILE_ID, out },
+			{ fileId: FILE_ID, out, inspect: true },
 			{
 				config: configFixture(),
 				store,
@@ -41,6 +41,12 @@ describe("file download", () => {
 		expect(result.path).toBe(out);
 		expect(result.id).toBe(FILE_ID);
 		expect(result.name).toBe("trace.txt");
+		expect(result.inspection).toMatchObject({
+			status: "preview",
+			decoded: true,
+			syntaxValidated: false,
+			preview: "attachment-bytes",
+		});
 		expect(await readFile(out, "utf8")).toBe("attachment-bytes");
 		store.close();
 		await rm(outDir, { recursive: true, force: true });

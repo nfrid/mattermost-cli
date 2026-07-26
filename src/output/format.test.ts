@@ -108,6 +108,50 @@ describe("human formatting", () => {
 		expect(text).toContain("strategy root, ticket_neighborhoods ×2, gap_fill");
 		store.close();
 	});
+
+	test("prints preview and not-interpreted file inspection states", () => {
+		const base = {
+			id: "file-1",
+			name: "evidence.txt",
+			mimeType: "text/plain",
+			size: 12,
+			path: "/tmp/evidence.txt",
+			postId: ROOT,
+			conversationId: "channel-payments",
+		};
+		const preview = formatHumanResult(
+			commandSuccess("file", {
+				...base,
+				inspection: {
+					status: "preview" as const,
+					format: "text" as const,
+					decoded: true as const,
+					syntaxValidated: false as const,
+					preview: "bounded evidence",
+					bytesExamined: 16,
+					lines: 1,
+				},
+			}),
+		);
+		const binary = formatHumanResult(
+			commandSuccess("file", {
+				...base,
+				name: "evidence.xlsx",
+				inspection: {
+					status: "not_interpreted" as const,
+					format: "spreadsheet" as const,
+					interpreted: false as const,
+					reason: "external_spreadsheet_parser_required" as const,
+					recommendedAction: "open with a spreadsheet parser",
+				},
+			}),
+		);
+
+		expect(preview).toContain("Decoded preview");
+		expect(preview).toContain("bounded evidence");
+		expect(binary).toContain("Not interpreted");
+		expect(binary).toContain("open with a spreadsheet parser");
+	});
 });
 
 async function seededStore(): Promise<MattermostStore> {

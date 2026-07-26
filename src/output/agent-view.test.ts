@@ -1496,7 +1496,7 @@ describe("agent projection", () => {
 		store.close();
 	});
 
-	test("projects file download metadata without content bytes", () => {
+	test("projects an explicitly requested bounded file inspection", () => {
 		const result = projectAgentResult(
 			commandSuccess(
 				"file",
@@ -1508,6 +1508,15 @@ describe("agent projection", () => {
 					path: "/tmp/mm-file-1-trace.txt",
 					postId: REPLY,
 					conversationId: "channel-payments",
+					inspection: {
+						status: "preview" as const,
+						format: "text" as const,
+						decoded: true as const,
+						syntaxValidated: false as const,
+						preview: "safe preview",
+						bytesExamined: 12,
+						lines: 1,
+					},
 				},
 				[{ kind: "soft_note", message: "downloaded from remote metadata" }],
 			),
@@ -1523,6 +1532,15 @@ describe("agent projection", () => {
 			path: "/tmp/mm-file-1-trace.txt",
 			postId: REPLY,
 			conversationId: "channel-payments",
+			inspection: {
+				status: "preview",
+				format: "text",
+				decoded: true,
+				syntaxValidated: false,
+				preview: "safe preview",
+				bytesExamined: 12,
+				lines: 1,
+			},
 			warnings: [
 				{ kind: "soft_note", message: "downloaded from remote metadata" },
 			],

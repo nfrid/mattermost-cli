@@ -752,6 +752,29 @@ const peopleDataSchema = z.object({
 	conversations: z.array(z.string()),
 });
 export const peopleResultV1Schema = successResult("people", peopleDataSchema);
+const fileInspectionSchema = z.discriminatedUnion("status", [
+	z.object({
+		status: z.literal("preview"),
+		format: z.enum(["text", "csv", "json", "xml"]),
+		decoded: z.literal(true),
+		syntaxValidated: z.literal(false),
+		preview: z.string(),
+		bytesExamined: z.number().int().nonnegative(),
+		lines: z.number().int().nonnegative(),
+		truncated: z.literal(true).optional(),
+	}),
+	z.object({
+		status: z.literal("not_interpreted"),
+		format: z.enum(["image", "spreadsheet", "binary"]),
+		interpreted: z.literal(false),
+		reason: z.enum([
+			"external_image_reader_required",
+			"external_spreadsheet_parser_required",
+			"unsupported_binary_format",
+		]),
+		recommendedAction: z.string(),
+	}),
+]);
 const fileDataSchema = z.object({
 	id: z.string(),
 	name: z.string(),
@@ -760,6 +783,7 @@ const fileDataSchema = z.object({
 	path: z.string(),
 	postId: z.string(),
 	conversationId: z.string(),
+	inspection: fileInspectionSchema.optional(),
 });
 export const fileResultV1Schema = successResult("file", fileDataSchema);
 

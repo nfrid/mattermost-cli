@@ -177,26 +177,40 @@ inside skip spans, so downloading is an informed decision.
 fit the reporting budget.
 
 Message-level `files[]` carry `id` / `name` (plus `mimeType` / `size` when known)
-with a copy-ready `downloadCommand` argv (`["mm","file",id,"--agent"]`).
+with a copy-ready `downloadCommand` argv (`["mm","file",id,"--agent"]`); add
+`--inspect` when a bounded textual preview is needed.
 
 A post whose text is empty while carrying a live attachment is marked
 `mediaOnly: true` on both the message and its attachment entry.
 
-`mm` never parses attachment contents; download and read them.
+`mm file <id> --inspect --agent` downloads the file and, for bounded textual
+formats (CSV/TSV/TXT/LOG/JSON/NDJSON/XML/SQL), returns an `inspection` preview:
+at most 64 KiB decoded, 40 lines, and 8,000 characters. It explicitly reports
+`decoded: true` and `syntaxValidated: false`; format classification does not
+claim CSV rows or JSON/XML syntax were parsed. The preview carries `truncated`
+when any bound cut it.
+
+Images and binary spreadsheets are never presented as read: their inspection is
+`status: "not_interpreted"`, `interpreted: false`, with the external reader or
+parser still required. This avoids turning OCR, captions, or ad-hoc workbook
+parsing into apparent primary evidence.
 
 ### `read_attachments` steps
 
 When a media-only post lands after the last subject-ticket mention — or is the
 last packed post without a ticket subject — `evidence.next` carries one
 `recommended` `read_attachments` step with `impact:
-"may_contradict_visible_text"`, a `postId`, and a single-file argv.
+"may_contradict_visible_text"`, a `postId`, and a single-file argv. Textual files use `--inspect`; images remain
+an explicit download for an image-capable reader.
 
 A data file (`csv` / `tsv` / `xlsx` / `xls` / `ods` / `json` / `ndjson` / `log` /
 `sql` / `txt`) attached to a post the brief flagged — a decision, one of its
 refinements, or an open question — gets its own step with `reason:
 "data_file_on_decision_post"` and `impact: "may_verify_quantitative_claim"`. Such
 a post has text, so the media-only rule never covered it, yet the file is where a
-quantitative claim («вот дубли») can actually be checked.
+quantitative claim («вот дубли») can actually be checked. The recommended argv
+includes `--inspect` only for bounded textual formats. XLS/XLSX/ODS are
+downloaded but remain `not_interpreted`; a spreadsheet parser is still required.
 
 It is `recommended` on its own and `optional` behind a media-only step, which is
 the more urgent of the two because that post is unreadable without its file. The

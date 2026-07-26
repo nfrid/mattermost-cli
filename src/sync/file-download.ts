@@ -8,6 +8,7 @@ import {
 } from "../shared/errors.ts";
 import type { IndexedFile, MattermostStore } from "../store/index.ts";
 import { resolveConfiguredAllowlist } from "./conversations.ts";
+import { type FileInspection, inspectDownloadedFile } from "./file-inspect.ts";
 
 export interface FileDownloadInput {
 	fileId: string;
@@ -19,6 +20,8 @@ export interface FileDownloadInput {
 	 */
 	outDir?: string;
 	local?: boolean;
+	/** Download, then emit a bounded preview or an explicit not-interpreted state. */
+	inspect?: boolean;
 }
 
 export interface FileDownloadResult {
@@ -29,6 +32,7 @@ export interface FileDownloadResult {
 	path: string;
 	postId: string;
 	conversationId: string;
+	inspection?: FileInspection;
 }
 
 interface FileDownloadClient {
@@ -142,6 +146,15 @@ export async function downloadMattermostFile(
 		path,
 		postId: meta.postId,
 		conversationId: meta.conversationId,
+		...(input.inspect
+			? {
+					inspection: inspectDownloadedFile({
+						name: meta.name,
+						mimeType: meta.mimeType,
+						bytes,
+					}),
+				}
+			: {}),
 	};
 }
 

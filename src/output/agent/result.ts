@@ -352,7 +352,7 @@ function resolvedSubject(
 	};
 }
 
-/** Flatten single-file download metadata only — never file bytes. */
+/** Flatten download metadata and an explicitly requested bounded inspection. */
 function projectFileDownload(
 	envelope: AgentEnvelope,
 	data: FileDownloadResult,
@@ -367,6 +367,7 @@ function projectFileDownload(
 		path: data.path,
 		postId: data.postId,
 		conversationId: data.conversationId,
+		...(data.inspection ? { inspection: data.inspection } : {}),
 		warnings,
 	};
 }

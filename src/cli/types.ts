@@ -37,6 +37,7 @@ export interface CommandOptions {
 	file?: string;
 	out?: string;
 	outDir?: string;
+	inspect?: boolean;
 	fresh?: boolean;
 	local?: boolean;
 	remoteSearch?: boolean;

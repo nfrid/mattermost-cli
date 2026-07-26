@@ -195,7 +195,8 @@ A refused conversation fails with `conversation_not_allowed` carrying
   `/tmp/mm-<id>-<name>`, or to `--out <path>` (explicit path, overwrites), or
   into `--out-dir <dir>` (attachment name, created if missing, never overwrites
   — same naming and refusal rules as `mm files`). `--out` and `--out-dir`
-  conflict.
+  conflict. `--inspect` additionally emits a bounded textual preview or an
+  explicit `not_interpreted` state for images, spreadsheets, and other binaries.
 - `files` downloads a bounded batch into a required `--out-dir` from exactly one
   selector: positional `<file-id…>`, `--post <id>`, or `--thread <id>`. Defaults
   are max **20** files and **50 MiB** total. It refuses overwrites, uses
@@ -203,7 +204,10 @@ A refused conversation fails with `conversation_not_allowed` carrying
   result; the command succeeds when at least one file downloads.
 
 Attachment contents are never downloaded automatically during `context` or
-`sync`, and `mm` never parses them.
+`sync`. Inspection is explicit and only decodes a bounded UTF-8 preview; the
+reported format is filename/MIME classification, not CSV/JSON/XML syntax
+validation. It does not perform OCR, image captioning, or binary spreadsheet
+parsing.
 
 ## Extra permalink targets
 

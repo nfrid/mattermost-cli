@@ -1523,7 +1523,13 @@ describe("buildEvidence", () => {
 			postId: "p3",
 		});
 		assertArgv(step?.command);
-		expect(step?.command).toEqual(["mm", "file", "file-1", "--agent"]);
+		expect(step?.command).toEqual([
+			"mm",
+			"file",
+			"file-1",
+			"--inspect",
+			"--agent",
+		]);
 	});
 
 	test("stays quiet for media-only posts before the last ticket mention", () => {
@@ -1964,7 +1970,13 @@ describe("data-file attachments on decision-layer posts", () => {
 			impact: "may_verify_quantitative_claim",
 			postId: "p2",
 		});
-		expect(step?.command).toEqual(["mm", "file", "duplicates.xlsx", "--agent"]);
+		expect(step?.command).toEqual([
+			"mm",
+			"file",
+			"duplicates.xlsx",
+			"--inspect",
+			"--agent",
+		]);
 	});
 
 	test("stays quiet for a data file outside the decision layer", () => {

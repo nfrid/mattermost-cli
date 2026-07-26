@@ -120,6 +120,7 @@ export async function executeCommand(
 						fileId: commandOptions.fileId,
 						out: commandOptions.out,
 						outDir: commandOptions.outDir,
+						inspect: commandOptions.inspect,
 					},
 					dependencies,
 				);

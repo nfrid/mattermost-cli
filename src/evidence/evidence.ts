@@ -393,6 +393,7 @@ interface UnreadOutcomeAttachment {
 	threadId: string;
 	postId: string;
 	fileId: string;
+	fileName: string;
 	files: number;
 }
 
@@ -434,6 +435,7 @@ function findUnreadOutcomeAttachment(
 				threadId: thread.threadId,
 				postId: post.id,
 				fileId: first.id,
+				fileName: first.name,
 				files: live.length,
 				createAt: post.createAt,
 			};
@@ -517,6 +519,7 @@ function findDecisionDataAttachment(
 				threadId: thread.threadId,
 				postId: post.id,
 				fileId: first.id,
+				fileName: first.name,
 				files: live.length,
 				createAt: post.createAt,
 			};
@@ -537,6 +540,10 @@ function findDecisionDataAttachment(
 function isDataFileName(name: string): boolean {
 	const extension = name.split(".").pop()?.toLowerCase();
 	return Boolean(extension && DATA_FILE_EXTENSIONS.has(extension));
+}
+
+function attachmentCommand(attachment: UnreadOutcomeAttachment): string[] {
+	return ["mm", "file", attachment.fileId, "--inspect", "--agent"];
 }
 
 export function shouldRecommendFull(thread: {
@@ -687,7 +694,7 @@ function collectNextActions(input: {
 					: "media_only_outcome_post",
 			priority: "recommended",
 			impact: "may_contradict_visible_text",
-			command: ["mm", "file", attachment.fileId, "--agent"],
+			command: attachmentCommand(attachment),
 			threadId: attachment.threadId,
 			postId: attachment.postId,
 		});
@@ -701,7 +708,7 @@ function collectNextActions(input: {
 			// so it is the second call to make, not the first.
 			priority: attachment ? "optional" : "recommended",
 			impact: "may_verify_quantitative_claim",
-			command: ["mm", "file", dataFile.fileId, "--agent"],
+			command: attachmentCommand(dataFile),
 			threadId: dataFile.threadId,
 			postId: dataFile.postId,
 		});

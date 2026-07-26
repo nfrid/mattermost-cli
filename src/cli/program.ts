@@ -255,6 +255,10 @@ export function createProgram(
 		)
 		.argument("<file-id>", "Mattermost file id from context/thread evidence")
 		.option("--out <path>", "destination path (default: /tmp/mm-<id>-<name>)")
+		.option(
+			"--inspect",
+			"include a bounded text preview or an explicit not-interpreted state",
+		)
 		.addOption(
 			new Option(
 				"--out-dir <dir>",

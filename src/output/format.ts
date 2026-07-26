@@ -739,7 +739,7 @@ function formatThread(data: ThreadResult): string {
 }
 
 function formatFile(data: FileDownloadResult): string {
-	return joinParts([
+	const downloaded = joinParts([
 		styles.success("Downloaded"),
 		styles.label(data.name),
 		styles.identifier(data.id),
@@ -747,6 +747,23 @@ function formatFile(data: FileDownloadResult): string {
 		`${styles.accent(String(data.size))} bytes`,
 		styles.link(data.path),
 	]);
+	if (!data.inspection) return downloaded;
+	if (data.inspection.status === "not_interpreted") {
+		return [
+			downloaded,
+			`${styles.warning("Not interpreted:")} ${data.inspection.reason}`,
+			styles.hint(data.inspection.recommendedAction),
+		].join("\n");
+	}
+	return [
+		downloaded,
+		joinParts([
+			styles.success("Decoded preview"),
+			styles.hint(data.inspection.format),
+			data.inspection.truncated ? styles.warning("truncated") : "",
+		]),
+		data.inspection.preview,
+	].join("\n");
 }
 
 function formatFiles(data: FileBatchDownloadResult): string {
