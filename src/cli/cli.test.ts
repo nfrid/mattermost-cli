@@ -254,6 +254,14 @@ describe("CLI output", () => {
 		const receipt = JSON.parse(stdout.text);
 		expect(receipt.out).toBe(outPath);
 		expect(receipt.bytes).toBeGreaterThan(0);
+		// Enough to decide whether the file needs reading at all, without a second
+		// pass over it just to find out there is nothing waiting.
+		expect(receipt).toMatchObject({
+			adequacy: "usable",
+			threads: 1,
+			warnings: expect.any(Number),
+			recommendedNext: expect.any(Number),
+		});
 		// The receipt is a pointer, not the packet.
 		expect(stdout.text).not.toContain("payment timeout exact evidence");
 		const written = await Bun.file(outPath).text();

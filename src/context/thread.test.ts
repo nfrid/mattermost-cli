@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { MattermostApiError } from "../mattermost/client.ts";
 import type { MattermostFileInfo } from "../mattermost/schemas.ts";
+import { AppError } from "../shared/errors.ts";
 import { MattermostStore } from "../store/index.ts";
 import {
 	configFixture,
@@ -8,7 +9,7 @@ import {
 	postFixture,
 	userFixture,
 } from "../test-fixtures.ts";
-import { getMattermostThread } from "./index.ts";
+import { getMattermostContext, getMattermostThread } from "./index.ts";
 import {
 	FakeContextClient,
 	list,
@@ -242,6 +243,63 @@ describe("thread command API", () => {
 				mimeType: "image/png",
 			}),
 		]);
+		store.close();
+	});
+});
+
+describe("allowlist refusals", () => {
+	test("says why the conversation is off-limits and what would change it", async () => {
+		// A bare `conversation_not_allowed` left a caller holding a permalink with
+		// nothing to act on and nothing to ask an operator for.
+		const store = await MattermostStore.open(":memory:");
+		const outsideRoot = "ffffffffffffffffffffffffff";
+		store.writePage({
+			conversation: conversationFixture("secret", "channel-secret"),
+			users: [userFixture()],
+			posts: [
+				postFixture({
+					id: outsideRoot,
+					channel_id: "channel-secret",
+					message: "not configured",
+					create_at: 10,
+				}),
+			],
+		});
+
+		const failure = await getMattermostThread(
+			{ target: outsideRoot, local: true },
+			{ config: configFixture(), store },
+		).catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(AppError);
+		const error = failure as AppError;
+		expect(error.kind).toBe("conversation_not_allowed");
+		expect(error.details).toMatchObject({
+			reason: "not_configured",
+			postId: outsideRoot,
+			conversationId: "channel-secret",
+		});
+		// Never a way around the allowlist — only who can widen it.
+		expect(String(error.details?.recommendedAction)).toContain("config owner");
+		store.close();
+	});
+
+	test("distinguishes an explicit --channel restriction from a missing config entry", async () => {
+		const store = await seededStore();
+		const failure = await getMattermostContext(
+			{ subject: PLATFORM_ROOT, channels: ["payments"], local: true },
+			{ config: configFixture(), store },
+		).catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(AppError);
+		const error = failure as AppError;
+		expect(error.kind).toBe("conversation_not_allowed");
+		expect(error.details).toMatchObject({
+			reason: "channel_restriction",
+			postId: PLATFORM_ROOT,
+			restrictedTo: ["payments"],
+		});
+		expect(String(error.details?.recommendedAction)).toContain("--channel");
 		store.close();
 	});
 });

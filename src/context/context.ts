@@ -12,11 +12,18 @@ import {
 	widenedRouting,
 } from "../search/index.ts";
 import type { Warning } from "../shared/command-result.ts";
-import { ConfigError } from "../shared/errors.ts";
+import {
+	ConfigError,
+	conversationNotAllowedDetails,
+} from "../shared/errors.ts";
 import { searchDeadlineAt } from "../shared/limits.ts";
 import { inspectFreshness } from "../sync/sync.ts";
 import { findBackgroundThreads } from "./background.ts";
-import { freshen, selectFreshenConversations } from "./freshen.ts";
+import {
+	freshen,
+	resolveContextConversations,
+	selectFreshenConversations,
+} from "./freshen.ts";
 import {
 	buildProbeCoverage,
 	consolidateLocalFallbackWarnings,
@@ -121,27 +128,38 @@ export async function getMattermostContext(
 		let candidates: ThreadCandidate[];
 
 		if (subject.kind === "post") {
+			// Resolved against every *configured* conversation, not the `--channel`
+			// subset: a post excluded by the caller's own restriction must be
+			// reported as that, not as missing from the config.
+			const configured = resolveContextConversations(config, store);
 			const direct = await resolveDirectTarget(
 				subject.postId,
 				store,
 				client,
-				new Set(all.map(({ id }) => id)),
+				new Set(configured.map(({ id }) => id)),
 				{ preferLocal: !input.fresh, warnings: freshenWarnings },
 			);
 			const conversation = all.find(({ id }) => id === direct.conversationId);
 			if (!conversation) {
+				// Reachable only under an explicit restriction: without one, `all` is
+				// the same set the post already resolved against.
+				const restricted = input.channels?.length
+					? {
+							reason: "channel_restriction" as const,
+							restrictedTo: input.channels,
+						}
+					: { reason: "not_configured" as const };
 				throw new ConfigError(
-					"The direct post is outside configured conversations.",
+					restricted.reason === "channel_restriction"
+						? "The direct post is outside the explicit channel restriction."
+						: "The direct post is outside configured conversations.",
 					"conversation_not_allowed",
-				);
-			}
-			if (
-				input.channels?.length &&
-				!input.channels.includes(conversation.alias)
-			) {
-				throw new ConfigError(
-					"The direct post is outside the explicit channel restriction.",
-					"conversation_not_allowed",
+					undefined,
+					conversationNotAllowedDetails({
+						...restricted,
+						postId: subject.postId,
+						conversationId: direct.conversationId,
+					}),
 				);
 			}
 			routing = {

@@ -2,7 +2,10 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import type { MattermostConfig } from "../config/config.ts";
-import { ConfigError } from "../shared/errors.ts";
+import {
+	ConfigError,
+	conversationNotAllowedDetails,
+} from "../shared/errors.ts";
 import type { IndexedFile, MattermostStore } from "../store/index.ts";
 import { resolveConfiguredAllowlist } from "./conversations.ts";
 
@@ -69,6 +72,12 @@ export async function downloadMattermostFile(
 			throw new ConfigError(
 				"The file belongs to a conversation outside the configured allowlist.",
 				"conversation_not_allowed",
+				undefined,
+				conversationNotAllowedDetails({
+					reason: "not_configured",
+					postId: local.postId,
+					conversationId: local.conversationId,
+				}),
 			);
 		}
 		meta = local;
@@ -84,6 +93,14 @@ export async function downloadMattermostFile(
 			throw new ConfigError(
 				"The file belongs to a conversation outside the configured allowlist.",
 				"conversation_not_allowed",
+				undefined,
+				conversationNotAllowedDetails({
+					reason: "not_configured",
+					postId: info.post_id,
+					// Absent when the post itself is unknown locally: there is no
+					// conversation id to report that the caller did not already have.
+					...(post ? { conversationId: post.conversationId } : {}),
+				}),
 			);
 		}
 		meta = {

@@ -3,7 +3,11 @@ import type { MattermostPost } from "../mattermost/schemas.ts";
 import type { RoutedConversation } from "../search/index.ts";
 import type { Warning } from "../shared/command-result.ts";
 import { mapWithConcurrency } from "../shared/concurrency.ts";
-import { AppError, ConfigError } from "../shared/errors.ts";
+import {
+	AppError,
+	ConfigError,
+	conversationNotAllowedDetails,
+} from "../shared/errors.ts";
 import type { IndexedPost, MattermostStore } from "../store/index.ts";
 import {
 	assertThreadBoundary,
@@ -32,6 +36,12 @@ export async function resolveDirectTarget(
 		throw new ConfigError(
 			"The post is outside configured conversations.",
 			"conversation_not_allowed",
+			undefined,
+			conversationNotAllowedDetails({
+				reason: "not_configured",
+				postId,
+				conversationId: local.conversationId,
+			}),
 		);
 	}
 	if (!client) {

@@ -5,7 +5,10 @@ import {
 } from "../mattermost/client.ts";
 import { classifySubject } from "../search/index.ts";
 import type { Warning } from "../shared/command-result.ts";
-import { ConfigError } from "../shared/errors.ts";
+import {
+	ConfigError,
+	conversationNotAllowedDetails,
+} from "../shared/errors.ts";
 import { inspectFreshness } from "../sync/sync.ts";
 import { resolveContextConversations } from "./freshen.ts";
 import {
@@ -61,6 +64,12 @@ export async function getMattermostThread(
 			throw new ConfigError(
 				"The thread is outside configured conversations.",
 				"conversation_not_allowed",
+				undefined,
+				conversationNotAllowedDetails({
+					reason: "not_configured",
+					postId: target.id,
+					conversationId: target.conversationId,
+				}),
 			);
 		}
 		const initiallyFresh = !inspectFreshness(

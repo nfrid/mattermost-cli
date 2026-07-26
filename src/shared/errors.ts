@@ -65,10 +65,41 @@ export class ConfigError extends AppError {
 		message: string,
 		kind = "invalid_config",
 		options?: ErrorOptions,
+		details?: Readonly<Record<string, unknown>>,
 	) {
-		super(message, "config", kind, 2, options);
+		super(message, "config", kind, 2, options, details);
 		this.name = "ConfigError";
 	}
+}
+
+/**
+ * Why a requested conversation is off-limits, and what would change that.
+ *
+ * The bare `conversation_not_allowed` was correct but unactionable: a caller
+ * holding a permalink could not tell whether the conversation is simply absent
+ * from the config or was excluded by their own `--channel`, and had nothing to
+ * ask an operator for. Ids the caller already supplied or can read off the
+ * permalink are safe to echo; nothing from inside the conversation is.
+ */
+export function conversationNotAllowedDetails(input: {
+	reason: "not_configured" | "channel_restriction";
+	postId?: string;
+	conversationId?: string;
+	/** Aliases the caller restricted to, when that is what excluded it. */
+	restrictedTo?: readonly string[];
+}): Readonly<Record<string, unknown>> {
+	return {
+		reason: input.reason,
+		...(input.postId ? { postId: input.postId } : {}),
+		...(input.conversationId ? { conversationId: input.conversationId } : {}),
+		...(input.restrictedTo?.length
+			? { restrictedTo: [...input.restrictedTo] }
+			: {}),
+		recommendedAction:
+			input.reason === "channel_restriction"
+				? "drop or widen --channel; the conversation is configured but excluded by this request"
+				: "ask a config owner to add this conversation to .mattermost/config.json; mm never widens the allowlist on its own",
+	};
 }
 
 /** Known aliases listed inline before the message defers to `mm channels`. */

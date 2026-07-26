@@ -49,11 +49,65 @@ async function emitOrWrite(
 		options.agent,
 	);
 	const bytes = await Bun.write(out, text);
+	const receipt = outReceipt(result);
 	stdout.write(
 		options.json || options.agent
-			? `${JSON.stringify({ out, bytes })}\n`
-			: `Wrote ${bytes} bytes to ${out}\n`,
+			? `${JSON.stringify({ out, bytes, ...receipt })}\n`
+			: `Wrote ${bytes} bytes to ${out}${receiptSuffix(receipt)}\n`,
 	);
+}
+
+/**
+ * The few numbers that decide whether the file needs reading at all, and in
+ * what order. Without them `{out,bytes}` forces a second `jq` pass just to learn
+ * whether a `recommended` step is waiting — which is exactly the read `--out`
+ * exists to avoid.
+ */
+interface OutReceipt {
+	adequacy?: string;
+	threads?: number;
+	warnings: number;
+	recommendedNext?: number;
+}
+
+function outReceipt(result: CommandResult<unknown>): OutReceipt {
+	const data =
+		result.success && isRecord(result.data) ? result.data : undefined;
+	const evidence = isRecord(data?.evidence) ? data.evidence : undefined;
+	const next = Array.isArray(evidence?.next) ? evidence.next : [];
+	const threads = Array.isArray(data?.threads)
+		? data.threads.length
+		: undefined;
+	return {
+		...(typeof evidence?.adequacy === "string"
+			? { adequacy: evidence.adequacy }
+			: {}),
+		...(threads === undefined ? {} : { threads }),
+		warnings: result.warnings.length,
+		...(evidence
+			? {
+					recommendedNext: next.filter(
+						(step) => isRecord(step) && step.priority === "recommended",
+					).length,
+				}
+			: {}),
+	};
+}
+
+function receiptSuffix(receipt: OutReceipt): string {
+	const parts = [
+		receipt.adequacy ? `evidence ${receipt.adequacy}` : undefined,
+		receipt.threads === undefined ? undefined : `${receipt.threads} thread(s)`,
+		`${receipt.warnings} warning(s)`,
+		receipt.recommendedNext === undefined
+			? undefined
+			: `${receipt.recommendedNext} recommended step(s)`,
+	].filter((part): part is string => part !== undefined);
+	return ` (${parts.join(", ")})`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
 }
 
 export async function runCli(

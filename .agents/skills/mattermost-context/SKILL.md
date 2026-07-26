@@ -41,6 +41,7 @@ Each field below is deliberately separate — report them, do not infer one from
 - `anchors[]` is one entry per post listing every role it plays in `kinds[]`.
 - `surroundRelevance` is `low` | `possible`; `possible` only means relevance could not be ruled *out*.
 - A post subject adds `resolved` and marks its message `anchor: true`; a `threadId` differing from the requested id is normal.
+- A `conversation_not_allowed` error carries `details`: `reason` (`not_configured` | `channel_restriction`), the `postId` / `conversationId` involved, `restrictedTo` when your own `--channel` excluded it, and a `recommendedAction`. Act on that — never try to route around the allowlist.
 - `source: "config"` / `"routing"` errors are allowlist or routing limits. `source: "mattermost"` (`thread_not_found`, `post_not_found`, `thread_boundary_mismatch`) is inconsistent server data — never report it as a routing restriction.
 
 ## Flags
@@ -51,7 +52,7 @@ Each field below is deliberately separate — report them, do not infer one from
 | What happened in what order across threads | `--timeline` (merged chronology; combines with `--brief`) |
 | Who a username is | `people[]` in the packet, or `mm people` |
 | Navigate a large thread | `--navigate` (`anchors` / `clusters` / `skips`) |
-| Keep a large packet out of context | `--out <path>` (prints `{out,bytes}`) |
+| Keep a large packet out of context | `--out <path>` (prints a receipt: `out` / `bytes` / `adequacy` / `threads` / `warnings` / `recommendedNext`) |
 | Read as prose | no `--agent` — the transcript is usually *smaller* than the JSON; never hand-write a renderer |
 | Discovery before hydrating | `mm search … --agent` |
 | Freshness | `--fresh`, `--local`, `--remote-search` |
