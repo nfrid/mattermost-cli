@@ -36,9 +36,14 @@ and remote-search diagnostics.
 
 Queries are independent ranking and retrieval signals, not mandatory filters. A
 ticket relationship or other stronger evidence can still select a candidate with
-no textual query match, and the result emits an `unmatched_retrieval_probe`
-warning when that happens. Unknown repository or scope metadata hints emit the
-informational `unmapped_routing_hint` rather than being ignored silently. These
+no full textual query match, and the result emits an
+`unmatched_retrieval_probe` diagnostic when that happens. It has
+`severity: "informational"`; the strict `status: "no_match"` may still include
+`matchedTerms`, `missingTerms`, and bounded `partialEvidencePostIds` from
+selected packet evidence. Those fields explain lexical overlap but never create
+a background pointer or claim semantic equivalence. Unknown repository or scope
+metadata hints likewise emit informational `unmapped_routing_hint` rather than
+being ignored silently. These
 hints are exact configured metadata values, not workspace names inferred from a
 ticket: an unmapped hint did not narrow routing, but does not make otherwise
 selected evidence invalid. The informational warning lists capped known values

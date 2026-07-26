@@ -268,4 +268,8 @@ Do not invent optional `sync` / `inspect_dropped` follow-ups when absent.
   positive-relevance verdict.
 
 Detailed per-conversation freshness evidence remains available in `--json`;
-`--agent` retains aggregate `evidence` status and relevant warnings.
+`--agent` retains aggregate `evidence` status and relevant warnings. Optional
+warning `severity` separates material evidence limitations from informational
+routing/probe diagnostics; absence means material. `--out` receipts preserve
+the total `warnings` count and add `materialWarnings` so additive diagnostics do
+not make a clean packet look less trustworthy.

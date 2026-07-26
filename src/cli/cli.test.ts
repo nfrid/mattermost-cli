@@ -260,6 +260,7 @@ describe("CLI output", () => {
 			adequacy: "usable",
 			threads: 1,
 			warnings: expect.any(Number),
+			materialWarnings: expect.any(Number),
 			recommendedNext: expect.any(Number),
 		});
 		// The receipt is a pointer, not the packet.

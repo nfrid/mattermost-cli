@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { SCHEMA_VERSION } from "../shared/command-result.ts";
 
-const warningSchema = z.object({ kind: z.string(), message: z.string() });
+const warningSchema = z.object({
+	kind: z.string(),
+	message: z.string(),
+	severity: z.enum(["material", "informational"]).optional(),
+});
 const conversationKindSchema = z.enum(["channel", "direct_message"]);
 const subjectSchema = z.discriminatedUnion("kind", [
 	z.object({
@@ -491,6 +495,9 @@ const probeCoverageSchema = z.object({
 	status: z.enum(["matched_selected", "background_only", "no_match"]),
 	matchMode: z.literal("normalized_terms_or_expansions").optional(),
 	retrievalCriteria: z.array(z.string()).optional(),
+	matchedTerms: z.array(z.string()).optional(),
+	missingTerms: z.array(z.string()).optional(),
+	partialEvidencePostIds: z.array(z.string()).max(8).optional(),
 });
 const backgroundThreadSchema = z.object({
 	threadId: z.string(),

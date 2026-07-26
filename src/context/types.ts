@@ -276,6 +276,12 @@ export interface ProbeCoverage {
 	matchMode?: "normalized_terms_or_expansions";
 	/** Original normalized terms/phrases that had to qualify. */
 	retrievalCriteria?: string[];
+	/** Terms found when strict all-term qualification did not succeed. */
+	matchedTerms?: string[];
+	/** Terms still absent from selected packet evidence. */
+	missingTerms?: string[];
+	/** Packed selected posts supporting matchedTerms; bounded pointers only. */
+	partialEvidencePostIds?: string[];
 }
 
 /**

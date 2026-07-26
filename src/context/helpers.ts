@@ -315,6 +315,41 @@ export function matchingProbeValues(
 		.map(({ value }) => value);
 }
 
+export function partialProbeEvidence(
+	posts: readonly EvidencePost[],
+	probes: readonly RetrievalProbe[],
+): ReadonlyMap<
+	string,
+	{ matchedTerms: string[]; missingTerms: string[]; postIds: string[] }
+> {
+	const live = posts.filter(({ deleteAt }) => !deleteAt);
+	const partial = new Map<
+		string,
+		{ matchedTerms: string[]; missingTerms: string[]; postIds: string[] }
+	>();
+	for (const probe of probes) {
+		if (probe.terms.length < 2) continue;
+		const matchedTerms: string[] = [];
+		const postIds = new Set<string>();
+		for (const term of probe.terms) {
+			const matchingPosts = live.filter((post) =>
+				postMatchesProbeTerm(post.message, probe, term),
+			);
+			if (!matchingPosts.length) continue;
+			matchedTerms.push(term);
+			for (const post of matchingPosts) postIds.add(post.id);
+		}
+		if (!matchedTerms.length || matchedTerms.length === probe.terms.length)
+			continue;
+		partial.set(probe.value, {
+			matchedTerms,
+			missingTerms: probe.terms.filter((term) => !matchedTerms.includes(term)),
+			postIds: [...postIds].sort().slice(0, 8),
+		});
+	}
+	return partial;
+}
+
 export function currentMatches(
 	posts: readonly EvidencePost[],
 	probes: readonly RetrievalProbe[],
@@ -387,12 +422,14 @@ export function routingHintWarnings(
 	if (routing.unmatchedHints.repositories.length) {
 		warnings.push({
 			kind: "unmapped_routing_hint",
+			severity: "informational",
 			message: `Informational: repository routing hint(s) matched no configured conversation metadata and did not narrow routing: ${routing.unmatchedHints.repositories.join(", ")}.${known("repositories")}`,
 		});
 	}
 	if (routing.unmatchedHints.scopes.length) {
 		warnings.push({
 			kind: "unmapped_routing_hint",
+			severity: "informational",
 			message: `Informational: scope routing hint(s) matched no configured conversation metadata and did not narrow routing: ${routing.unmatchedHints.scopes.join(", ")}.${known("scopes")}`,
 		});
 	}
@@ -430,12 +467,17 @@ export function buildProbeCoverage(
 	probes: readonly RetrievalProbe[],
 	matchedValues: ReadonlySet<string>,
 	background: readonly { matchedProbes: readonly string[] }[] = [],
+	partial: ReadonlyMap<
+		string,
+		{ matchedTerms: string[]; missingTerms: string[]; postIds: string[] }
+	> = new Map(),
 ): ProbeCoverage[] {
 	return probes.map((probe) => {
 		const backgroundThreads = background.filter((thread) =>
 			thread.matchedProbes.includes(probe.value),
 		).length;
 		const selected = matchedValues.has(probe.value);
+		const partialEvidence = partial.get(probe.value);
 		return {
 			probe: probe.value,
 			...(probe.kind ? { kind: probe.kind } : {}),
@@ -447,6 +489,13 @@ export function buildProbeCoverage(
 					? [...probe.phrases]
 					: [probe.value],
 			backgroundThreads,
+			...(!selected && partialEvidence
+				? {
+						matchedTerms: partialEvidence.matchedTerms,
+						missingTerms: partialEvidence.missingTerms,
+						partialEvidencePostIds: partialEvidence.postIds,
+					}
+				: {}),
 			status: selected
 				? "matched_selected"
 				: backgroundThreads > 0
@@ -469,6 +518,7 @@ export function probeWarnings(coverage: readonly ProbeCoverage[]): Warning[] {
 		? [
 				{
 					kind: "unmatched_retrieval_probe",
+					severity: "informational",
 					message: `Retrieval probe(s) matched no selected evidence and no background pointer, and were not treated as required filters: ${unmatched.join(", ")}.`,
 				},
 			]

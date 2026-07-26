@@ -141,7 +141,10 @@ result. Preview inspection may add best-effort
 contributors, not full-probe claims); raw JSON now retains
 additional already-computed ranking evidence (`thinTicketStub`,
 `multiTicketRoot`, ticket distance/density, and root focus) instead of stripping
-it during schema parsing.
+it during schema parsing. Warnings may add `severity: "material" |
+"informational"` (absence remains material), and strict no-match probe coverage
+may add selected-evidence `matchedTerms`, `missingTerms`, and bounded
+`partialEvidencePostIds` without changing ranking or match status.
 
 ## Schemas and fixtures
 

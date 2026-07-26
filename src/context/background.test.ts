@@ -146,8 +146,8 @@ describe("background threads", () => {
 			)?.status,
 		).toBe("no_match");
 		expect(
-			context.warnings.some(({ kind }) => kind === "unmatched_retrieval_probe"),
-		).toBe(true);
+			context.warnings.find(({ kind }) => kind === "unmatched_retrieval_probe"),
+		).toMatchObject({ severity: "informational" });
 		store.close();
 	});
 
@@ -172,23 +172,29 @@ describe("background threads", () => {
 		store.close();
 	});
 
-	test("a strong partial-term hit is not attributed as a full probe match", async () => {
+	test("a strong partial-term hit is explained but not attributed as a full probe match", async () => {
 		const store = await seededStore();
 		const context = await getMattermostContext(
-			{ subject: "BTB-1", queries: ["idempotency bananas"], local: true },
+			{ subject: "BTB-1", queries: ["duplicate bananas"], local: true },
 			{ config: configFixture(), store, now: () => 2_000 },
 		);
 
 		expect(
 			context.background?.some(({ matchedProbes }) =>
-				matchedProbes.includes("idempotency bananas"),
+				matchedProbes.includes("duplicate bananas"),
 			),
 		).toBeFalsy();
 		expect(
-			context.probeCoverage?.find(
-				({ probe }) => probe === "idempotency bananas",
-			)?.status,
-		).toBe("no_match");
+			context.probeCoverage?.find(({ probe }) => probe === "duplicate bananas"),
+		).toMatchObject({
+			status: "no_match",
+			matchedTerms: ["duplicate"],
+			missingTerms: ["bananas"],
+			partialEvidencePostIds: [TICKET_ROOT],
+		});
+		expect(
+			formatHumanResult(commandSuccess("context", context, context.warnings)),
+		).toContain("partial: duplicate; missing: bananas");
 		store.close();
 	});
 

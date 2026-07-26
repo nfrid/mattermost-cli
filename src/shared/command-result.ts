@@ -6,6 +6,8 @@ export const SCHEMA_VERSION = 5 as const;
 export interface Warning {
 	kind: string;
 	message: string;
+	/** Absent means material for backward-compatible consumers. */
+	severity?: "material" | "informational";
 }
 
 export interface StableError {

@@ -67,6 +67,7 @@ interface OutReceipt {
 	adequacy?: string;
 	threads?: number;
 	warnings: number;
+	materialWarnings: number;
 	recommendedNext?: number;
 }
 
@@ -84,6 +85,9 @@ function outReceipt(result: CommandResult<unknown>): OutReceipt {
 			: {}),
 		...(threads === undefined ? {} : { threads }),
 		warnings: result.warnings.length,
+		materialWarnings: result.warnings.filter(
+			({ severity }) => severity !== "informational",
+		).length,
 		...(evidence
 			? {
 					recommendedNext: next.filter(
@@ -98,7 +102,7 @@ function receiptSuffix(receipt: OutReceipt): string {
 	const parts = [
 		receipt.adequacy ? `evidence ${receipt.adequacy}` : undefined,
 		receipt.threads === undefined ? undefined : `${receipt.threads} thread(s)`,
-		`${receipt.warnings} warning(s)`,
+		`${receipt.materialWarnings} material / ${receipt.warnings} total warning(s)`,
 		receipt.recommendedNext === undefined
 			? undefined
 			: `${receipt.recommendedNext} recommended step(s)`,

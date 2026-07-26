@@ -29,6 +29,7 @@ import {
 	consolidateLocalFallbackWarnings,
 	freshnessEvidence,
 	matchingProbeValues,
+	partialProbeEvidence,
 	probeWarnings,
 	routingHintWarnings,
 } from "./helpers.ts";
@@ -449,7 +450,15 @@ export async function getMattermostContext(
 			threads.flatMap((thread) => matchingProbeValues(thread.posts, probes)),
 		);
 		const probeCoverage = hasExplicitProbes
-			? buildProbeCoverage(probes, selectedProbeValues, background)
+			? buildProbeCoverage(
+					probes,
+					selectedProbeValues,
+					background,
+					partialProbeEvidence(
+						threads.flatMap(({ posts }) => posts),
+						probes,
+					),
+				)
 			: [];
 
 		const freshness = freshnessEvidence(

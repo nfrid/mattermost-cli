@@ -335,7 +335,14 @@ function formatContext(data: ContextResult): string {
 									? styles.hint(
 											`background only (${coverage.backgroundThreads} pointer(s))`,
 										)
-									: styles.warning("no match anywhere"),
+									: styles.warning("no full match"),
+							...(coverage.matchedTerms?.length
+								? [
+										styles.hint(
+											`partial: ${coverage.matchedTerms.join(", ")}; missing: ${(coverage.missingTerms ?? []).join(", ")}`,
+										),
+									]
+								: []),
 						]),
 					),
 				]
