@@ -1,3 +1,4 @@
+import type { MattermostConfig } from "../config/config.ts";
 import type { MattermostPostList } from "../mattermost/schemas.ts";
 import {
 	mergeRemoteSearchCandidate,
@@ -7,9 +8,11 @@ import {
 	remoteSearchCandidate,
 	type ThreadCandidate,
 } from "../search/index.ts";
+import type { Warning } from "../shared/command-result.ts";
 import { deadlineReached } from "../shared/limits.ts";
 import { indexedPost } from "./helpers.ts";
 import type { ContextClient, RemoteSearchEvidence } from "./types.ts";
+import { remoteSearchFailureWarning } from "./warnings.ts";
 
 const MAX_REMOTE_SEARCH_PROBES = 4;
 const MAX_REMOTE_POSTS_PER_PROBE = 20;
@@ -96,5 +99,51 @@ export async function searchRemoteCandidates(
 		),
 		queries,
 		failures,
+	};
+}
+
+/**
+ * One bounded remote-search pass with its evidence record, shared by the
+ * explicit `--remote-search` call and the automatic stale-index top-up.
+ *
+ * Both call sites used to inline the same nine-line evidence literal and the
+ * same failure warning, which is how they drifted apart on `requested`.
+ */
+export async function runRemoteSearchPass(input: {
+	config: MattermostConfig;
+	client: ContextClient;
+	probes: readonly RetrievalProbe[];
+	conversations: readonly RoutedConversation[];
+	deadlineAt: number;
+	incomplete: { value: boolean };
+	/** `explicit` for a caller-requested pass; otherwise the automatic cause. */
+	reason: NonNullable<RemoteSearchEvidence["reason"]>;
+	warnings: Warning[];
+}): Promise<{
+	remoteSearch: RemoteSearchEvidence;
+	candidates: ThreadCandidate[];
+}> {
+	const searchTeamPosts = input.client.searchTeamPosts;
+	if (!searchTeamPosts) throw new Error("Remote search client is unavailable.");
+	const result = await searchRemoteCandidates(
+		input.config.teamId,
+		searchTeamPosts.bind(input.client),
+		input.probes,
+		input.conversations,
+		{ deadlineAt: input.deadlineAt, incomplete: input.incomplete },
+	);
+	if (result.failures) {
+		input.warnings.push(remoteSearchFailureWarning(result.failures));
+	}
+	return {
+		remoteSearch: {
+			requested: input.reason === "explicit",
+			performed: true,
+			reason: input.reason,
+			queries: result.queries,
+			candidateThreads: result.candidates.length,
+			failures: result.failures,
+		},
+		candidates: result.candidates,
 	};
 }

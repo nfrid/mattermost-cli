@@ -1,6 +1,20 @@
-import type { RoutedConversation } from "../search/index.ts";
+import type { MattermostConfig } from "../config/config.ts";
+import type {
+	MattermostSubject,
+	RoutedConversation,
+	RoutingResult,
+} from "../search/index.ts";
 import type { Warning } from "../shared/command-result.ts";
-import type { ContextResult, FreshnessEvidence } from "./types.ts";
+import {
+	consolidateLocalFallbackWarnings,
+	probeWarnings,
+	routingHintWarnings,
+} from "./helpers.ts";
+import type {
+	ContextResult,
+	FreshnessEvidence,
+	ProbeCoverage,
+} from "./types.ts";
 
 /** Named aliases appended to `incomplete_history` prose (opaque by contract). */
 const MAX_NAMED_CUTOFF_CONVERSATIONS = 3;
@@ -59,4 +73,91 @@ export function summarizeConversations(
 		kind: conversation.kind,
 		evidence: conversation.evidence,
 	}));
+}
+
+/**
+ * Every packet-level warning derived after packing, in the order
+ * `getMattermostContext` emitted them.
+ *
+ * Collected here rather than inline so the orchestrator reads as phases. Order
+ * is contract-visible, so it is preserved exactly.
+ */
+export function collectContextWarnings(input: {
+	freshenWarnings: readonly Warning[];
+	remoteSearchWarnings: readonly Warning[];
+	packingWarnings: readonly Warning[];
+	searchIncomplete: boolean;
+	hydrationFailures: number;
+	hydrationBudgetSpent: boolean;
+	navigate: boolean;
+	navigateBudgetDropped: number;
+	packedThreads: number;
+	maxThreads: number;
+	local: boolean;
+	freshness: readonly FreshnessEvidence[];
+	hasExplicitProbes: boolean;
+	subjectKind: MattermostSubject["kind"];
+	routing: RoutingResult;
+	config: MattermostConfig;
+	probeCoverage: readonly ProbeCoverage[];
+}): Warning[] {
+	const warnings: Warning[] = consolidateLocalFallbackWarnings([
+		...input.freshenWarnings,
+		...input.remoteSearchWarnings,
+		...input.packingWarnings,
+	]);
+	if (input.searchIncomplete) warnings.push(SEARCH_DEADLINE_WARNING);
+	if (input.hydrationFailures) {
+		warnings.push({
+			kind: "candidate_hydrate_failed",
+			message: `${input.hydrationFailures} candidate thread(s) could not be retrieved and were dropped from selection.`,
+		});
+	}
+	if (input.hydrationBudgetSpent) {
+		warnings.push({
+			kind: "hydration_budget",
+			message:
+				"The per-request thread hydration budget was spent; later candidates used locally indexed evidence only.",
+		});
+	}
+	if (
+		input.navigate &&
+		input.navigateBudgetDropped > 0 &&
+		input.packedThreads < input.maxThreads
+	) {
+		warnings.push({
+			kind: "navigate_truncated_threads",
+			message: `Navigate packing kept ${input.packedThreads} of up to ${input.maxThreads} thread slots; ${input.navigateBudgetDropped} candidate(s) were dropped by budget. Re-run without --navigate, or with fewer fat neighbors, to see the omitted threads.`,
+		});
+	}
+	if (input.local && input.freshness.some(({ stale }) => stale)) {
+		warnings.push({
+			kind: "stale_local_index",
+			message:
+				"Local mode used stale conversation evidence without network reconciliation.",
+		});
+	}
+	if (input.hasExplicitProbes && input.subjectKind !== "ticket") {
+		// Ticket subjects keep probe hits in background[]; free-text/post
+		// subjects let --query reshape ranking. Warn so agents do not treat a
+		// probed packet as a superset of the unprobed one.
+		warnings.push({
+			kind: "probe_reranked_packet",
+			severity: "informational",
+			message:
+				"--query probes can change which threads are selected and how they are packed; this packet is not a superset of the same request without --query.",
+		});
+	}
+	if (input.freshness.some(({ coverageComplete }) => !coverageComplete)) {
+		warnings.push(incompleteHistoryWarning(input.freshness));
+	}
+	if (!input.packedThreads) {
+		warnings.push({
+			kind: "no_results",
+			message: "No matching Mattermost thread was found.",
+		});
+	}
+	warnings.push(...routingHintWarnings(input.routing, input.config));
+	warnings.push(...probeWarnings(input.probeCoverage));
+	return warnings;
 }

@@ -10,7 +10,11 @@ import type {
 } from "../search/index.ts";
 import { redactCredentialExcerpts } from "../text/index.ts";
 import { postLink } from "./helpers.ts";
-import type { DroppedCandidate, DroppedCandidateReason } from "./types.ts";
+import type {
+	DroppedCandidate,
+	DroppedCandidateReason,
+	SelectionEvidence,
+} from "./types.ts";
 
 /**
  * The pure selection predicates shared with `buildEvidence` live in
@@ -207,4 +211,50 @@ function resolveDropReason(
 	if (noMatch) return "no_match";
 	if (candidate.reasons.includes("thin_thread")) return "thin";
 	return "budget";
+}
+
+/**
+ * Fill the packer's running selection counters with the figures only the
+ * orchestrator can see (every candidate it examined, and which of them the
+ * packet finally returned).
+ *
+ * Mutates `selection` in place, as the packer's own bookkeeping does.
+ */
+export function finalizeSelectionEvidence(input: {
+	selection: SelectionEvidence;
+	/** Every candidate the packer examined, selected or not. */
+	seenCandidates: readonly ThreadCandidate[];
+	/** Candidates offered to the packer, including ones it never reached. */
+	offeredCandidates: readonly ThreadCandidate[];
+	selectedIds: ReadonlySet<string>;
+	returnedThreads: number;
+	budgetDroppedIds: ReadonlySet<string>;
+	noMatchIds: ReadonlySet<string>;
+	unavailableIds: ReadonlySet<string>;
+	config: MattermostConfig;
+}): SelectionEvidence {
+	const { selection, seenCandidates, selectedIds } = input;
+	selection.candidateThreads = Math.max(
+		selection.candidateThreads,
+		seenCandidates.length,
+		input.offeredCandidates.length,
+	);
+	selection.returnedThreads = input.returnedThreads;
+	selection.droppedThin = seenCandidates.filter(
+		(candidate) =>
+			!selectedIds.has(candidate.threadId) &&
+			candidate.reasons.includes("thin_thread"),
+	).length;
+	selection.droppedByBudgetSubjectMatched = countSubjectMatchedBudgetDrops({
+		candidates: seenCandidates,
+		budgetDroppedIds: input.budgetDroppedIds,
+	});
+	selection.droppedCandidates = buildDroppedCandidates({
+		candidates: seenCandidates,
+		selectedIds,
+		noMatchIds: input.noMatchIds,
+		unavailableIds: input.unavailableIds,
+		config: input.config,
+	});
+	return selection;
 }

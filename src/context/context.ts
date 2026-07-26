@@ -4,18 +4,11 @@ import {
 	MattermostClient,
 } from "../mattermost/client.ts";
 import {
-	directCandidate,
 	mergeThreadCandidates,
 	type RoutedConversation,
-	type RoutingResult,
-	type ThreadCandidate,
 	widenedRouting,
 } from "../search/index.ts";
 import type { Warning } from "../shared/command-result.ts";
-import {
-	ConfigError,
-	conversationNotAllowedDetails,
-} from "../shared/errors.ts";
 import { searchDeadlineAt } from "../shared/limits.ts";
 import { inspectFreshness } from "../sync/sync.ts";
 import { findBackgroundThreads } from "./background.ts";
@@ -26,24 +19,20 @@ import {
 } from "./freshen.ts";
 import {
 	buildProbeCoverage,
-	consolidateLocalFallbackWarnings,
 	freshnessEvidence,
 	matchingProbeValues,
 	partialProbeEvidence,
-	probeWarnings,
-	routingHintWarnings,
 } from "./helpers.ts";
-import { resolveDirectTarget } from "./hydrate.ts";
 import { ThreadPacker } from "./pack-threads.ts";
 import { peopleInThreads } from "./people.ts";
 import { resolvePermalinkTargets } from "./permalinks.ts";
 import { assertRemoteSearchAllowed, prepareSearch } from "./prepare.ts";
 import { resolveRelatedTicketPointers } from "./related-tickets.ts";
-import { searchRemoteCandidates } from "./remote-search.ts";
+import { runRemoteSearchPass } from "./remote-search.ts";
 import { withResources } from "./resources.ts";
+import { retrieveCandidates } from "./retrieve.ts";
 import {
-	buildDroppedCandidates,
-	countSubjectMatchedBudgetDrops,
+	finalizeSelectionEvidence,
 	orderCandidatesForThinReserve,
 } from "./selection.ts";
 import { createThreadSearcher } from "./thread-search.ts";
@@ -53,12 +42,7 @@ import type {
 	ContextResult,
 	RemoteSearchEvidence,
 } from "./types.ts";
-import {
-	incompleteHistoryWarning,
-	remoteSearchFailureWarning,
-	SEARCH_DEADLINE_WARNING,
-	summarizeConversations,
-} from "./warnings.ts";
+import { collectContextWarnings, summarizeConversations } from "./warnings.ts";
 
 const NO_REMOTE_SEARCH: RemoteSearchEvidence = {
 	requested: false,
@@ -125,114 +109,24 @@ export async function getMattermostContext(
 			includeAutomation: input.includeAutomation,
 		});
 
-		let performedWidening = false;
-		let fallbackRouting: RoutingResult | undefined;
-		let freshenedConversationCount = 0;
-		let candidates: ThreadCandidate[];
+		const retrieved = await retrieveCandidates({
+			config,
+			store,
+			client,
+			input,
+			subject,
+			routing,
+			all,
+			storageFilters: resolvedFilters.storage,
+			searcher,
+			searched,
+			warnings: freshenWarnings,
+			observedAt,
+		});
+		routing = retrieved.routing;
+		const { fallbackRouting, freshenedConversationCount } = retrieved;
+		let { candidates, performedWidening } = retrieved;
 
-		if (subject.kind === "post") {
-			// Resolved against every *configured* conversation, not the `--channel`
-			// subset: a post excluded by the caller's own restriction must be
-			// reported as that, not as missing from the config.
-			const configured = resolveContextConversations(config, store);
-			const direct = await resolveDirectTarget(
-				subject.postId,
-				store,
-				client,
-				new Set(configured.map(({ id }) => id)),
-				{ preferLocal: !input.fresh, warnings: freshenWarnings },
-			);
-			const conversation = all.find(({ id }) => id === direct.conversationId);
-			if (!conversation) {
-				// Reachable only under an explicit restriction: without one, `all` is
-				// the same set the post already resolved against.
-				const restricted = input.channels?.length
-					? {
-							reason: "channel_restriction" as const,
-							restrictedTo: input.channels,
-						}
-					: { reason: "not_configured" as const };
-				throw new ConfigError(
-					restricted.reason === "channel_restriction"
-						? "The direct post is outside the explicit channel restriction."
-						: "The direct post is outside configured conversations.",
-					"conversation_not_allowed",
-					undefined,
-					conversationNotAllowedDetails({
-						...restricted,
-						postId: subject.postId,
-						conversationId: direct.conversationId,
-					}),
-				);
-			}
-			routing = {
-				conversations: [
-					{
-						...conversation,
-						evidence: input.channels?.length
-							? [{ type: "explicit_channel", value: conversation.alias }]
-							: [{ type: "all_configured", value: "direct_post" }],
-					},
-				],
-				explicitChannelPolicy: "restrict",
-				unmatchedHints: routing.unmatchedHints,
-				reason: input.channels?.length ? "explicit_channels" : "all_configured",
-				canWiden: false,
-			};
-			await freshen(
-				config,
-				store,
-				client,
-				routing.conversations,
-				Boolean(input.fresh),
-				freshenWarnings,
-			);
-			const directConversation = routing.conversations[0];
-			if (!directConversation) {
-				throw new ConfigError("Direct post routing failed.", "routing_failed");
-			}
-			candidates = store.threadMatchesFilters(
-				direct.threadId,
-				resolvedFilters.storage,
-			)
-				? [directCandidate(direct, directConversation)]
-				: [];
-		} else {
-			fallbackRouting = routing.canWiden ? routing : undefined;
-			candidates = searcher.search(routing);
-			if (!candidates.length && routing.canWiden) {
-				const widened = widenedRouting(all, routing);
-				if (widened.conversations.length) {
-					performedWidening = true;
-					for (const conversation of routing.conversations)
-						searched.set(conversation.id, conversation);
-					routing = widened;
-					candidates = searcher.search(widened);
-				}
-			}
-			const freshenTargets = selectFreshenConversations(
-				config,
-				store,
-				routing,
-				subject,
-				candidates,
-				Boolean(input.fresh),
-				observedAt,
-			);
-			freshenedConversationCount = freshenTargets.length;
-			await freshen(
-				config,
-				store,
-				client,
-				freshenTargets,
-				Boolean(input.fresh),
-				freshenWarnings,
-			);
-			if (freshenTargets.length) {
-				searcher.invalidate();
-				candidates = searcher.search(routing);
-			}
-		}
 		for (const conversation of routing.conversations)
 			searched.set(conversation.id, conversation);
 
@@ -245,25 +139,18 @@ export async function getMattermostContext(
 			client?.searchTeamPosts &&
 			subject.kind !== "post"
 		) {
-			const result = await searchRemoteCandidates(
-				config.teamId,
-				client.searchTeamPosts.bind(client),
+			const pass = await runRemoteSearchPass({
+				config,
+				client,
 				probes,
-				[...searched.values()],
-				{ deadlineAt, incomplete: searchIncomplete },
-			);
-			remoteSearch = {
-				requested: true,
-				performed: true,
+				conversations: [...searched.values()],
+				deadlineAt,
+				incomplete: searchIncomplete,
 				reason: "explicit",
-				queries: result.queries,
-				candidateThreads: result.candidates.length,
-				failures: result.failures,
-			};
-			if (result.failures) {
-				remoteSearchWarnings.push(remoteSearchFailureWarning(result.failures));
-			}
-			candidates = mergeThreadCandidates(candidates, result.candidates);
+				warnings: remoteSearchWarnings,
+			});
+			remoteSearch = pass.remoteSearch;
+			candidates = mergeThreadCandidates(candidates, pass.candidates);
 		} else if (input.remoteSearch && !client?.searchTeamPosts) {
 			remoteSearchWarnings.push({
 				kind: "remote_search_unavailable",
@@ -396,29 +283,22 @@ export async function getMattermostContext(
 			client?.searchTeamPosts &&
 			subject.kind !== "post"
 		) {
-			const result = await searchRemoteCandidates(
-				config.teamId,
-				client.searchTeamPosts.bind(client),
+			const pass = await runRemoteSearchPass({
+				config,
+				client,
 				probes,
-				searchedConversations,
-				{ deadlineAt, incomplete: searchIncomplete },
-			);
-			remoteSearch = {
-				requested: false,
-				performed: true,
+				conversations: searchedConversations,
+				deadlineAt,
+				incomplete: searchIncomplete,
 				reason: remoteReason,
-				queries: result.queries,
-				candidateThreads: result.candidates.length,
-				failures: result.failures,
-			};
-			if (result.failures) {
-				remoteSearchWarnings.push(remoteSearchFailureWarning(result.failures));
-			}
+				warnings: remoteSearchWarnings,
+			});
+			remoteSearch = pass.remoteSearch;
 			const selectedThreadIds = new Set(
 				threads.map(({ threadId }) => threadId),
 			);
 			await packer.pack(
-				result.candidates.filter(
+				pass.candidates.filter(
 					({ threadId }) => !selectedThreadIds.has(threadId),
 				),
 			);
@@ -471,64 +351,25 @@ export async function getMattermostContext(
 			searchedConversations,
 			observedAt,
 		);
-		const warnings: Warning[] = consolidateLocalFallbackWarnings([
-			...freshenWarnings,
-			...remoteSearchWarnings,
-			...packingWarnings,
-		]);
-		if (searchIncomplete.value) warnings.push(SEARCH_DEADLINE_WARNING);
-		if (packer.hydrationFailures.length) {
-			warnings.push({
-				kind: "candidate_hydrate_failed",
-				message: `${packer.hydrationFailures.length} candidate thread(s) could not be retrieved and were dropped from selection.`,
-			});
-		}
-		if (packer.hydrationBudgetSpent) {
-			warnings.push({
-				kind: "hydration_budget",
-				message:
-					"The per-request thread hydration budget was spent; later candidates used locally indexed evidence only.",
-			});
-		}
-		if (
-			input.navigate &&
-			packer.budgetDroppedIds.size > 0 &&
-			threads.length < packer.budgets.maxThreads
-		) {
-			warnings.push({
-				kind: "navigate_truncated_threads",
-				message: `Navigate packing kept ${threads.length} of up to ${packer.budgets.maxThreads} thread slots; ${packer.budgetDroppedIds.size} candidate(s) were dropped by budget. Re-run without --navigate, or with fewer fat neighbors, to see the omitted threads.`,
-			});
-		}
-		if (input.local && freshness.some(({ stale }) => stale)) {
-			warnings.push({
-				kind: "stale_local_index",
-				message:
-					"Local mode used stale conversation evidence without network reconciliation.",
-			});
-		}
-		if (hasExplicitProbes && subject.kind !== "ticket") {
-			// Ticket subjects keep probe hits in background[]; free-text/post
-			// subjects let --query reshape ranking. Warn so agents do not treat a
-			// probed packet as a superset of the unprobed one.
-			warnings.push({
-				kind: "probe_reranked_packet",
-				severity: "informational",
-				message:
-					"--query probes can change which threads are selected and how they are packed; this packet is not a superset of the same request without --query.",
-			});
-		}
-		if (freshness.some(({ coverageComplete }) => !coverageComplete)) {
-			warnings.push(incompleteHistoryWarning(freshness));
-		}
-		if (!threads.length) {
-			warnings.push({
-				kind: "no_results",
-				message: "No matching Mattermost thread was found.",
-			});
-		}
-		warnings.push(...routingHintWarnings(routing, config));
-		warnings.push(...probeWarnings(probeCoverage));
+		const warnings = collectContextWarnings({
+			freshenWarnings,
+			remoteSearchWarnings,
+			packingWarnings,
+			searchIncomplete: searchIncomplete.value,
+			hydrationFailures: packer.hydrationFailures.length,
+			hydrationBudgetSpent: packer.hydrationBudgetSpent,
+			navigate: Boolean(input.navigate),
+			navigateBudgetDropped: packer.budgetDroppedIds.size,
+			packedThreads: threads.length,
+			maxThreads: packer.budgets.maxThreads,
+			local: Boolean(input.local),
+			freshness,
+			hasExplicitProbes,
+			subjectKind: subject.kind,
+			routing,
+			config,
+			probeCoverage,
+		});
 
 		const searchCoverageComplete =
 			!searchIncomplete.value &&
@@ -542,26 +383,13 @@ export async function getMattermostContext(
 					thread.omittedPosts === 0 && thread.totalOmittedAttachments === 0,
 			);
 
-		const selection = packer.selection;
-		const seenList = [...packer.seenCandidates.values()];
-		selection.candidateThreads = Math.max(
-			selection.candidateThreads,
-			seenList.length,
-			candidates.length,
-		);
-		selection.returnedThreads = threads.length;
-		selection.droppedThin = seenList.filter(
-			(candidate) =>
-				!selectedIds.has(candidate.threadId) &&
-				candidate.reasons.includes("thin_thread"),
-		).length;
-		selection.droppedByBudgetSubjectMatched = countSubjectMatchedBudgetDrops({
-			candidates: seenList,
-			budgetDroppedIds: packer.budgetDroppedIds,
-		});
-		selection.droppedCandidates = buildDroppedCandidates({
-			candidates: seenList,
+		const selection = finalizeSelectionEvidence({
+			selection: packer.selection,
+			seenCandidates: [...packer.seenCandidates.values()],
+			offeredCandidates: candidates,
 			selectedIds,
+			returnedThreads: threads.length,
+			budgetDroppedIds: packer.budgetDroppedIds,
 			noMatchIds: packer.noMatchIds,
 			unavailableIds: new Set(packer.hydrationFailures),
 			config,

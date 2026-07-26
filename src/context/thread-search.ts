@@ -21,6 +21,12 @@ const LOCAL_SEARCH_LIMIT = 100;
  * per-request state — deadline, incompleteness flag, thread cache — lives here
  * instead of being rebuilt at each call site.
  */
+export interface ThreadSearcher {
+	search: (routing: RoutingResult) => ThreadCandidate[];
+	/** Drops cached threads after a freshen so the next pass re-reads the index. */
+	invalidate: () => void;
+}
+
 export function createThreadSearcher(input: {
 	config: MattermostConfig;
 	store: MattermostStore;
@@ -30,11 +36,7 @@ export function createThreadSearcher(input: {
 	deadlineAt: number;
 	incomplete: { value: boolean };
 	includeAutomation?: boolean;
-}): {
-	search: (routing: RoutingResult) => ThreadCandidate[];
-	/** Drops cached threads after a freshen so the next pass re-reads the index. */
-	invalidate: () => void;
-} {
+}): ThreadSearcher {
 	const threadCache = new Map<string, IndexedPost[]>();
 	return {
 		search: (routing) =>
