@@ -25,8 +25,14 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 
-/** Projections worth pinning: each exposes a different slice of the packet. */
+/**
+ * Projections worth pinning: each exposes a different slice of the packet.
+ * The bare entry is the human rendering, which no JSON mode covers.
+ */
 const MODES: readonly (readonly string[])[] = [
+	[],
+	["--brief"],
+	["--timeline"],
 	["--agent"],
 	["--json"],
 	["--agent", "--signals"],
@@ -44,7 +50,8 @@ const PROJECT_ROOT = resolve(import.meta.dir, "..");
 function normalize(packet: string): string {
 	return packet
 		.replace(/"observedAt":\d+/g, '"observedAt":<t>')
-		.replace(/"ageSeconds":[\d.]+/g, '"ageSeconds":<age>');
+		.replace(/"ageSeconds":[\d.]+/g, '"ageSeconds":<age>')
+		.replace(/observed \d{4}-[\dT:.Z-]+/g, "observed <t>");
 }
 
 function capture(
@@ -66,9 +73,14 @@ function capture(
 					"--local",
 					...mode,
 				],
-				{ cwd: binDir, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
+				{
+					cwd: binDir,
+					encoding: "utf8",
+					maxBuffer: 256 * 1024 * 1024,
+					env: { ...process.env, NO_COLOR: "1" },
+				},
 			);
-			const name = `${subject}${mode.join("")}`.replaceAll("-", "");
+			const name = `${subject}${mode.join("") || "human"}`.replaceAll("-", "");
 			writeFileSync(join(outDir, `${name}.txt`), result.stdout + result.stderr);
 		}
 	}
